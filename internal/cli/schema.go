@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -111,6 +112,22 @@ var definitions = map[string][]fieldDoc{
 		fd("mean", tNum, false, "arithmetic mean of the samples"),
 		fd("max", tNum, false, "largest value (for ibus_a/power_w in the normal direction: the peak draw)"),
 		fd("last", tNum, false, "final sample"),
+		fd("stdev", tNum, false, "sample standard deviation (0 with one sample)"),
+		fd("p5", tNum, false, "5th percentile (linear interpolation between samples)"),
+		fd("p50", tNum, false, "median"),
+		fd("p95", tNum, false, "95th percentile"),
+	},
+	"bin": {
+		fd("t_s", tNum, false, "start of the bin, seconds from the start of the window"),
+		fd("samples", tInt, false, "successful readings in the bin (0: the value objects are null)"),
+		fref("vbus_v", tObj, "range", true, "bus voltage in the bin, volts"),
+		fref("ibus_a", tObj, "range", true, "current in the bin, amperes, signed like ibus_a"),
+		fref("power_w", tObj, "range", true, "power in the bin, watts, signed like power_w"),
+	},
+	"range": {
+		fd("min", tNum, false, "smallest value"),
+		fd("mean", tNum, false, "mean"),
+		fd("max", tNum, false, "largest value"),
 	},
 	"measure": {
 		fd("schema_version", tInt, false, "output schema version"),
@@ -132,6 +149,10 @@ var definitions = map[string][]fieldDoc{
 		fref("stats.ibus_a", tObj, "stat", true, "current, amperes, signed like ibus_a"),
 		fref("stats.power_w", tObj, "stat", true, "power, watts, signed like power_w"),
 		fref("stats.temp_c", tObj, "stat", true, "meter temperature, °C; null if never valid"),
+		fref("stats.dp_v", tObj, "stat", true, "D+ voltage, volts; a USB device dropping off the bus usually shows as a D+ (or D-) change"),
+		fref("stats.dm_v", tObj, "stat", true, "D- voltage, volts"),
+		fd("bin_s", tNum, false, fmt.Sprintf("width of the time bins, seconds: --bin (at least --interval, at most %d bins over --duration; equal to --duration for one bin), or automatic, chosen when the window ends from the time actually measured (at least 5 polling intervals per bin, at most %d bins); a bin holds fewer samples, or none, when reads are slow or fail", maxBins, maxAutoBins)),
+		fref("bins", tArr, "bin", false, "the window cut into bins of bin_s seconds, in time order (the last one may be shorter): the shape over time that min/mean/max hide. Empty bins have samples 0"),
 		fd("energy_wh", tNum, false, "energy over integrated_s, watt-hours; positive = delivered receptacle -> plug"),
 		fd("charge_mah", tNum, false, "charge over integrated_s, milliamp-hours; positive = delivered receptacle -> plug"),
 		fref("last", tObj, "snapshot", true, "the final reading (same shape as `read`)"),
@@ -318,6 +339,7 @@ func buildSchema(root *cobra.Command) map[string]any {
 			"Preferred command for agents: how much power/energy the attached device draws, and what the charger offered and negotiated.",
 			"The meter samples at its configured rate (info: settings.sample_rate_sps); polling faster only repeats values.",
 			"USB-PD is only exchanged on attach or renegotiation: start measure, then connect the device, to capture it.",
+			fmt.Sprintf("measure keeps every reading until the window ends (for the percentiles), so a window holds at most %d readings (just under 28 h at 100 ms, up to about 200 MB of memory); longer runs are a usage error: use log.", maxSamples),
 		}},
 		"log": {out("json_lines", "csv columns with --format csv: "+strings.Join(csvColumns, ","), "snapshot"), false,
 			"powerz log --duration 30s --interval 500ms --json", []string{"Runs until --duration/--count or interrupt; always pass --duration or --count from automation."}},

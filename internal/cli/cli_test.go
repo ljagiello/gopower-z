@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,6 +171,112 @@ func TestCLIMeasure(t *testing.T) {
 		pd["contract"] == nil || len(pd["records"].([]any)) != 5 {
 		t.Errorf("measure %v", m)
 	}
+	// The fake meter repeats one reading, so every statistic must equal the
+	// last reading's value for its own field: this catches fields wired to
+	// the wrong ADC value (D+ for D-, power for current).
+	stats, last := m["stats"].(map[string]any), m["last"].(map[string]any)
+	for _, f := range []string{"vbus_v", "ibus_a", "power_w", "dp_v", "dm_v"} {
+		st := stats[f].(map[string]any)
+		if st["mean"] != last[f] || st["min"] != last[f] || st["p95"] != last[f] || st["stdev"] != float64(0) {
+			t.Errorf("stats.%s = %v, last.%s = %v", f, st, f, last[f])
+		}
+	}
+	if m["bin_s"] != 0.5 {
+		t.Errorf("bin_s %v", m["bin_s"])
+	}
+}
+
+// adcPayload is the captured ADC reading with the current (amperes,
+// positive receptacle -> plug), VBUS (volts) and raw temperature replaced
+// (-32768 is the meter's "invalid" marker; 3584 is 28 °C).
+func adcPayload(t *testing.T, flowA, vbusV float64, tempRaw int16) []byte {
+	t.Helper()
+	p := slices.Clone(fakemeter.Frame(t, "bulk_W1_1_resp")[8:])
+	binary.LittleEndian.PutUint32(p[0x00:], uint32(int32(math.Round(vbusV*1e6))))
+	binary.LittleEndian.PutUint32(p[0x04:], uint32(int32(math.Round(-flowA*1e6)))) // the meter's sign is reversed
+	binary.LittleEndian.PutUint16(p[0x18:], uint16(tempRaw))
+	return p
+}
+
+// A step in the meter's reading shows in the bins, field by field: current,
+// voltage and the power computed from them.
+func TestCLIMeasureStep(t *testing.T) {
+	c := newCLI(t)
+	for range 20 {
+		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.134, 5.076, 3584))
+	}
+	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.441, 5.076, 3584))
+	if code := c.run(context.Background(), "measure", "--duration", "1s", "--interval", "20ms", "--bin", "100ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	checkShape(t, "measure", m)
+	bins := m["bins"].([]any)
+	first, last := bins[0].(map[string]any), bins[len(bins)-1].(map[string]any)
+	for k, b := range bins {
+		if ts := b.(map[string]any)["t_s"]; ts != round(float64(k)*0.1, 6) {
+			t.Errorf("bin %d starts at %v", k, ts)
+		}
+	}
+	want := func(b map[string]any, field string, v float64) {
+		t.Helper()
+		r, ok := b[field].(map[string]any)
+		if !ok {
+			t.Fatalf("bin at %v s has no %s: %v", b["t_s"], field, b)
+		}
+		if r["min"] != v || r["mean"] != v || r["max"] != v {
+			t.Errorf("bin at %v s: %s %v, want %v", b["t_s"], field, r, v)
+		}
+	}
+	want(first, "ibus_a", 0.134)
+	want(first, "vbus_v", 5.076)
+	want(first, "power_w", 0.680184)
+	want(last, "ibus_a", 0.441)
+	want(last, "power_w", 2.238516)
+	st := m["stats"].(map[string]any)
+	if p := st["power_w"].(map[string]any); p["min"] != 0.680184 || p["max"] != 2.238516 || m["direction"] != "receptacle_to_plug" {
+		t.Errorf("power stats %v, direction %v", p, m["direction"])
+	}
+	if tc := st["temp_c"].(map[string]any); tc["min"] != 28.0 || tc["max"] != 28.0 {
+		t.Errorf("temp_c %v", tc)
+	}
+}
+
+// Readings the meter marks as having no valid temperature are left out of
+// temp_c (they would read -256 °C).
+func TestCLIMeasureInvalidTemperature(t *testing.T) {
+	c := newCLI(t)
+	for range 5 {
+		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.1, 5, 3584))
+	}
+	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.1, 5, -32768))
+	if code := c.run(context.Background(), "measure", "--duration", "400ms", "--interval", "20ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	tc := m["stats"].(map[string]any)["temp_c"].(map[string]any)
+	if tc["min"] != 28.0 || tc["max"] != 28.0 || tc["last"] != 28.0 || m["last"].(map[string]any)["temp_c"] != nil {
+		t.Errorf("temp_c %v, last reading temp_c %v", tc, m["last"].(map[string]any)["temp_c"])
+	}
+}
+
+// direction describes the mean current of the window: here the median and
+// the last reading point the other way.
+func TestCLIMeasureDirectionFromMean(t *testing.T) {
+	c := newCLI(t)
+	for range 2 { // the mean stays negative for up to 41 readings; p50 needs 5
+		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, -1.0, 5.076, 3584))
+	}
+	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.05, 5.076, 3584))
+	if code := c.run(context.Background(), "measure", "--duration", "300ms", "--interval", "20ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	ibus := m["stats"].(map[string]any)["ibus_a"].(map[string]any)
+	if m["direction"] != "plug_to_receptacle" || ibus["p50"] != 0.05 || ibus["mean"].(float64) >= 0 ||
+		m["last"].(map[string]any)["direction"] != "receptacle_to_plug" {
+		t.Errorf("direction %v, ibus %v, last direction %v", m["direction"], ibus, m["last"].(map[string]any)["direction"])
+	}
 }
 
 // Failed samples are counted, the result is printed, and the exit status is
@@ -176,7 +284,7 @@ func TestCLIMeasure(t *testing.T) {
 func TestCLIMeasureFailedSamples(t *testing.T) {
 	c := newCLI(t)
 	c.fm.DropOnly, c.fm.DropReplies = km003c.TypeGetData, 2 // one sample: both attempts
-	code := c.run(context.Background(), "measure", "--duration", "700ms", "--interval", "20ms", "--pd=false")
+	code := c.run(context.Background(), "measure", "--duration", "700ms", "--interval", "20ms", "--bin", "100ms", "--pd=false")
 	if code != exitPartial || c.errCode() != "partial" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -184,6 +292,17 @@ func TestCLIMeasureFailedSamples(t *testing.T) {
 	checkShape(t, "measure", m)
 	if m["failed_samples"] != float64(1) || m["last_error"] == nil || m["samples"].(float64) < 1 || m["end_reason"] != "completed" || m["pd"] != nil {
 		t.Errorf("measure %v", m)
+	}
+	// Readings are placed by the time they were taken: the first read
+	// failed twice (each attempt waits for a 100 ms timeout), so the first
+	// bin is empty and the readings sit in the later ones.
+	bins, total := m["bins"].([]any), 0.0
+	for _, b := range bins {
+		total += b.(map[string]any)["samples"].(float64)
+	}
+	first, last := bins[0].(map[string]any), bins[len(bins)-1].(map[string]any)
+	if first["samples"] != 0.0 || first["ibus_a"] != nil || last["samples"].(float64) == 0 || total != m["samples"] {
+		t.Errorf("bins %v (total %v of %v samples)", bins, total, m["samples"])
 	}
 }
 
@@ -200,6 +319,11 @@ func TestCLIMeasureInterrupted(t *testing.T) {
 	checkShape(t, "measure", m)
 	if m["end_reason"] != "interrupted" || m["samples"].(float64) < 1 || m["duration_s"].(float64) > 5 {
 		t.Errorf("measure %v", m)
+	}
+	// The bins cover the time actually measured, not the requested 30 s.
+	bins := m["bins"].([]any)
+	if lastBin := bins[len(bins)-1].(map[string]any); lastBin["t_s"].(float64) >= m["duration_s"].(float64) {
+		t.Errorf("%d bins, the last starting at %v s, for a %v s window", len(bins), lastBin["t_s"], m["duration_s"])
 	}
 	if c.fm.Connected {
 		t.Error("session left open after an interrupt")
@@ -247,6 +371,198 @@ func TestCLIMeasureNoSamples(t *testing.T) {
 	code := c.run(context.Background(), "measure", "--duration", "250ms", "--interval", "20ms")
 	if code != exitTimeout || c.errCode() != "timeout" || c.stdout.Len() != 0 {
 		t.Fatalf("exit %d, stdout %q, stderr %s", code, c.stdout.String(), c.stderr.String())
+	}
+}
+
+// measure's bins follow --bin, the automatic width follows --interval, and
+// impossible requests are usage errors before the meter is opened.
+func TestCLIMeasureBins(t *testing.T) {
+	c := newCLI(t)
+	if code := c.run(context.Background(), "measure", "--duration", "400ms", "--interval", "20ms", "--bin", "100ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	checkShape(t, "measure", m)
+	// A completed window ends a little after --duration; that must not add
+	// a near-empty extra bin.
+	bins := m["bins"].([]any)
+	if m["bin_s"] != 0.1 || len(bins) != 4 {
+		t.Fatalf("bin_s %v, bins %v", m["bin_s"], bins)
+	}
+	if last := bins[3].(map[string]any); last["samples"].(float64) < 2 {
+		t.Errorf("last bin %v", last)
+	}
+	// Automatic bins span at least 5 polling intervals: 1 s at 120 ms
+	// (0.5 s would be the width at the default interval).
+	c = newCLI(t)
+	if code := c.run(context.Background(), "measure", "--duration", "300ms", "--interval", "120ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	if m := c.one(); m["bin_s"] != 1.0 {
+		t.Errorf("bin_s %v at a 120 ms interval, want 1", m["bin_s"])
+	}
+	for _, args := range [][]string{
+		{"--bin", "-1s"},
+		{"--bin", "10ms", "--interval", "20ms"},
+		{"--bin", "20ms", "--interval", "20ms", "--duration", "1m"},
+		{"--duration", "28h", "--interval", "100ms"},
+	} {
+		// If a limit stopped being checked, measure would run for the full
+		// --duration; the deadline makes that a quick failure, not a hang.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		c := newCLI(t)
+		code := c.run(ctx, append([]string{"measure"}, args...)...)
+		cancel()
+		if code != exitUsage || c.errCode() != "usage" || c.opens != 0 {
+			t.Errorf("%v: exit %d, opens %d, stderr %s", args, code, c.opens, c.stderr.String())
+		}
+	}
+}
+
+// The automatic width comes from the time actually measured: a 2 min window
+// stopped after about a second gets 0.5 s bins, not the 1 s bins of 2 min.
+func TestCLIMeasureAutoBinFromMeasuredTime(t *testing.T) {
+	c := newCLI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(1200*time.Millisecond, cancel)
+	if code := c.run(ctx, "measure", "--duration", "2m", "--interval", "20ms", "--pd=false"); code != exitInterrupt {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	checkShape(t, "measure", m)
+	if m["bin_s"] != 0.5 || len(m["bins"].([]any)) < 2 {
+		t.Errorf("bin_s %v, %d bins", m["bin_s"], len(m["bins"].([]any)))
+	}
+}
+
+func TestMeasureBinAndReadingLimits(t *testing.T) {
+	ms := time.Millisecond
+	for _, c := range []struct {
+		duration, interval, bin time.Duration
+		ok                      bool
+	}{
+		{20 * time.Second, 20 * ms, 20 * ms, true},     // exactly 1000 bins, bin == interval
+		{20*time.Second + ms, 20 * ms, 20 * ms, false}, // 1001 bins
+		{time.Second, 20 * ms, 19 * ms, false},         // shorter than the interval
+		{time.Second, 20 * ms, 0, true},                // automatic: chosen when the window ends
+		{time.Second, 20 * ms, -ms, false},             // negative is shorter than any interval
+		{time.Second, 20 * ms, time.Second, true},      // one bin
+	} {
+		if err := checkBin(c.duration, c.interval, c.bin); (err == nil) != c.ok {
+			t.Errorf("checkBin(%v, %v, %v) = %v", c.duration, c.interval, c.bin, err)
+		}
+	}
+	// 1 000 000 readings is the most a window may hold: 99 999.9 s at 100 ms
+	// is 999 999 intervals plus the first reading.
+	if n, err := measureReadings(99999900*ms, 100*ms); err != nil || n != maxSamples {
+		t.Errorf("at the limit: %d, %v", n, err)
+	}
+	if _, err := measureReadings(100000*time.Second, 100*ms); err == nil {
+		t.Error("one reading over the limit accepted")
+	}
+	if n, _ := measureReadings(300*ms, 20*ms); n != 16 {
+		t.Errorf("300 ms at 20 ms: %d readings, want 16", n)
+	}
+	if n, _ := measureReadings(310*ms, 20*ms); n != 17 { // a partial interval still holds a reading
+		t.Errorf("310 ms at 20 ms: %d readings, want 17", n)
+	}
+}
+
+// The text layout, line by line, from a hand-built result with round
+// values: units and scaling of every row, D+ and D- each from their own
+// stats, and an empty bin as a gap in the sparkline.
+func TestMeasureText(t *testing.T) {
+	r := measureResult{Serial: "050002", DurationS: 60, Samples: 600, FailedSamples: 2, Direction: "receptacle_to_plug",
+		EndReason: "completed", EnergyWh: 0.0211, ChargeMAh: 4.1667, IntegratedS: 59.9,
+		Stats: measureStats{
+			VBusV:  &statJSON{Min: 5.07, Mean: 5.076, Max: 5.08, Last: 5.076, Stdev: 0.002, P5: 5.072, P50: 5.076, P95: 5.079},
+			IBusA:  &statJSON{Min: 0.12, Mean: 0.25, Max: 0.45, Last: 0.44, Stdev: 0.15, P5: 0.13, P50: 0.2, P95: 0.44},
+			PowerW: &statJSON{Min: -0.00003, Mean: 1.27, Max: 2.29, Last: 2.23, Stdev: 0.76, P5: 0.66, P50: 1.01, P95: 2.23},
+			TempC:  &statJSON{Min: 27.9, Mean: 28, Max: 28.1, Last: 28, Stdev: 0.05, P5: 27.9, P50: 28, P95: 28.1},
+			DPV:    &statJSON{Min: 0.01, Max: 3},
+			DMV:    &statJSON{Min: 0.002, Max: 0.004},
+		},
+		BinS: 20, Bins: []binJSON{
+			{TS: 0, Samples: 200, IBusA: &rangeJSON{Mean: 0.13}},
+			{TS: 20},
+			{TS: 40, Samples: 200, IBusA: &rangeJSON{Mean: 0.44}},
+		},
+	}
+	var b strings.Builder
+	printMeasureText(&b, style{}, r)
+	want := strings.Join([]string{
+		"POWER-Z measure  050002  60.0s  600 samples  2 failed  flow receptacle_to_plug  (completed)",
+		"  VBUS  mean 5.0760 V   min 5.0700  p5 5.0720  p50 5.0760  p95 5.0790  max 5.0800  sd 0.0020",
+		"  IBUS  mean 250.000 mA   min 120.000  p5 130.000  p50 200.000  p95 440.000  max 450.000  sd 150.000",
+		"  PWR   mean 1.2700 W   min 0.0000  p5 0.6600  p50 1.0100  p95 2.2300  max 2.2900  sd 0.7600",
+		"  TEMP  mean 28.00 °C   min 27.90  p5 27.90  p50 28.00  p95 28.10  max 28.10  sd 0.05",
+		"  D+ 0.010..3.000 V   D- 0.002..0.004 V",
+		"  energy 0.021100 Wh   charge 4.1667 mAh   over 59.900 s",
+		"  IBUS per 20s  ▁ █",
+		"",
+	}, "\n")
+	if got := b.String(); got != want {
+		t.Errorf("text output:\n%s\nwant:\n%s", got, want)
+	}
+	spark := func(r measureResult) string {
+		var b strings.Builder
+		printMeasureText(&b, style{}, r)
+		for line := range strings.SplitSeq(b.String(), "\n") {
+			if strings.HasPrefix(line, "  IBUS per ") {
+				return line
+			}
+		}
+		return ""
+	}
+	// The label is rounded: 3 x 0.1 s is not printed as 0.30000000000000004.
+	var tenths measureResult
+	tenths.BinS = 0.1
+	for k := range 180 { // 60 columns of 3 bins
+		tenths.Bins = append(tenths.Bins, binJSON{TS: float64(k) / 10, Samples: 5, IBusA: &rangeJSON{Mean: float64(k)}})
+	}
+	if line := spark(tenths); !strings.HasPrefix(line, "  IBUS per 0.3s  ") {
+		t.Errorf("label %q", line)
+	}
+	// A leading empty bin (the first reads failed) is a gap, and does not
+	// flatten the rest of the line.
+	var lead measureResult
+	lead.BinS = 20
+	lead.Bins = []binJSON{{TS: 0}, {TS: 20, Samples: 200, IBusA: &rangeJSON{Mean: 0.13}}, {TS: 40, Samples: 200, IBusA: &rangeJSON{Mean: 0.44}}}
+	if line := spark(lead); line != "  IBUS per 20s   ▁█" {
+		t.Errorf("leading gap: %q", line)
+	}
+	// 120 bins become 60 columns of 2, each the sample-weighted mean of its
+	// pair, so the whole window shows: 0 in the first half, 8 in the second,
+	// and one pair (1 reading at 0, 99 at 8) near the top.
+	var pairs measureResult
+	pairs.BinS = 1
+	for k := range 120 {
+		b := binJSON{TS: float64(k), Samples: 10, IBusA: &rangeJSON{Mean: 0}}
+		if k >= 60 {
+			b.IBusA.Mean = 8
+		}
+		if k == 58 {
+			b.Samples = 1
+		}
+		if k == 59 {
+			b.Samples, b.IBusA.Mean = 99, 8
+		}
+		pairs.Bins = append(pairs.Bins, b)
+	}
+	cols := []rune(strings.TrimPrefix(spark(pairs), "  IBUS per 2s  "))
+	if len(cols) != 60 || cols[0] != '▁' || cols[28] != '▁' || cols[29] != '▇' || cols[30] != '█' || cols[59] != '█' {
+		t.Errorf("grouped sparkline %q", string(cols))
+	}
+	// Many bins are averaged down to the sparkline width, not cut.
+	var many measureResult
+	many.BinS = 1
+	for k := range 1000 {
+		many.Bins = append(many.Bins, binJSON{TS: float64(k), Samples: 10, IBusA: &rangeJSON{Mean: float64(k)}})
+	}
+	b.Reset()
+	printMeasureText(&b, style{}, many)
+	if !strings.Contains(b.String(), "  IBUS per 17s  ▁") || !strings.Contains(b.String(), "█\n") {
+		t.Errorf("1000 bins:\n%s", b.String())
 	}
 }
 

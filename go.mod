@@ -7,6 +7,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	golang.org/x/term v0.48.0
+	gonum.org/v1/gonum v0.17.0
 )
 
 require (

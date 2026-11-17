@@ -159,10 +159,10 @@ func toSnapshot(a km003c.ADC, t time.Time, serial, firmware string, firmwareErr 
 	return s
 }
 
-// stat accumulates min/mean/max/last.
+// stat accumulates min/mean/max (watch's running summary).
 type stat struct {
-	min, max, sum, last float64
-	n                   int
+	min, max, sum float64
+	n             int
 }
 
 func (s *stat) add(v float64) {
@@ -173,7 +173,6 @@ func (s *stat) add(v float64) {
 		s.max = v
 	}
 	s.sum += v
-	s.last = v
 	s.n++
 }
 
@@ -182,23 +181,6 @@ func (s stat) avg() float64 {
 		return 0
 	}
 	return s.sum / float64(s.n)
-}
-
-type statJSON struct {
-	Min  float64 `json:"min"`
-	Mean float64 `json:"mean"`
-	Max  float64 `json:"max"`
-	Last float64 `json:"last"`
-}
-
-func (s stat) json(decimals int) *statJSON {
-	if s.n == 0 {
-		return nil
-	}
-	return &statJSON{
-		Min: round(s.min, decimals), Mean: round(s.avg(), decimals),
-		Max: round(s.max, decimals), Last: round(s.last, decimals),
-	}
 }
 
 // meanDirection classifies the mean current like ADC.Direction.
