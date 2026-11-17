@@ -174,7 +174,7 @@ function searchDialog() {
 
 function footer() {
   return `<footer class="site-foot">
-  <p>Apache License 2.0. Not affiliated with or endorsed by ChargerLAB.</p>
+  <p>Apache License 2.0.</p>
   <p><a href="${REPO}">github.com/ljagiello/gopower-z</a></p>
 </footer>`;
 }

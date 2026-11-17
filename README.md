@@ -63,4 +63,4 @@ to `main` that touches `docs/` or `site/`.
 
 ## License
 
-[Apache License 2.0](LICENSE). Not affiliated with or endorsed by ChargerLAB.
+[Apache License 2.0](LICENSE).
