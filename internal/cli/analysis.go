@@ -5,6 +5,10 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"gonum.org/v1/gonum/floats"
+	gstat "gonum.org/v1/gonum/stat"
+	"gonum.org/v1/gonum/stat/distuv"
 )
 
 // This file turns the readings of a measure window into the summary that
@@ -203,12 +207,8 @@ func analyze(ss []sample, window, binS float64) analysis {
 }
 
 func binRange(run []sample, f func(sample) float64) *rangeJSON {
-	lo, hi, sum := math.Inf(1), math.Inf(-1), 0.0
-	for _, s := range run {
-		v := f(s)
-		lo, hi, sum = math.Min(lo, v), math.Max(hi, v), sum+v
-	}
-	return &rangeJSON{Min: round(lo, 6), Mean: round(sum/float64(len(run)), 6), Max: round(hi, 6)}
+	vs := values(run, f)
+	return &rangeJSON{Min: round(floats.Min(vs), 6), Mean: round(gstat.Mean(vs, nil), 6), Max: round(floats.Max(vs), 6)}
 }
 
 // describe computes the statistics of values xs taken at times ts (seconds
@@ -218,18 +218,9 @@ func describe(xs, ts []float64, window float64, decimals int) *statJSON {
 	if n == 0 {
 		return nil
 	}
-	mean := 0.0
-	for _, x := range xs {
-		mean += x
-	}
-	mean /= float64(n)
-	ss := 0.0
-	for _, x := range xs {
-		ss += (x - mean) * (x - mean)
-	}
-	sd := 0.0
-	if n > 1 {
-		sd = math.Sqrt(ss / float64(n-1))
+	mean, sd := gstat.MeanStdDev(xs, nil) // sample (n-1) standard deviation
+	if n == 1 {
+		sd = 0 // gonum gives NaN for a single value
 	}
 	sorted := slices.Clone(xs)
 	slices.Sort(sorted)
@@ -242,7 +233,11 @@ func describe(xs, ts []float64, window float64, decimals int) *statJSON {
 	return st
 }
 
-// quantile interpolates linearly between order statistics (sorted input).
+// quantile interpolates linearly between order statistics of sorted input:
+// the usual definition (Hyndman & Fan type 7, the default of R and NumPy),
+// so p50 is the ordinary median. gonum's stat.Quantile offers only other
+// conventions (its LinInterp is type 4, which puts the median of 1..21 at
+// 10.5), so this one is kept here.
 func quantile(sorted []float64, q float64) float64 {
 	h := q * float64(len(sorted)-1)
 	lo := int(math.Floor(h))
@@ -259,8 +254,9 @@ func quantile(sorted []float64, q float64) float64 {
 // not. Batch means are only close to independent when batches are long
 // compared with how slowly the load itself wanders, so no interval is
 // claimed for batches under minBatchS, or when consecutive batch means are
-// correlated (lag-1 autocorrelation above 2/sqrt(m): a level that changed or
-// drifted during the window fails it). It covers sampling variation over the
+// correlated (lag-1 correlation above 2/sqrt(m): a level that changed or
+// drifted during the window fails it). The interval is the Student-t one for
+// the mean of the m batch means. It covers sampling variation over the
 // window, not the meter's accuracy.
 func batchCI(xs, ts []float64, window float64) (float64, bool) {
 	if window/ciBatches < minBatchS {
@@ -283,27 +279,14 @@ func batchCI(xs, ts []float64, window float64) (float64, bool) {
 	if m < minCIBatches {
 		return 0, false
 	}
-	mu := 0.0
-	for _, x := range means {
-		mu += x
-	}
-	mu /= float64(m)
-	v, lag := 0.0, 0.0
-	for i, x := range means {
-		v += (x - mu) * (x - mu)
-		if i > 0 {
-			lag += (x - mu) * (means[i-1] - mu)
-		}
-	}
-	if v > 0 && lag/v > 2/math.Sqrt(float64(m)) {
+	// NaN (a constant run, nothing to correlate) counts as uncorrelated.
+	if lag1 := gstat.Correlation(means[:m-1], means[1:], nil); lag1 > 2/math.Sqrt(float64(m)) {
 		return 0, false
 	}
-	return tCrit975[m-1] * math.Sqrt(v/float64(m-1)/float64(m)), true
+	_, v := gstat.MeanVariance(means, nil)
+	t := distuv.StudentsT{Mu: 0, Sigma: 1, Nu: float64(m - 1)}.Quantile(0.975)
+	return t * math.Sqrt(v/float64(m)), true
 }
-
-// tCrit975 holds the 97.5% quantile of Student's t for 0..ciBatches-1 degrees
-// of freedom (index = df; only df >= minCIBatches-1 is used).
-var tCrit975 = [ciBatches]float64{0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262}
 
 // level is a run of samples ss[lo:hi] at one level of a field.
 type level struct{ lo, hi int }
@@ -543,21 +526,23 @@ func findShifts(ss []sample, bounds []int, window, binS float64, field string, f
 	return out
 }
 
-func medianOf(ss []sample, lo, hi int, f func(sample) float64) float64 {
-	xs := make([]float64, hi-lo)
-	for k, s := range ss[lo:hi] {
-		xs[k] = f(s)
+// values extracts one field from a run of samples.
+func values(run []sample, f func(sample) float64) []float64 {
+	vs := make([]float64, len(run))
+	for k, s := range run {
+		vs[k] = f(s)
 	}
-	slices.Sort(xs)
-	return quantile(xs, 0.5)
+	return vs
+}
+
+func medianOf(ss []sample, lo, hi int, f func(sample) float64) float64 {
+	vs := values(ss[lo:hi], f)
+	slices.Sort(vs)
+	return quantile(vs, 0.5)
 }
 
 func meanOf(ss []sample, lo, hi int, f func(sample) float64) float64 {
-	sum := 0.0
-	for _, s := range ss[lo:hi] {
-		sum += f(s)
-	}
-	return sum / float64(hi-lo)
+	return gstat.Mean(values(ss[lo:hi], f), nil)
 }
 
 func r3(v float64) float64 { return round(v, 3) }
