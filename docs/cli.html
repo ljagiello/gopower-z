@@ -98,13 +98,26 @@ go install github.com/ljagiello/gopower-z/cmd/powerz@latest</code></pre>
 <p>Connect the meter's USB-C port marked <strong>HID</strong> to the computer. Plug the source (charger) into the meter's female receptacle and the device under test onto its male plug. On macOS no driver or root is needed. On Linux, the in-kernel <code>powerz</code> hwmon driver owns the interface; powerz detaches it while running, and you need a udev rule granting access to <code>5fc9:0063</code> (otherwise exit code 6). Linux is built and unit-tested in CI but has not yet been run with a meter attached.</p>
 
 <h2 id="quick">2. Quick start</h2>
-<pre><code>powerz                       # dashboard on a terminal, one JSON reading when piped
-powerz read                  # one snapshot
-powerz measure --duration 10s # min/mean/max, energy, charge, USB-PD capture
-powerz info                  # model, firmware, serial, settings
-powerz pd --duration 30s      # decoded USB-PD traffic, then a summary line
+<pre><code># dashboard on a terminal, one JSON reading when piped
+powerz
+
+# one snapshot
+powerz read
+
+# min/mean/max, energy, charge, USB-PD capture
+powerz measure --duration 10s
+
+# model, firmware, serial, settings
+powerz info
+
+# decoded USB-PD traffic, then a summary line
+powerz pd --duration 30s
+
+# one minute of snapshots, two per second, saved as CSV
 powerz log --duration 1m --interval 500ms --format csv &gt; run.csv
-powerz schema                # the machine-readable reference</code></pre>
+
+# the machine-readable reference
+powerz schema</code></pre>
 
 <h2 id="contract">3. Agent contract</h2>
 <div class="good">
