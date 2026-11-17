@@ -24,7 +24,8 @@ func isBrokenPipe(err error) bool {
 // silently changing them).
 func checkInterval(cmd string, d, minimum time.Duration) error {
 	if d < minimum {
-		return usageErr("%s: -interval must be at least %v (got %v)", cmd, minimum, d)
+		return withHint(usageErr("%s: -interval must be at least %v (got %v)", cmd, minimum, d),
+			fmt.Sprintf("use e.g. -interval %v; the meter itself samples at 2-1000 SPS, so faster polling only repeats values", max(minimum, 100*time.Millisecond)))
 	}
 	return nil
 }
@@ -390,11 +391,22 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 
 // pdEnd is the final line of `pd` output in JSON mode.
 type pdEnd struct {
-	SchemaVersion int     `json:"schema_version"`
-	Kind          string  `json:"kind"` // "summary"
-	Time          string  `json:"time"`
-	DurationS     float64 `json:"duration_s"`
-	*pdSummary
+	SchemaVersion      int     `json:"schema_version"`
+	Kind               string  `json:"kind"` // "summary"
+	Time               string  `json:"time"`
+	DurationS          float64 `json:"duration_s"`
+	Messages           int     `json:"messages"`
+	Events             int     `json:"events"`
+	SourceCapabilities []pdo   `json:"source_capabilities"`
+	LastRequest        *rdo    `json:"last_request"`
+	Contract           *rdo    `json:"contract"`
+	Note               *string `json:"note"`
+}
+
+func newPDEnd(sum *pdSummary, now time.Time, durationS float64) pdEnd {
+	return pdEnd{SchemaVersion: schemaVersion, Kind: "summary", Time: utcTime(now), DurationS: round(durationS, 3),
+		Messages: sum.Messages, Events: sum.Events, SourceCapabilities: sum.SourceCapabilities,
+		LastRequest: sum.LastRequest, Contract: sum.Contract, Note: sum.Note}
 }
 
 func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
@@ -431,10 +443,8 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 		n := 0
 		finish := func() error {
 			sum := tr.summary(nil)
-			sum.Records = nil // records were already streamed
 			if jsonOut {
-				return emit(pdEnd{SchemaVersion: schemaVersion, Kind: "summary", Time: utcTime(time.Now()),
-					DurationS: round(time.Since(start).Seconds(), 3), pdSummary: sum})
+				return emit(newPDEnd(sum, time.Now(), time.Since(start).Seconds()))
 			}
 			fmt.Fprintf(os.Stderr, "%d messages, %d events\n", sum.Messages, sum.Events)
 			if sum.Note != nil {

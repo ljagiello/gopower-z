@@ -47,19 +47,19 @@ func (c PDEventCode) String() string {
 	case 2:
 		return "detach"
 	case 3:
-		return "bad message id"
+		return "bad_message_id"
 	case 4:
-		return "hard reset"
+		return "hard_reset"
 	case 5:
-		return "cable reset"
+		return "cable_reset"
 	case 6:
-		return "receive error"
+		return "receive_error"
 	case 7:
-		return "monitor type"
+		return "monitor_type"
 	case 8:
-		return "big message"
+		return "big_message"
 	}
-	return fmt.Sprintf("event %d", uint8(c))
+	return "unknown"
 }
 
 // PDRecord is one entry of the PD event stream: either a captured PD message

@@ -109,7 +109,7 @@ func (r pdRecord) MarshalJSON() ([]byte, error) {
 		SourceCaps    []pdo    `json:"source_capabilities"`
 		Request       *rdo     `json:"request"`
 		Event         *string  `json:"event"`
-		CC            *int     `json:"cc"`
+		CCLine        *int     `json:"cc_line"`
 		Param         *int     `json:"param"`
 		RawHex        string   `json:"raw_hex"`
 	}
@@ -126,7 +126,7 @@ func (r pdRecord) MarshalJSON() ([]byte, error) {
 	if r.Kind == "event" {
 		o.Event = strOrNil(r.Event)
 		if r.CC != 0 {
-			o.CC = new(r.CC)
+			o.CCLine = new(r.CC)
 		} else {
 			o.Param = new(r.Param)
 		}
@@ -143,6 +143,7 @@ type pdTracker struct {
 	contract    *rdo // request confirmed by PS_RDY
 	messages    int
 	events      int
+	attaches    int               // attach/detach events
 	ext         usbpd.Reassembler // chunked extended messages
 }
 
@@ -150,6 +151,9 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 	out := pdRecord{SchemaVersion: schemaVersion, Time: utcTime(time.Now()), MeterTimeMS: r.TimestampMS, RawHex: hexdump(r.Raw)}
 	if !r.IsMessage {
 		t.events++
+		if r.Event == 1 || r.Event == 2 {
+			t.attaches++
+		}
 		out.Kind = "event"
 		out.Event = r.Event.String()
 		if (r.Event == 1 || r.Event == 2) && (r.EventParam == 1 || r.EventParam == 2) {
@@ -275,11 +279,15 @@ type pdSummary struct {
 	Records            []pdRecord `json:"records"`
 }
 
-// noPDNote explains an empty capture so it is not mistaken for a failure.
-const noPDNote = "no USB-PD traffic was captured in this window; this is normal when no negotiation happened " +
-	"(PD is only exchanged on attach or renegotiation, and only when both the charger and the device support USB-PD; " +
-	"the meter records every PD message it sees, so an attach with no messages means no PD was spoken); " +
-	"a contract negotiated before the capture started is not visible - reconnect the device during the capture to observe it"
+// Notes explaining a capture without PD messages, so it is not mistaken for
+// a failure.
+const (
+	noPDNote = "no USB-PD activity was captured in this window; this is normal when nothing was connected or " +
+		"renegotiated (PD is only exchanged on attach or renegotiation); a contract negotiated before the capture " +
+		"started is not visible - reconnect the device during the capture to observe it"
+	noPDMessagesNote = "the device was attached/detached during the capture (see events) but no USB-PD messages " +
+		"were exchanged: the charger or the device does not use USB-PD (the meter records every PD message it sees)"
+)
 
 func (t *pdTracker) summary(records []pdRecord) *pdSummary {
 	if records == nil {
@@ -295,7 +303,11 @@ func (t *pdTracker) summary(records []pdRecord) *pdSummary {
 		}
 		s.SourceCapabilities = append(s.SourceCapabilities, toPDO(i+1, p))
 	}
-	if t.messages == 0 {
+	switch {
+	case t.messages > 0:
+	case t.attaches > 0:
+		s.Note = new(noPDMessagesNote)
+	default:
 		s.Note = new(noPDNote)
 	}
 	return s

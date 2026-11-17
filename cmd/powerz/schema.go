@@ -11,9 +11,12 @@ import (
 // ("inferred.cc.attached"); objects and arrays whose shape is defined
 // elsewhere carry a ref to an entry of "definitions".
 type fieldDoc struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"` // number, integer, string, boolean, object, array
-	Nullable    bool   `json:"nullable"`
+	Name     string   `json:"name"`
+	Type     string   `json:"type"` // number, integer, string, boolean, object, array
+	Nullable bool     `json:"nullable"`
+	Enum     []string `json:"enum,omitempty"`  // allowed values of a string field
+	Items    string   `json:"items,omitempty"` // element type of an array (a JSON type, or "object" with ref)
+	// Ref names the definition of an object (or of an array's elements).
 	Ref         string `json:"ref,omitempty"`
 	Description string `json:"description"`
 }
@@ -23,8 +26,29 @@ func fd(name, typ string, nullable bool, desc string) fieldDoc {
 }
 
 func fref(name, typ, ref string, nullable bool, desc string) fieldDoc {
-	return fieldDoc{Name: name, Type: typ, Nullable: nullable, Ref: ref, Description: desc}
+	f := fieldDoc{Name: name, Type: typ, Nullable: nullable, Ref: ref, Description: desc}
+	if typ == tArr {
+		f.Items = tObj
+	}
+	return f
 }
+
+// fenum documents a string field with a closed set of values.
+func fenum(name string, nullable bool, desc string, values ...string) fieldDoc {
+	return fieldDoc{Name: name, Type: tStr, Nullable: nullable, Enum: values, Description: desc}
+}
+
+// farr documents an array of scalars.
+func farr(name, items string, desc string) fieldDoc {
+	return fieldDoc{Name: name, Type: tArr, Items: items, Description: desc}
+}
+
+var (
+	directions   = []string{"receptacle_to_plug", "plug_to_receptacle", "none"}
+	tailLayouts  = []string{"line-averages", "status", "unknown"}
+	errorCodes   = []string{"usage", "not_found", "busy", "timeout", "permission_denied", "partial", "interrupted", "error"}
+	pdEventNames = []string{"none", "attach", "detach", "bad_message_id", "hard_reset", "cable_reset", "receive_error", "monitor_type", "big_message", "unknown"}
+)
 
 const (
 	tNum  = "number"
@@ -46,7 +70,7 @@ var definitions = map[string][]fieldDoc{
 		fd("vbus_v", tNum, false, "bus voltage, volts (resolution 1 µV)"),
 		fd("ibus_a", tNum, false, "bus current, amperes (resolution 1 µA); positive = flowing from the meter's female receptacle to its male plug (normal set-up: source on the receptacle), negative = reverse; same sign as the meter's screen"),
 		fd("power_w", tNum, false, "vbus_v * ibus_a, watts; positive = delivered receptacle -> plug"),
-		fd("direction", tStr, false, "receptacle_to_plug | plug_to_receptacle | none (|current| < 1 mA); the arrow on the meter's screen"),
+		fenum("direction", false, "flow direction of the current (|current| < 1 mA is none); the arrow on the meter's screen", directions...),
 		fd("vbus_avg_v", tNum, false, "the meter's smoothed VBUS average, volts (updates about once per second)"),
 		fd("ibus_avg_a", tNum, false, "the meter's smoothed current average, amperes, same sign as ibus_a"),
 		fd("power_avg_w", tNum, false, "vbus_avg_v * ibus_avg_a, watts"),
@@ -66,15 +90,15 @@ var definitions = map[string][]fieldDoc{
 		fd("inferred.dashboard_label", tStr, true, "the meter's first D+/D- protocol label (DCP, DCP 1.5A, Apple 2.4A, QC2.0 9V, QC3.0 | QC3+, FCP | AFC, VOOC, ...), recomputed with the meter firmware's algorithm; a D+/D- voltage signature, not a confirmed protocol session; null where the screen shows [N/A]"),
 		fd("inferred.dashboard_label_2", tStr, true, "the meter's second D+/D- label (SFCP 9V, FCP | SCP | AFC, VOOC, ...); null where the screen shows [N/A]"),
 		fd("inferred.cc", tObj, false, "Type-C connection inferred from the CC voltages"),
-		fd("inferred.cc.attached", tStr, false, "cc1 | cc2 | both | none | open | unknown"),
-		fd("inferred.cc.advertisement", tStr, false, "source current advertisement: default_usb | 1.5A | 3.0A | none | unknown"),
+		fenum("inferred.cc.attached", false, "CC line carrying the Type-C connection (open: pulled up, no sink)", "cc1", "cc2", "both", "none", "open", "unknown"),
+		fenum("inferred.cc.advertisement", false, "source current advertisement", "default_usb", "1.5A", "3.0A", "none", "unknown"),
 		fd("inferred.cc.advertised_current_a", tNum, true, "1.5 or 3.0; null for default USB current or no advertisement"),
 		fd("inferred.cc.text", tStr, false, "one-line human summary"),
 		fd("raw", tObj, false, "raw meter values for debugging"),
 		fd("raw.ibus_ua", tInt, false, "the meter's raw signed current, µA (negative = receptacle -> plug)"),
 		fd("raw.vbus_uncal_avg_uv", tInt, false, "uncalibrated VBUS average, µV"),
 		fd("raw.ibus_uncal_avg_ua", tInt, false, "uncalibrated current average, µA, raw sign"),
-		fd("raw.tail_layout", tStr, false, "how ADC bytes 0x24..0x2B were decoded: line-averages (firmware <= 2.0.0), status (>= 2.0.1) or unknown"),
+		fenum("raw.tail_layout", false, "how ADC bytes 0x24..0x2B were decoded: line-averages (firmware <= 2.0.0), status (>= 2.0.1)", tailLayouts...),
 		fd("raw.tail_hex", tStr, false, "ADC payload bytes 0x24..0x2B, hex"),
 		fd("raw.accel_status", tInt, true, "accelerometer status/orientation byte (firmware >= 2.0.1)"),
 	},
@@ -96,7 +120,7 @@ var definitions = map[string][]fieldDoc{
 		fd("samples", tInt, false, "successful readings"),
 		fd("failed_samples", tInt, false, "failed readings (exit status 7 if > 0)"),
 		fd("last_error", tStr, true, "message of the last failed reading, or null"),
-		fd("direction", tStr, false, "dominant flow direction from the mean current: receptacle_to_plug | plug_to_receptacle | none"),
+		fenum("direction", false, "dominant flow direction of the mean current (|mean| < 1 mA is none)", directions...),
 		fd("stats", tObj, false, "statistics over the successful samples"),
 		fref("stats.vbus_v", tObj, "stat", true, "bus voltage, volts"),
 		fref("stats.ibus_a", tObj, "stat", true, "current, amperes, signed like ibus_a"),
@@ -118,7 +142,7 @@ var definitions = map[string][]fieldDoc{
 	},
 	"pd_end": {
 		fd("schema_version", tInt, false, "output schema version"),
-		fd("kind", tStr, false, "always \"summary\": the last line of `pd` output"),
+		fenum("kind", false, "marks the last line of `pd` output", "summary"),
 		fd("time", tStr, false, "host time, UTC ISO 8601"),
 		fd("duration_s", tNum, false, "length of the capture, seconds"),
 		fd("messages", tInt, false, "as in pd_summary"),
@@ -127,32 +151,31 @@ var definitions = map[string][]fieldDoc{
 		fref("last_request", tObj, "rdo", true, "as in pd_summary"),
 		fref("contract", tObj, "rdo", true, "as in pd_summary"),
 		fd("note", tStr, true, "as in pd_summary"),
-		fref("records", tArr, "pd_record", true, "null (records were streamed as separate lines)"),
 	},
 	"pd_record": {
 		fd("schema_version", tInt, false, "output schema version"),
 		fd("time", tStr, false, "host time the record was read, UTC ISO 8601"),
 		fd("meter_time_ms", tInt, false, "meter uptime when the record was captured, milliseconds"),
-		fd("kind", tStr, false, "message | event"),
-		fd("sop", tStr, true, "SOP | SOP' | SOP'' | SOP'_Dbg | SOP''_Dbg (messages)"),
+		fenum("kind", false, "record type", "message", "event"),
+		fenum("sop", true, "SOP packet type (messages)", "SOP", "SOP'", "SOP''", "SOP'_Dbg", "SOP''_Dbg"),
 		fd("message", tStr, true, "USB-PD message name, e.g. Source_Capabilities, Request, Accept, PS_RDY; long_message_undecoded for unverified long records"),
-		fd("class", tStr, true, "control | data | extended"),
-		fd("power_role", tStr, true, "source | sink (SOP messages)"),
-		fd("data_role", tStr, true, "dfp | ufp (SOP messages)"),
-		fd("spec_revision", tStr, true, "1.0 | 2.0 | 3.x"),
+		fenum("class", true, "message class (messages)", "control", "data", "extended"),
+		fenum("power_role", true, "port power role (SOP messages)", "source", "sink"),
+		fenum("data_role", true, "port data role (SOP messages)", "dfp", "ufp"),
+		fenum("spec_revision", true, "USB-PD revision in the header", "1.0", "2.0", "3.x", "?"),
 		fd("message_id", tInt, true, "3-bit message counter"),
 		fd("from_meter", tBool, false, "true if the meter itself sent the message"),
-		fd("objects_hex", tArr, false, "raw 32-bit data objects as hex strings ([] if none)"),
+		farr("objects_hex", tStr, "raw 32-bit data objects as hex strings ([] if none)"),
 		fref("source_capabilities", tArr, "pdo", true, "decoded PDOs (Source_Capabilities / EPR_Source_Capabilities), otherwise null"),
 		fref("request", tObj, "rdo", true, "decoded Request with the PDO it selects, otherwise null"),
-		fd("event", tStr, true, "attach | detach | bad message id | hard reset | cable reset | receive error | ... (events)"),
-		fd("cc", tInt, true, "CC line (1 or 2) of an attach/detach event"),
+		fenum("event", true, "event type (events)", pdEventNames...),
+		fd("cc_line", tInt, true, "CC line (1 or 2) of an attach/detach event"),
 		fd("param", tInt, true, "event parameter for other events"),
 		fd("raw_hex", tStr, false, "record bytes as captured, hex"),
 	},
 	"pdo": {
 		fd("index", tInt, false, "1-based object position (what a Request selects)"),
-		fd("type", tStr, false, "fixed | battery | variable | pps | epr_avs | spr_avs | unknown"),
+		fenum("type", false, "PDO type", "fixed", "battery", "variable", "pps", "epr_avs", "spr_avs", "unknown"),
 		fd("min_voltage_v", tNum, false, "minimum voltage, volts (= max for fixed)"),
 		fd("max_voltage_v", tNum, false, "maximum voltage, volts"),
 		fd("max_current_a", tNum, true, "maximum current, amperes (SPR AVS: at 15 V); null when the PDO specifies power"),
@@ -184,17 +207,17 @@ var definitions = map[string][]fieldDoc{
 		fd("device.hardware_date", tStr, false, "hardware/bootloader date, YYYY-MM-DD"),
 		fd("device.serial", tStr, false, "factory serial number"),
 		fd("device.uuid", tStr, true, "factory unique id (32 hex characters), null if absent"),
-		fd("device.adc_tail_layout", tStr, false, "firmware-dependent ADC decoding in use: line-averages | status | unknown"),
+		fenum("device.adc_tail_layout", false, "firmware-dependent ADC decoding in use", tailLayouts...),
 		fd("settings", tObj, true, "meter settings; null if unavailable (exit status 7)"),
 		fd("settings.device_name", tStr, false, "name shown on the meter"),
 		fd("settings.sample_rate_sps", tInt, false, "2, 10, 50 or 1000"),
 		fd("settings.brightness_percent", tInt, false, "screen brightness, %"),
-		fd("settings.rotation_code", tInt, false, "raw screen-rotation code (0-3)"),
+		fd("settings.rotation_code", tInt, false, "raw screen-rotation code (0-3); meaning not decoded"),
 		fd("settings.auto_rotate", tBool, false, "screen auto-rotation enabled"),
-		fd("settings.language_code", tInt, false, "raw UI language code"),
-		fd("settings.theme_code", tInt, false, "raw UI theme code"),
+		fd("settings.language_code", tInt, false, "raw UI language code; meaning not decoded"),
+		fd("settings.theme_code", tInt, false, "raw UI theme code; meaning not decoded"),
 		fd("settings.checksum_ok", tBool, false, "both settings blocks passed their CRC-32"),
-		fd("errors", tArr, false, "parts that could not be read ([] if none; exit status 7 otherwise)"),
+		farr("errors", tStr, "parts that could not be read ([] if none; exit status 7 otherwise)"),
 	},
 	"usb": {
 		fd("manufacturer", tStr, false, "USB manufacturer string"),
@@ -215,7 +238,7 @@ var definitions = map[string][]fieldDoc{
 	"error": {
 		fd("schema_version", tInt, false, "output schema version"),
 		fd("error", tObj, false, "the error (printed on stderr)"),
-		fd("error.code", tStr, false, "usage | not_found | busy | timeout | permission_denied | partial | interrupted | error"),
+		fenum("error.code", false, "stable error code", errorCodes...),
 		fd("error.exit_code", tInt, false, "the process exit status"),
 		fd("error.message", tStr, false, "human-readable message"),
 		fd("error.retryable", tBool, false, "true if retrying the same command can succeed"),
@@ -224,9 +247,17 @@ var definitions = map[string][]fieldDoc{
 }
 
 type output struct {
-	Format string `json:"format"` // json_object, json_lines, csv, text
-	Ref    string `json:"ref,omitempty"`
-	Note   string `json:"note,omitempty"`
+	Format string   `json:"format"` // json_object, json_lines, csv, text
+	Refs   []string `json:"refs"`   // definitions of what stdout carries ([] for text)
+	Stderr string   `json:"stderr"` // definition of the error object printed on failure
+	Note   string   `json:"note,omitempty"`
+}
+
+func out(format, note string, refs ...string) output {
+	if refs == nil {
+		refs = []string{}
+	}
+	return output{Format: format, Refs: refs, Stderr: "error", Note: note}
 }
 
 type commandDoc struct {
@@ -281,27 +312,27 @@ func buildSchema() map[string]any {
 		notes   []string
 	}
 	specs := map[string]spec{
-		"read": {output{"json_object", "snapshot", ""}, true, "powerz read -json", []string{}},
-		"measure": {output{"json_object", "measure", ""}, true, "powerz measure -duration 10s -json", []string{
+		"read": {out("json_object", "", "snapshot"), true, "powerz read -json", []string{}},
+		"measure": {out("json_object", "", "measure"), true, "powerz measure -duration 10s -json", []string{
 			"Preferred command for agents: how much power/energy the attached device draws, and what the charger offered and negotiated.",
 			"The meter samples at its configured rate (info: settings.sample_rate_sps); polling faster only repeats values.",
 			"USB-PD is only exchanged on attach or renegotiation: start measure, then connect the device, to capture it.",
 		}},
-		"log": {output{"json_lines", "snapshot", "csv columns: " + strings.Join(csvColumns, ",")}, false,
+		"log": {out("json_lines", "csv columns with -format csv: "+strings.Join(csvColumns, ","), "snapshot"), false,
 			"powerz log -duration 30s -interval 500ms -json", []string{"Runs until -duration/-n or interrupt; always pass -duration or -n from automation."}},
-		"pd": {output{"json_lines", "pd_record", "one pd_record per line, then one pd_end summary line (kind=summary)"}, false,
+		"pd": {out("json_lines", "one pd_record per captured record, then one pd_end summary line (kind=summary)", "pd_record", "pd_end"), false,
 			"powerz pd -duration 20s -json", []string{
 				"Passive capture: the meter sniffs traffic between the charger and the device plugged through it; powerz never sends PD messages.",
 				"Reading drains the meter's PD buffer, so only one consumer sees each record.",
 				"An empty capture is normal when nothing negotiated during the window; the summary line's note says so.",
 				"Always pass -duration from automation (-n alone waits for traffic).",
 			}},
-		"info":    {output{"json_object", "info", ""}, true, "powerz info -json", []string{}},
-		"devices": {output{"json_object", "devices", ""}, true, "powerz devices -json", []string{"Does not claim the meter, so it works while another program uses it."}},
-		"watch":   {output{"text", "", "full-screen terminal UI"}, false, "powerz watch", []string{"Interactive terminals only; agents should use measure/log/pd."}},
-		"schema":  {output{"json_object", "", "this document"}, true, "powerz schema", []string{}},
-		"version": {output{"json_object", "version", ""}, true, "powerz version -json", []string{}},
-		"help":    {output{"text", "", "usage text"}, true, "powerz help", []string{}},
+		"info":    {out("json_object", "", "info"), true, "powerz info -json", []string{}},
+		"devices": {out("json_object", "", "devices"), true, "powerz devices -json", []string{"Does not claim the meter, so it works while another program uses it."}},
+		"watch":   {out("text", "full-screen terminal UI"), false, "powerz watch", []string{"Interactive terminals only; agents should use measure/log/pd."}},
+		"schema":  {out("json_object", "this document"), true, "powerz schema", []string{}},
+		"version": {out("json_object", "", "version"), true, "powerz version -json", []string{}},
+		"help":    {out("text", "usage text"), true, "powerz help", []string{}},
 	}
 	names := make([]string, 0, len(commands))
 	for n := range commands {

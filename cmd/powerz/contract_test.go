@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,9 @@ func checkShape(t *testing.T, def string, v any) {
 				t.Errorf("%s: %q is %s, documented as %s", def, name, jt, d.Type)
 				continue
 			}
+			if len(d.Enum) > 0 && !slices.Contains(d.Enum, val.(string)) {
+				t.Errorf("%s: %q = %q is not one of %v", def, name, val, d.Enum)
+			}
 			switch d.Type {
 			case tObj:
 				if d.Ref != "" {
@@ -98,9 +102,15 @@ func checkShape(t *testing.T, def string, v any) {
 					walk(name+".", val.(map[string]any))
 				}
 			case tArr:
-				if d.Ref != "" {
-					for _, e := range val.([]any) {
+				if d.Items == "" {
+					t.Errorf("%s: array %q has no items type", def, name)
+				}
+				for _, e := range val.([]any) {
+					switch {
+					case d.Ref != "":
 						checkShape(t, d.Ref, e)
+					case jsonType(e) != d.Items && (d.Items != tNum || jsonType(e) != tInt):
+						t.Errorf("%s: %q element %v is %s, documented items %s", def, name, e, jsonType(e), d.Items)
 					}
 				}
 			}
@@ -198,10 +208,8 @@ func TestSchemaContract(t *testing.T) {
 		Direction: "none", PD: (&pdTracker{}).summary(nil)}
 	checkShape(t, "measure", toAny(t, empty))
 
-	end := tr.summary(nil)
-	end.Records = nil
-	checkShape(t, "pd_end", toAny(t, pdEnd{SchemaVersion: schemaVersion, Kind: "summary", Time: utcTime(now),
-		DurationS: 20, pdSummary: end}))
+	checkShape(t, "pd_end", toAny(t, newPDEnd(tr.summary(nil), now, 20)))
+	checkShape(t, "pd_end", toAny(t, newPDEnd((&pdTracker{}).summary(nil), now, 3)))
 
 	usb := km003c.USBDescription{Manufacturer: "ChargerLab", Product: "POWER-Z KM003C", Serial: "050002", Bus: 2, Address: 20}
 	checkShape(t, "info", toAny(t, infoResult{SchemaVersion: schemaVersion, USB: usb, Errors: []string{},
@@ -242,15 +250,13 @@ func TestSchemaReferences(t *testing.T) {
 		}
 	}
 	for _, c := range s["commands"].([]commandDoc) {
-		if c.Output.Ref != "" {
-			if _, ok := definitions[c.Output.Ref]; !ok {
-				t.Errorf("command %s references unknown definition %q", c.Name, c.Output.Ref)
+		for _, ref := range append(c.Output.Refs, c.Output.Stderr) {
+			if _, ok := definitions[ref]; !ok {
+				t.Errorf("command %s references unknown definition %q", c.Name, ref)
 			}
-			mark(c.Output.Ref)
+			mark(ref)
 		}
 	}
-	mark("pd_end")
-	mark("error")
 	for def := range definitions {
 		if !reached[def] {
 			t.Errorf("definition %q is not reachable from any command", def)

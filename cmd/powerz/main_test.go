@@ -182,8 +182,14 @@ func TestPDTrackerResolvesRequest(t *testing.T) {
 	if _, ok := tr.process(good); ok {
 		t.Error("GoodCRC not filtered")
 	}
-	// An empty capture explains itself.
-	if n := (&pdTracker{}).summary(nil); n.Note == nil || n.Records == nil {
+	// An empty capture explains itself, and the explanation matches the data.
+	if n := (&pdTracker{}).summary(nil); n.Note == nil || *n.Note != noPDNote || n.Records == nil {
 		t.Errorf("empty summary %+v", n)
+	}
+	replug := &pdTracker{}
+	replug.process(km003c.PDRecord{Event: 2, EventParam: 2, Raw: []byte{0x45}})
+	replug.process(km003c.PDRecord{Event: 1, EventParam: 2, Raw: []byte{0x45}})
+	if n := replug.summary(nil); n.Note == nil || *n.Note != noPDMessagesNote || n.Events != 2 {
+		t.Errorf("replug without PD: %+v", n)
 	}
 }

@@ -198,9 +198,9 @@ powerz schema                # the machine-readable reference</code></pre>
  "objects_hex":["0001912C","0002D12C"],
  "source_capabilities":[{"index":1,"type":"fixed","min_voltage_v":5,"max_voltage_v":5,"max_current_a":3,
    "max_current_20v_a":null,"max_power_w":15,"raw_hex":"0001912C","text":"Fixed 5.00V 3.00A (15.0W)"}, …],
- "request":null,"event":null,"cc":null,"param":null,"raw_hex":"…"}
+ "request":null,"event":null,"cc_line":null,"param":null,"raw_hex":"…"}
 {"schema_version":1,"kind":"summary","time":"…","duration_s":20,"messages":0,"events":0,"source_capabilities":[],
- "last_request":null,"contract":null,"note":"no USB-PD traffic was captured in this window; …","records":null}</code></pre>
+ "last_request":null,"contract":null,"note":"the device was attached/detached during the capture (see events) but no USB-PD messages were exchanged: …"}</code></pre>
 <p>The record above is illustrative: no PD negotiation has been captured live yet. The summary line is real output.</p>
 
 <h2 id="errors">6. Errors and exit codes</h2>

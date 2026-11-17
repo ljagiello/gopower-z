@@ -400,7 +400,7 @@ Commands:
   measure    sample for -duration and print one summary: min/mean/max V, A, W,
              energy (Wh), charge (mAh), negotiated USB-PD contract
   log        stream measurements (JSON lines or CSV); use -duration or -n
-  pd         stream decoded USB-PD messages; use -duration or -n
+  pd         stream decoded USB-PD messages, then a summary line; use -duration
   info       model, firmware, serial number and settings
   devices    list connected meters
   watch      live dashboard (default on an interactive terminal)
@@ -417,10 +417,15 @@ Common flags (accepted by every command):
 
 For AI agents and scripts:
   * stdout carries only data; diagnostics and errors go to stderr.
-  * Errors are JSON on stderr: {"error":{"code","message","retryable","hint"}}.
+  * Every documented key is always present (null / [] when unavailable);
+    units are in field names; timestamps are UTC ISO 8601.
+  * Current and power are positive when flowing from the meter's female
+    receptacle to its male plug (the normal set-up); see "direction".
+  * Errors are JSON on stderr:
+    {"schema_version":1,"error":{"code","exit_code","message","retryable","hint"}}
   * Exit codes: 0 ok, 1 error, 2 usage, 3 not_found, 4 busy, 5 timeout,
     6 permission_denied, 7 partial, 130 interrupted.
-  * Run one powerz process per meter at a time (the USB interface is exclusive).
+  * Run one powerz process per meter at a time, or pass -wait 10s to queue.
   * Start with:  powerz schema   and   powerz measure -duration 10s
 
 Safety: every frame sent to the meter is checked against a read-only
