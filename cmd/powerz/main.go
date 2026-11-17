@@ -25,6 +25,10 @@ import (
 // schemaVersion is bumped whenever a JSON field is renamed or removed.
 const schemaVersion = 1
 
+// minTimeout is the smallest accepted -timeout; shorter values cannot cover
+// the meter's reply latency plus USB scheduling.
+const minTimeout = 100 * time.Millisecond
+
 // version is set at release time with -ldflags "-X main.version=vX.Y.Z".
 // Builds via `go install …@vX.Y.Z` fall back to the module version.
 var version = "dev"
@@ -64,7 +68,7 @@ type globals struct {
 func addCommon(fs *flag.FlagSet, g *globals) {
 	fs.StringVar(&g.serial, "serial", g.serial, "USB serial number of the meter to use (see `powerz devices`)")
 	fs.BoolVar(&g.trace, "trace", g.trace, "dump every raw USB frame (hex) to stderr")
-	fs.DurationVar(&g.timeout, "timeout", g.timeout, "per-request timeout")
+	fs.DurationVar(&g.timeout, "timeout", g.timeout, "per-request timeout (minimum 100ms)")
 	fs.DurationVar(&g.wait, "wait", g.wait, "if the meter is busy (used by another process), keep retrying for up to this long")
 	fs.BoolVar(&g.json, "json", g.json, "force JSON output (default when stdout is not a terminal)")
 	fs.BoolVar(&g.text, "text", g.text, "force human-readable output")
@@ -171,6 +175,10 @@ func run(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Without this a closed stdout pipe (`powerz log | head -1`) kills the
+	// process before the meter's USB interface is released cleanly; with it,
+	// writes fail with EPIPE and the commands stop normally.
+	signal.Ignore(syscall.SIGPIPE)
 
 	c, ok := commands[cmd]
 	if !ok {
@@ -189,6 +197,12 @@ func run(args []string) int {
 	}
 	if fs.NArg() > 0 {
 		return report(g, usageErr("%s: unexpected argument %q", cmd, fs.Arg(0)))
+	}
+	if g.timeout < minTimeout {
+		return report(g, usageErr("-timeout must be at least %v", minTimeout))
+	}
+	if g.wait < 0 {
+		return report(g, usageErr("-wait must not be negative"))
 	}
 	if err := run(ctx, g); err != nil {
 		return report(g, err)
@@ -322,7 +336,7 @@ Common flags (accepted by every command):
   -json         force JSON output (automatic when stdout is not a terminal)
   -text         force human-readable output
   -serial S     select a meter by USB serial number
-  -timeout D    per-request timeout (default 1s)
+  -timeout D    per-request timeout (default 1s, minimum 100ms)
   -wait D       if another process holds the meter, retry for up to D
   -trace        dump raw USB frames (hex) to stderr
 

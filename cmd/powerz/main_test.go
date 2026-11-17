@@ -174,6 +174,16 @@ func TestPDTrackerResolvesRequest(t *testing.T) {
 	if sum.Contract == nil || sum.Contract.ObjectPosition != 2 || len(sum.SourceCapabilities) != 2 {
 		t.Fatalf("summary %+v", sum)
 	}
+	// A long (undecoded) message record is reported as a message, renders as
+	// text without panicking, and does not end the contract.
+	long := km003c.PDRecord{IsMessage: true, Long: true, SOP: 2, Raw: []byte{0x25}}
+	rec, ok = tr.process(long)
+	if !ok || rec.Kind != "message" || rec.Event != "" || rec.text() == "" {
+		t.Fatalf("long record %+v", rec)
+	}
+	if tr.summary(nil).Contract == nil {
+		t.Fatal("long record cleared the contract")
+	}
 	// GoodCRC is hidden by default.
 	good := km003c.PDRecord{IsMessage: true, Raw: []byte{0}}
 	good.Message.Header = 0x0041

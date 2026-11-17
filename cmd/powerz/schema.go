@@ -192,7 +192,7 @@ func buildSchema() map[string]any {
 			{"-json", "bool", "auto", "force JSON output"},
 			{"-text", "bool", "auto", "force human-readable output"},
 			{"-serial", "string", "", "select a meter by USB serial (see `devices`)"},
-			{"-timeout", "duration", "1s", "per-request timeout"},
+			{"-timeout", "duration", "1s", "per-request timeout (minimum 100ms)"},
 			{"-wait", "duration", "0s", "if another process holds the meter, retry for up to this long instead of failing with busy"},
 			{"-trace", "bool", "false", "dump raw USB frames to stderr"},
 		},

@@ -67,12 +67,15 @@ func (c PDEventCode) String() string {
 type PDRecord struct {
 	TimestampMS uint32
 	IsMessage   bool
-	FromMeter   bool // bit 6 of the flag byte: the meter itself sent this message
-	SOP         SOP
-	Message     usbpd.Message // valid when IsMessage
-	Event       PDEventCode   // valid when !IsMessage
-	EventParam  uint8         // high nibble (e.g. CC line for attach)
-	Raw         []byte
+	// Long marks a "long" PD message record (flag byte bit 7 clear, bit 5
+	// set). Its layout is not verified, so it is kept raw and not decoded.
+	Long       bool
+	FromMeter  bool // bit 6 of the flag byte: the meter itself sent this message
+	SOP        SOP
+	Message    usbpd.Message // valid when IsMessage
+	Event      PDEventCode   // valid when !IsMessage
+	EventParam uint8         // high nibble (e.g. CC line for attach)
+	Raw        []byte
 }
 
 // PDPacket is a decoded PD_PACKET section.
@@ -122,7 +125,8 @@ func ParsePDPacket(p []byte) (PDPacket, error) {
 			FromMeter:   b0&0x40 != 0,
 			Raw:         append([]byte(nil), rec...),
 		}
-		if b0&0x80 != 0 {
+		switch {
+		case b0&0x80 != 0:
 			r.IsMessage = true
 			r.SOP = SOP(rec[5] & 0x07)
 			if len(rec) >= 8 {
@@ -131,7 +135,12 @@ func ParsePDPacket(p []byte) (PDPacket, error) {
 					r.Message = m
 				}
 			}
-		} else {
+		case b0&0x20 != 0:
+			// Long message record: a PD message, never an event.
+			r.IsMessage = true
+			r.Long = true
+			r.SOP = SOP(rec[5] & 0x07)
+		default:
 			r.Event = PDEventCode(rec[5] & 0x0F)
 			r.EventParam = rec[5] >> 4
 		}

@@ -145,10 +145,6 @@ func OpenUSB(serial string) (*USBTransport, error) {
 func (t *USBTransport) claim() error {
 	d := t.dev
 	t.desc = describe(d)
-	if runtime.GOOS == "linux" {
-		// Detaches kernel drivers on claim and reattaches them on release.
-		_ = d.SetAutoDetach(true)
-	}
 	cfgNum, err := d.ActiveConfigNum()
 	if err != nil {
 		return mapUSBError("active config", err)
@@ -157,6 +153,14 @@ func (t *USBTransport) claim() error {
 	// one, so the device is not reset.
 	if t.cfg, err = d.Config(cfgNum); err != nil {
 		return mapUSBError("open config", err)
+	}
+	if runtime.GOOS == "linux" {
+		// The in-kernel "powerz" hwmon driver owns interface 0. Enable
+		// libusb's auto-detach only now: set before Config(), gousb would
+		// detach the CDC and HID drivers of every interface and never
+		// reattach them. libusb detaches interface 0 on claim and reattaches
+		// it on release.
+		_ = d.SetAutoDetach(true)
 	}
 	if t.intf, err = t.cfg.Interface(0, 0); err != nil {
 		// Permissions were already checked when the device was opened, so
@@ -184,6 +188,10 @@ func (t *USBTransport) Kind() TransportKind { return Bulk }
 
 // Write implements Transport.
 func (t *USBTransport) Write(ctx context.Context, p []byte) error {
+	// Defence in depth: Device already checks every frame.
+	if err := CheckRequest(p, Bulk); err != nil {
+		return err
+	}
 	n, err := t.out.WriteContext(ctx, p)
 	if err != nil {
 		return mapUSBError("bulk write", err)
@@ -195,15 +203,18 @@ func (t *USBTransport) Write(ctx context.Context, p []byte) error {
 }
 
 // Read implements Transport. A transfer that is cut off by the deadline after
-// some data arrived (a reply that is an exact multiple of 64 bytes and not
-// terminated by a zero-length packet) is returned as a successful read.
+// some data arrived is returned as (n, ErrIncomplete).
 func (t *USBTransport) Read(ctx context.Context, p []byte) (int, error) {
 	n, err := t.in.ReadContext(ctx, p)
-	if err == nil || n > 0 {
+	switch {
+	case err == nil:
 		return n, nil
-	}
-	if errors.Is(err, gousb.TransferCancelled) || errors.Is(err, gousb.TransferTimedOut) ||
-		errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+	case n > 0:
+		return n, ErrIncomplete
+	case errors.Is(ctx.Err(), context.Canceled):
+		return 0, context.Canceled
+	case errors.Is(err, gousb.TransferCancelled), errors.Is(err, gousb.TransferTimedOut),
+		errors.Is(err, context.DeadlineExceeded), ctx.Err() != nil:
 		return 0, ErrTimeout
 	}
 	return 0, mapUSBError("bulk read", err)

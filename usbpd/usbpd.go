@@ -100,11 +100,34 @@ func (h Header) Rev() string {
 	return "?"
 }
 
+// ExtHeader is the 16-bit extended message header.
+type ExtHeader uint16
+
+// DataSize is the total size of the extended message's data block in bytes.
+func (e ExtHeader) DataSize() int { return int(e & 0x1FF) }
+
+// RequestChunk reports a chunk request (no data).
+func (e ExtHeader) RequestChunk() bool { return e&(1<<10) != 0 }
+
+// ChunkNumber is the index of this chunk.
+func (e ExtHeader) ChunkNumber() int { return int(e>>11) & 0xF }
+
+// Chunked reports a chunked transfer (26-byte chunks).
+func (e ExtHeader) Chunked() bool { return e&0x8000 != 0 }
+
+// MaxChunk is the data size of one chunk of a chunked extended message.
+const MaxChunk = 26
+
 // Message is a decoded PD message (without CRC).
 type Message struct {
 	Header  Header
 	Objects []uint32 // data objects (non-extended messages)
-	Raw     []byte   // header + payload bytes as captured
+	// Ext and ExtData are set for extended messages: ExtData is this
+	// message's share of the data block (one chunk, or the whole block when
+	// unchunked).
+	Ext     ExtHeader
+	ExtData []byte
+	Raw     []byte // header + payload bytes as captured
 }
 
 // ParseMessage decodes a header followed by data objects. Extra bytes beyond
@@ -120,8 +143,68 @@ func ParseMessage(b []byte) (Message, error) {
 		for i := 0; i < n && 2+4*i+4 <= len(b); i++ {
 			m.Objects = append(m.Objects, binary.LittleEndian.Uint32(b[2+4*i:]))
 		}
+		return m, nil
 	}
+	if len(b) < 4 {
+		return m, nil
+	}
+	m.Ext = ExtHeader(binary.LittleEndian.Uint16(b[2:]))
+	if m.Ext.RequestChunk() {
+		return m, nil
+	}
+	data := b[4:]
+	n := m.Ext.DataSize()
+	if m.Ext.Chunked() {
+		n = min(MaxChunk, n-MaxChunk*m.Ext.ChunkNumber())
+	}
+	if n < 0 {
+		n = 0
+	}
+	m.ExtData = append([]byte(nil), data[:min(n, len(data))]...)
 	return m, nil
+}
+
+// Reassembler collects the chunks of one extended message.
+type Reassembler struct {
+	typ  int
+	size int
+	buf  []byte
+}
+
+// Add feeds an extended message chunk. It returns the complete data block
+// once all chunks have arrived.
+func (r *Reassembler) Add(m Message) ([]byte, bool) {
+	if !m.Header.Extended() || m.Ext.RequestChunk() {
+		return nil, false
+	}
+	if !m.Ext.Chunked() {
+		if len(m.ExtData) >= m.Ext.DataSize() {
+			return m.ExtData[:m.Ext.DataSize()], true
+		}
+		return nil, false
+	}
+	if m.Ext.ChunkNumber() == 0 {
+		r.typ, r.size, r.buf = m.Header.Type(), m.Ext.DataSize(), r.buf[:0]
+	} else if m.Header.Type() != r.typ || len(r.buf) != MaxChunk*m.Ext.ChunkNumber() {
+		r.buf = r.buf[:0] // out-of-sequence chunk
+		return nil, false
+	}
+	r.buf = append(r.buf, m.ExtData...)
+	if len(r.buf) >= r.size && r.size > 0 {
+		out := append([]byte(nil), r.buf[:r.size]...)
+		r.buf = r.buf[:0]
+		return out, true
+	}
+	return nil, false
+}
+
+// Objects splits a data block into little-endian 32-bit objects.
+func Objects(b []byte) []uint32 {
+	out := make([]uint32, 0, len(b)/4)
+	for i := 0; i+4 <= len(b); i += 4 {
+		out = append(out, binary.LittleEndian.Uint32(b[i:]))
+	}
+	return out
 }
 
 // PDOKind classifies a power data object.
@@ -143,8 +226,9 @@ type PDO struct {
 	Raw      uint32
 	MinVolts float64 // equals MaxVolts for fixed supplies
 	MaxVolts float64
-	MaxAmps  float64 // 0 if specified as power
-	MaxWatts float64 // battery / EPR AVS PDP
+	MaxAmps  float64 // 0 if specified as power; SPR AVS: max current at 15 V
+	MaxAmps2 float64 // SPR AVS: max current at 20 V
+	MaxWatts float64 // battery / EPR AVS PDP / SPR AVS max(15 V·I15, 20 V·I20)
 	// Fixed-supply flags (first PDO carries the capability bits).
 	DualRole, USBSuspend, Unconstrained, USBComms, DualRoleData, UnchunkedExt, EPRCapable bool
 }
@@ -193,6 +277,8 @@ func DecodeSourcePDO(v uint32) PDO {
 			p.MaxVolts = 20
 			// Max current at 15 V (bits 19..10) and 20 V (bits 9..0), 10 mA units.
 			p.MaxAmps = float64((v>>10)&0x3FF) * 0.01
+			p.MaxAmps2 = float64(v&0x3FF) * 0.01
+			p.MaxWatts = max(15*p.MaxAmps, 20*p.MaxAmps2)
 		default:
 			p.Kind = PDOUnknown
 		}
@@ -213,8 +299,7 @@ func (p PDO) String() string {
 	case PDOEPRAVS:
 		return fmt.Sprintf("EPR AVS %.1f-%.1fV %.0fW", p.MinVolts, p.MaxVolts, p.MaxWatts)
 	case PDOSPRAVS:
-		v := p.Raw
-		return fmt.Sprintf("SPR AVS 9-20V %.2fA@15V %.2fA@20V", float64((v>>10)&0x3FF)*0.01, float64(v&0x3FF)*0.01)
+		return fmt.Sprintf("SPR AVS 9-20V %.2fA@15V %.2fA@20V (%.0fW)", p.MaxAmps, p.MaxAmps2, p.MaxWatts)
 	}
 	return fmt.Sprintf("PDO 0x%08X", p.Raw)
 }

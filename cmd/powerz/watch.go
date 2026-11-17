@@ -129,7 +129,7 @@ func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool)
 		now := time.Now()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return ctx.Err()
 			}
 			s.errors++
 			s.lastErr = err.Error()
@@ -144,7 +144,7 @@ func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool)
 
 		select {
 		case <-ctx.Done():
-			return nil
+			return ctx.Err() // SIGINT/SIGTERM: exit 130 like every other command
 		case k := <-keys:
 			switch k {
 			case 'q', 'Q', 3: // q, Ctrl-C

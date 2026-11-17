@@ -14,10 +14,12 @@ type pdo struct {
 	Type        string  `json:"type"` // fixed, battery, variable, pps, epr_avs, spr_avs, unknown
 	MinVoltageV float64 `json:"min_voltage_v"`
 	MaxVoltageV float64 `json:"max_voltage_v"`
-	MaxCurrentA float64 `json:"max_current_a,omitempty"`
-	MaxPowerW   float64 `json:"max_power_w,omitempty"`
-	RawHex      string  `json:"raw_hex"`
-	Text        string  `json:"text"`
+	MaxCurrentA float64 `json:"max_current_a,omitempty"` // SPR AVS: at 15 V
+	// MaxCurrent20VA is the SPR AVS maximum current at 20 V.
+	MaxCurrent20VA float64 `json:"max_current_20v_a,omitempty"`
+	MaxPowerW      float64 `json:"max_power_w,omitempty"`
+	RawHex         string  `json:"raw_hex"`
+	Text           string  `json:"text"`
 }
 
 func toPDO(i int, p usbpd.PDO) pdo {
@@ -30,7 +32,7 @@ func toPDO(i int, p usbpd.PDO) pdo {
 	}
 	out := pdo{
 		Index: i, Type: t, MinVoltageV: round(p.MinVolts, 3), MaxVoltageV: round(p.MaxVolts, 3),
-		MaxCurrentA: round(p.MaxAmps, 3), MaxPowerW: round(p.MaxWatts, 3),
+		MaxCurrentA: round(p.MaxAmps, 3), MaxCurrent20VA: round(p.MaxAmps2, 3), MaxPowerW: round(p.MaxWatts, 3),
 		RawHex: fmt.Sprintf("%08X", p.Raw), Text: p.String(),
 	}
 	if out.MaxPowerW == 0 && p.MaxAmps > 0 {
@@ -86,6 +88,7 @@ type pdTracker struct {
 	contract    *rdo // request confirmed by PS_RDY
 	messages    int
 	events      int
+	ext         usbpd.Reassembler // chunked extended messages
 }
 
 func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
@@ -102,6 +105,16 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 		if r.Event == 2 || r.Event == 4 { // detach or hard reset ends the contract
 			t.contract, t.lastReq = nil, nil
 		}
+		return out, true
+	}
+	if r.Long {
+		// Long message record: layout unverified, report it raw without
+		// touching the negotiation state.
+		t.messages++
+		out.Kind = "message"
+		out.SOP = r.SOP.String()
+		out.Message = "long_message_undecoded"
+		out.FromMeter = r.FromMeter
 		return out, true
 	}
 	m := r.Message
@@ -134,8 +147,27 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 	}
 	switch out.Message {
 	case "Source_Capabilities", "EPR_Source_Capabilities":
+		objs := m.Objects
+		if h.Extended() {
+			// EPR_Source_Capabilities is an extended (usually chunked)
+			// message; decode it once all chunks have arrived.
+			block, ok := t.ext.Add(m)
+			if !ok {
+				break
+			}
+			objs = usbpd.Objects(block)
+		}
+		if len(objs) == 0 {
+			break // keep the previous capabilities
+		}
 		t.srcCaps = t.srcCaps[:0]
-		for i, o := range m.Objects {
+		for i, o := range objs {
+			if o == 0 {
+				// Unused EPR slot (an SPR source fills positions 1-7
+				// and pads with zero before the EPR PDOs).
+				t.srcCaps = append(t.srcCaps, usbpd.PDO{Kind: usbpd.PDOUnknown})
+				continue
+			}
 			p := usbpd.DecodeSourcePDO(o)
 			t.srcCaps = append(t.srcCaps, p)
 			out.SourceCaps = append(out.SourceCaps, toPDO(i+1, p))
@@ -225,7 +257,10 @@ func (r pdRecord) text() string {
 		role = "SNK"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %-5s %s %-24s id=%d rev=%s", ts, r.SOP, role, r.Message, *r.MessageID, r.SpecRevision)
+	fmt.Fprintf(&b, "%s  %-5s %s %-24s", ts, r.SOP, role, r.Message)
+	if r.MessageID != nil {
+		fmt.Fprintf(&b, " id=%d rev=%s", *r.MessageID, r.SpecRevision)
+	}
 	if r.FromMeter {
 		b.WriteString(" [meter]")
 	}

@@ -1,6 +1,7 @@
 package km003c
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 )
@@ -33,10 +34,15 @@ func (k TransportKind) String() string {
 	return fmt.Sprintf("transport(%d)", int(k))
 }
 
-// readableAtts are the GET_DATA attributes this package may request over
-// bulk. ADC and SETTINGS are pure reads; PD_PACKET drains the device's PD
-// event FIFO but changes nothing else.
-const readableAtts = AttADC | AttSettings | AttPDPacket
+// bulkReads are the exact GET_DATA attribute masks this package may request
+// over bulk (protocol.html §12.1 W1-W4). ADC and SETTINGS are pure reads;
+// PD_PACKET drains the device's PD event FIFO but changes nothing else.
+var bulkReads = map[Attribute]bool{
+	AttADC:               true,
+	AttSettings:          true,
+	AttPDPacket:          true,
+	AttADC | AttPDPacket: true,
+}
 
 // memoryWhitelist lists the only MemoryRead regions that may be requested.
 // Reads at other addresses are reported to crash the meter.
@@ -77,7 +83,7 @@ func CheckRequest(frame []byte, k TransportKind) error {
 			}
 			return nil
 		}
-		if att&^readableAtts != 0 {
+		if !bulkReads[att] {
 			return fmt.Errorf("km003c: attribute mask 0x%03X not in read whitelist", uint16(att))
 		}
 		return nil
@@ -107,6 +113,15 @@ func CheckRequest(frame []byte, k TransportKind) error {
 		n := binary.LittleEndian.Uint32(p[4:8])
 		if want, ok := memoryWhitelist[addr]; !ok || n != want {
 			return fmt.Errorf("km003c: MemoryRead of 0x%08X/%d not in whitelist", addr, n)
+		}
+		// The whole frame (magic, CRC, padding) must be exactly what this
+		// package encodes for that block.
+		canonical, err := MemoryReadRequest(frame[1], addr, n)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(frame, canonical) {
+			return fmt.Errorf("km003c: MemoryRead of 0x%08X/%d is not canonically encoded", addr, n)
 		}
 		return nil
 	}

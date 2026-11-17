@@ -19,6 +19,16 @@ type fakeMeter struct {
 	// read has already timed out.
 	lateReplies int
 	late        bool
+	// veryLate makes the next reply arrive only after the client has
+	// already drained and written its next request (later than timeout plus
+	// the drain window).
+	veryLate bool
+	deferred [][]byte
+	// truncateNext delivers only the first packet of the next reply and
+	// reports the transfer as cut off by the deadline.
+	truncateNext bool
+	// corruptConfirm makes the next MemoryRead confirmation claim 8 KiB.
+	corruptConfirm bool
 }
 
 func (f *fakeMeter) Kind() TransportKind { return f.kind }
@@ -32,36 +42,63 @@ func (f *fakeMeter) Write(_ context.Context, p []byte) error {
 	if f.hung {
 		return nil
 	}
+	// A very late reply to the previous request lands right after this
+	// write, ahead of this request's own reply.
+	f.in = append(f.in, f.deferred...)
+	f.deferred = nil
+	if f.veryLate {
+		f.veryLate = false
+		before := len(f.in)
+		defer func() {
+			f.deferred = append(f.deferred, f.in[before:]...)
+			f.in = f.in[:before]
+		}()
+	}
 	if f.lateReplies > 0 {
 		f.lateReplies--
 		f.late = true
 	}
 	h, _ := ParseHeader(p)
+	// Framed replies echo the request's transaction id, as the real meter
+	// does (verified 20/20 on firmware 1.9.5).
+	reply := func(name string) []byte {
+		b := fixture(f.t, name)
+		b[1] = h.ID
+		return b
+	}
 	switch h.Type {
 	case TypeConnect:
-		f.in = append(f.in, fixture(f.t, "bulk_W5_1_resp"))
+		f.in = append(f.in, reply("bulk_W5_1_resp"))
 	case TypeGetData:
 		switch Attribute(h.Word >> 1) {
 		case AttADC:
-			f.in = append(f.in, fixture(f.t, "bulk_W1_1_resp"))
+			f.in = append(f.in, reply("bulk_W1_1_resp"))
 		case AttSettings:
-			f.in = append(f.in, fixture(f.t, "bulk_W2_1_resp"))
+			f.in = append(f.in, reply("bulk_W2_1_resp"))
 		case AttPDPacket:
-			f.in = append(f.in, fixture(f.t, "bulk_W3_1_resp"))
+			f.in = append(f.in, reply("bulk_W3_1_resp"))
 		case AttADC | AttPDPacket:
-			f.in = append(f.in, fixture(f.t, "bulk_W4_1_resp"))
+			f.in = append(f.in, reply("bulk_W4_1_resp"))
 		}
 	case TypeMemoryRead:
 		plain, _ := decryptECB(key0, p[4:])
 		n := map[uint32]string{addrInfo: "1", addrFirmware: "2", addrOTP: "3"}[binary.LittleEndian.Uint32(plain)]
+		conf := reply("bulk_W6_" + n + "_resp")
+		if f.corruptConfirm {
+			f.corruptConfirm = false
+			binary.LittleEndian.PutUint32(conf[8:], 8192)
+		}
 		f.in = append(f.in,
-			fixture(f.t, "bulk_W6_"+n+"_resp"),
+			conf,
 			fixture(f.t, "bulk_W6_"+n+"_respdata"),
 			[]byte{}, // zero-length packet
 		)
 	}
 	return nil
 }
+
+// queue appends a raw frame to the IN endpoint (e.g. a stale reply).
+func (f *fakeMeter) queue(b []byte) { f.in = append(f.in, b) }
 
 func (f *fakeMeter) Read(_ context.Context, p []byte) (int, error) {
 	if f.hung || len(f.in) == 0 {
@@ -72,6 +109,12 @@ func (f *fakeMeter) Read(_ context.Context, p []byte) (int, error) {
 		return 0, ErrTimeout
 	}
 	next := f.in[0]
+	if f.truncateNext && len(next) > 64 {
+		f.truncateNext = false
+		n := copy(p, next[:64])
+		f.in[0] = next[64:]
+		return n, ErrIncomplete
+	}
 	if len(next) > len(p) {
 		// A short buffer receives one full packet; the rest stays queued.
 		n := copy(p, next)

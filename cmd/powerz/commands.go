@@ -117,6 +117,7 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 		var v, i, p, temp stat
 		var wh, ah float64
 		var last *snapshot
+		var lastErr error
 		var lastT time.Time
 		tr := &pdTracker{}
 		var recs []pdRecord
@@ -142,7 +143,8 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			case err != nil:
 				res.Errors++
 				res.LastError = err.Error()
-				if errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) {
+				lastErr = err
+				if errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) || errors.Is(err, km003c.ErrStuck) {
 					return err
 				}
 			default:
@@ -187,7 +189,10 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			res.PD = tr.summary(recs)
 		}
 		if res.Samples == 0 {
-			return fmt.Errorf("measure: no samples collected (%d errors, last: %s)", res.Errors, res.LastError)
+			if lastErr == nil {
+				lastErr = km003c.ErrTimeout
+			}
+			return fmt.Errorf("measure: no samples collected (%d errors): %w", res.Errors, lastErr)
 		}
 		if g.jsonMode() {
 			if err := emitIndented(res); err != nil {
@@ -238,6 +243,9 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 	count := fs.Int("n", 0, "stop after n samples (0 = no limit)")
 	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; agents should always set -duration or -n)")
 	return func(ctx context.Context, g globals) error {
+		if *count < 0 || *duration < 0 {
+			return usageErr("log: -n and -duration must not be negative")
+		}
 		*interval = max(*interval, 20*time.Millisecond)
 		f := *format
 		if f == "" {
@@ -318,9 +326,13 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 	interval := fs.Duration("interval", 25*time.Millisecond, "polling interval (the meter buffers PD traffic between polls)")
 	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; agents should always set -duration or -n)")
-	count := fs.Int("n", 0, "stop after n records (0 = no limit)")
+	count := fs.Int("n", 0, "stop after n records (0 = no limit; waits indefinitely without PD traffic, so combine with -duration)")
 	goodCRC := fs.Bool("goodcrc", false, "include GoodCRC acknowledgements")
 	return func(ctx context.Context, g globals) error {
+		if *count < 0 || *duration < 0 {
+			return usageErr("pd: -n and -duration must not be negative")
+		}
+		*interval = max(*interval, 10*time.Millisecond)
 		m, err := open(ctx, g)
 		if err != nil {
 			return err
