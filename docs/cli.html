@@ -95,7 +95,7 @@ powerz
 # one snapshot
 powerz read
 
-# min/mean/max, energy, charge, USB-PD capture
+# min/mean/max, percentiles and time bins, energy, charge, USB-PD capture
 powerz measure --duration 10s
 
 # model, firmware, serial, settings
@@ -210,7 +210,8 @@ powerz schema</code></pre>
   <li><strong>Empty bins</strong> (the reads in them failed, or were slower than the bin) have <code>samples</code> 0 and <code>null</code> values. The last bin may be shorter, and also holds a reading taken just after the window ends.</li>
   <li><strong>stdev and percentiles</strong> describe the readings in the window (p50 is the median; percentiles interpolate between readings, the R/NumPy default). A few outliers or short bursts leave p5–p95 narrow; they show in <code>max</code> (or <code>min</code>) and in a <code>stdev</code> that is large compared with p95 − p5. A level change shows in the bins, not reliably in these: a step in the middle of the window leaves the mean and p50 equal. Readings close in time repeat at the meter's own sample rate, so do not turn stdev into a confidence interval with √n.</li>
   <li><strong>D+ and D−</strong>: a USB device that drops off the bus usually changes D+ or D−; <code>stats.dp_v</code>/<code>dm_v</code> give their range over the window.</li>
-  <li><strong>Size:</strong> measure keeps every reading until the window ends (about 64 bytes each), so a window holds at most 1 000 000 readings (about 28 hours at 100 ms, up to about 150 MB of memory at that limit); longer runs are a usage error that points to <code>log</code>.</li>
+  <li><strong>Size:</strong> measure keeps every reading until the window ends (about 64 bytes each), so a window holds at most 1 000 000 readings (just under 28 hours at 100 ms, up to about 200 MB of memory at that limit); longer runs are a usage error that points to <code>log</code>.</li>
+  <li><strong>Output size:</strong> the automatic width gives up to 120 bins, about 20 KB of JSON. <code>--bin</code> equal to <code>--duration</code> gives a single bin when only the totals matter.</li>
 </ul>
 <p>Detected level changes (a list of steps and ramps with their times) are planned for a later release.</p>
 <p>Text mode (<code>--text</code>) prints current in mA, each mean with its spread, and a sparkline of the whole window (empty bins as gaps).</p>

@@ -33,6 +33,58 @@ func TestDescribe(t *testing.T) {
 	if describe(nil, 6) != nil {
 		t.Error("no values must give nil")
 	}
+	// A long constant run (D+ held at 0.6 V for a full window): the
+	// variance must not round to a negative number and come out as NaN,
+	// which encoding/json would refuse, losing the whole measure object.
+	long := make([]float64, maxSamples)
+	for k := range long {
+		long[k] = 0.6
+	}
+	s = describe(long, 4)
+	if _, err := json.Marshal(s); err != nil || s.Stdev != 0 || s.Mean != 0.6 {
+		t.Errorf("1 000 000 x 0.6: %+v, %v", s, err)
+	}
+}
+
+// The JSON keys are the contract: each must carry its own value. Readings
+// 10, 1, 3, 2 make every statistic, and the bin's min, mean and max, differ.
+func TestStatAndBinKeys(t *testing.T) {
+	var ss []sample
+	for k, v := range []float64{10, 1, 3, 2} {
+		ss = append(ss, sample{T: float64(k) / 10, V: v, I: v, P: v, DP: v, DM: v, Temp: v, TempOK: true})
+	}
+	b, err := json.Marshal(analyze(ss, 0.4, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Stats map[string]map[string]float64 `json:"stats"`
+		Bins  []map[string]any              `json:"bins"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"min": 1, "mean": 4, "max": 10, "last": 2, "stdev": round(math.Sqrt(50.0/3), 3),
+		"p5": 1.15, "p50": 2.5, "p95": 8.95}
+	for field, st := range got.Stats {
+		for key, v := range want {
+			if round(st[key], 3) != v {
+				t.Errorf("stats.%s.%s = %v, want %v", field, key, st[key], v)
+			}
+		}
+		if len(st) != len(want) {
+			t.Errorf("stats.%s has keys %v", field, st)
+		}
+	}
+	if len(got.Stats) != 6 || len(got.Bins) != 1 {
+		t.Fatalf("stats %v, bins %v", got.Stats, got.Bins)
+	}
+	for _, field := range []string{"vbus_v", "ibus_a", "power_w"} {
+		r := got.Bins[0][field].(map[string]any)
+		if r["min"] != 1.0 || r["mean"] != 4.0 || r["max"] != 10.0 {
+			t.Errorf("bins[0].%s = %v", field, r)
+		}
+	}
 }
 
 // Each bin summarises its own samples, field by field: values that differ

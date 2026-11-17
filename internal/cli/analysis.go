@@ -78,8 +78,8 @@ const (
 
 // autoBin picks the bin width for a window: the smallest of a fixed ladder
 // that spans at least five polling intervals and gives at most maxAutoBins
-// bins. Past the ladder (windows over 120 days) it uses window/maxAutoBins,
-// still at least five intervals.
+// bins. When no rung fits (a window over 120 days, or an interval over
+// 4.8 h) it uses window/maxAutoBins, still at least five intervals.
 func autoBin(window, interval time.Duration) time.Duration {
 	ladder := []float64{0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400}
 	for _, s := range ladder {
@@ -158,8 +158,12 @@ func describe(xs []float64, decimals int) *statJSON {
 	}
 	last := xs[n-1]
 	mean, sd := gstat.MeanStdDev(xs, nil) // sample (n-1) standard deviation
-	if n == 1 {
-		sd = 0 // gonum gives NaN for a single value
+	// gonum gives NaN for one value, and its compensated formula can round
+	// the variance of a long constant run (D+ held at 0.6 V for hours) to a
+	// tiny negative number, whose square root is NaN too. encoding/json
+	// refuses NaN, which would lose the whole measure object.
+	if !(sd > 0) {
+		sd = 0
 	}
 	slices.Sort(xs)
 	r := func(v float64) float64 { return round(v, decimals) }

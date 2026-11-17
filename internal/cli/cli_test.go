@@ -264,7 +264,7 @@ func TestCLIMeasureInvalidTemperature(t *testing.T) {
 // the last reading point the other way.
 func TestCLIMeasureDirectionFromMean(t *testing.T) {
 	c := newCLI(t)
-	for range 4 {
+	for range 2 { // the mean stays negative for up to 41 readings; p50 needs 5
 		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, -1.0, 5.076, 3584))
 	}
 	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.05, 5.076, 3584))
@@ -284,7 +284,7 @@ func TestCLIMeasureDirectionFromMean(t *testing.T) {
 func TestCLIMeasureFailedSamples(t *testing.T) {
 	c := newCLI(t)
 	c.fm.DropOnly, c.fm.DropReplies = km003c.TypeGetData, 2 // one sample: both attempts
-	code := c.run(context.Background(), "measure", "--duration", "700ms", "--interval", "20ms", "--pd=false")
+	code := c.run(context.Background(), "measure", "--duration", "700ms", "--interval", "20ms", "--bin", "100ms", "--pd=false")
 	if code != exitPartial || c.errCode() != "partial" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -292,6 +292,17 @@ func TestCLIMeasureFailedSamples(t *testing.T) {
 	checkShape(t, "measure", m)
 	if m["failed_samples"] != float64(1) || m["last_error"] == nil || m["samples"].(float64) < 1 || m["end_reason"] != "completed" || m["pd"] != nil {
 		t.Errorf("measure %v", m)
+	}
+	// Readings are placed by the time they were taken: the first read
+	// failed twice (each attempt waits for a 100 ms timeout), so the first
+	// bin is empty and the readings sit in the later ones.
+	bins, total := m["bins"].([]any), 0.0
+	for _, b := range bins {
+		total += b.(map[string]any)["samples"].(float64)
+	}
+	first, last := bins[0].(map[string]any), bins[len(bins)-1].(map[string]any)
+	if first["samples"] != 0.0 || first["ibus_a"] != nil || last["samples"].(float64) == 0 || total != m["samples"] {
+		t.Errorf("bins %v (total %v of %v samples)", bins, total, m["samples"])
 	}
 }
 
@@ -408,13 +419,13 @@ func TestCLIMeasureBins(t *testing.T) {
 	}
 }
 
-// The automatic width comes from the time actually measured: a 1 h window
-// stopped after about a second gets fine bins, not one 30 s bin.
+// The automatic width comes from the time actually measured: a 2 min window
+// stopped after about a second gets 0.5 s bins, not the 1 s bins of 2 min.
 func TestCLIMeasureAutoBinFromMeasuredTime(t *testing.T) {
 	c := newCLI(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(1200*time.Millisecond, cancel)
-	if code := c.run(ctx, "measure", "--duration", "1h", "--interval", "20ms", "--pd=false"); code != exitInterrupt {
+	if code := c.run(ctx, "measure", "--duration", "2m", "--interval", "20ms", "--pd=false"); code != exitInterrupt {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	m := c.one()
@@ -427,18 +438,18 @@ func TestCLIMeasureAutoBinFromMeasuredTime(t *testing.T) {
 func TestMeasureBinAndReadingLimits(t *testing.T) {
 	ms := time.Millisecond
 	for _, c := range []struct {
-		duration, interval, bin, want time.Duration
-		ok                            bool
+		duration, interval, bin time.Duration
+		ok                      bool
 	}{
-		{20 * time.Second, 20 * ms, 20 * ms, 20 * ms, true}, // exactly 1000 bins, bin == interval
-		{20*time.Second + ms, 20 * ms, 20 * ms, 0, false},   // 1001 bins
-		{time.Second, 20 * ms, 19 * ms, 0, false},           // shorter than the interval
-		{time.Second, 20 * ms, 0, 0, true},                  // automatic: chosen when the window ends
-		{time.Second, 20 * ms, -ms, 0, false},
+		{20 * time.Second, 20 * ms, 20 * ms, true},     // exactly 1000 bins, bin == interval
+		{20*time.Second + ms, 20 * ms, 20 * ms, false}, // 1001 bins
+		{time.Second, 20 * ms, 19 * ms, false},         // shorter than the interval
+		{time.Second, 20 * ms, 0, true},                // automatic: chosen when the window ends
+		{time.Second, 20 * ms, -ms, false},             // negative is shorter than any interval
+		{time.Second, 20 * ms, time.Second, true},      // one bin
 	} {
-		got, err := measureBin(c.duration, c.interval, c.bin)
-		if (err == nil) != c.ok || got != c.want {
-			t.Errorf("measureBin(%v, %v, %v) = %v, %v", c.duration, c.interval, c.bin, got, err)
+		if err := checkBin(c.duration, c.interval, c.bin); (err == nil) != c.ok {
+			t.Errorf("checkBin(%v, %v, %v) = %v", c.duration, c.interval, c.bin, err)
 		}
 	}
 	// 1 000 000 readings is the most a window may hold: 99 999.9 s at 100 ms
@@ -506,7 +517,7 @@ func TestMeasureText(t *testing.T) {
 	// The label is rounded: 3 x 0.1 s is not printed as 0.30000000000000004.
 	var tenths measureResult
 	tenths.BinS = 0.1
-	for k := range 300 {
+	for k := range 180 { // 60 columns of 3 bins
 		tenths.Bins = append(tenths.Bins, binJSON{TS: float64(k) / 10, Samples: 5, IBusA: &rangeJSON{Mean: float64(k)}})
 	}
 	if line := spark(tenths); !strings.HasPrefix(line, "  IBUS per 0.3s  ") {
@@ -520,26 +531,26 @@ func TestMeasureText(t *testing.T) {
 	if line := spark(lead); line != "  IBUS per 20s   ▁█" {
 		t.Errorf("leading gap: %q", line)
 	}
-	// 240 bins become 120 columns of 2, each the sample-weighted mean of its
+	// 120 bins become 60 columns of 2, each the sample-weighted mean of its
 	// pair, so the whole window shows: 0 in the first half, 8 in the second,
 	// and one pair (1 reading at 0, 99 at 8) near the top.
 	var pairs measureResult
 	pairs.BinS = 1
-	for k := range 240 {
+	for k := range 120 {
 		b := binJSON{TS: float64(k), Samples: 10, IBusA: &rangeJSON{Mean: 0}}
-		if k >= 120 {
+		if k >= 60 {
 			b.IBusA.Mean = 8
 		}
-		if k == 118 {
+		if k == 58 {
 			b.Samples = 1
 		}
-		if k == 119 {
+		if k == 59 {
 			b.Samples, b.IBusA.Mean = 99, 8
 		}
 		pairs.Bins = append(pairs.Bins, b)
 	}
 	cols := []rune(strings.TrimPrefix(spark(pairs), "  IBUS per 2s  "))
-	if len(cols) != 120 || cols[0] != '▁' || cols[58] != '▁' || cols[59] != '▇' || cols[60] != '█' || cols[119] != '█' {
+	if len(cols) != 60 || cols[0] != '▁' || cols[28] != '▁' || cols[29] != '▇' || cols[30] != '█' || cols[59] != '█' {
 		t.Errorf("grouped sparkline %q", string(cols))
 	}
 	// Many bins are averaged down to the sparkline width, not cut.
@@ -550,7 +561,7 @@ func TestMeasureText(t *testing.T) {
 	}
 	b.Reset()
 	printMeasureText(&b, style{}, many)
-	if !strings.Contains(b.String(), "  IBUS per 9s  ▁") || !strings.Contains(b.String(), "█\n") {
+	if !strings.Contains(b.String(), "  IBUS per 17s  ▁") || !strings.Contains(b.String(), "█\n") {
 		t.Errorf("1000 bins:\n%s", b.String())
 	}
 }

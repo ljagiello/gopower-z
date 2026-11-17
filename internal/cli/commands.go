@@ -188,33 +188,32 @@ func measureReadings(duration, interval time.Duration) (int, error) {
 	return int(n + 1), nil
 }
 
-// measureBin checks --bin: 0 (automatic, chosen when the window ends, from
-// the time actually measured) is returned as is; otherwise it must be at
-// least --interval and give at most maxBins bins over --duration.
-func measureBin(duration, interval, bin time.Duration) (time.Duration, error) {
-	switch {
-	case bin < 0:
-		return 0, usageErr("measure: --bin must not be negative")
-	case bin == 0:
-		return 0, nil
-	case bin < interval:
-		return 0, usageErr("measure: --bin %s is shorter than --interval %s", bin, interval)
+// checkBin checks --bin: 0 is automatic (chosen when the window ends, from
+// the time actually measured); otherwise it must be at least --interval
+// (which also rules out negative values) and give at most maxBins bins over
+// --duration.
+func checkBin(duration, interval, bin time.Duration) error {
+	if bin == 0 {
+		return nil
+	}
+	if bin < interval {
+		return usageErr("measure: --bin %s is shorter than --interval %s", bin, interval)
 	}
 	n := duration / bin
 	if duration%bin != 0 {
 		n++
 	}
 	if n > maxBins {
-		return 0, usageErr("measure: --bin %s gives %d bins over --duration %s, more than %d; use a wider bin", bin, n, duration, maxBins)
+		return usageErr("measure: --bin %s gives %d bins over --duration %s, more than %d; use a wider bin", bin, n, duration, maxBins)
 	}
-	return bin, nil
+	return nil
 }
 
 func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 	duration := fs.Duration("duration", 5*time.Second, "how long to sample")
 	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval, at least 20ms (the meter's own sample rate bounds how often values change)")
 	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract, records)")
-	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output (0 = automatic, from the time measured: at least 5 polling intervals per bin, at most %d bins)", maxAutoBins))
+	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output: 0 = automatic, from the time measured (at least 5 polling intervals per bin, at most %d bins); otherwise at least --interval and at most %d bins over --duration (--bin equal to --duration gives one bin)", maxAutoBins, maxBins))
 	return func(ctx context.Context, g globals) error {
 		if *duration <= 0 {
 			return usageErr("measure: --duration must be positive (e.g. 10s)")
@@ -226,10 +225,10 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		if err != nil {
 			return err
 		}
-		binW, err := measureBin(*duration, *interval, *bin)
-		if err != nil {
+		if err := checkBin(*duration, *interval, *bin); err != nil {
 			return err
 		}
+		binW := *bin
 		m, err := open(ctx, g)
 		if err != nil {
 			return err
@@ -373,7 +372,7 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 	_, _ = fmt.Fprintf(w, "  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
 	// The sparkline covers the whole window: groups of bins are averaged down
 	// to at most sparkWidth columns, and empty bins stay as gaps.
-	const sparkWidth = 120
+	const sparkWidth = 60 // with the label, fits an 80-column terminal
 	if len(r.Bins) > 1 {
 		group := (len(r.Bins) + sparkWidth - 1) / sparkWidth
 		var cols []float64

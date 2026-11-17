@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -150,7 +151,7 @@ var definitions = map[string][]fieldDoc{
 		fref("stats.temp_c", tObj, "stat", true, "meter temperature, °C; null if never valid"),
 		fref("stats.dp_v", tObj, "stat", true, "D+ voltage, volts; a USB device dropping off the bus usually shows as a D+ (or D-) change"),
 		fref("stats.dm_v", tObj, "stat", true, "D- voltage, volts"),
-		fd("bin_s", tNum, false, "width of the time bins, seconds: --bin, or automatic, chosen when the window ends from the time actually measured (at least 5 polling intervals per bin, at most 120 bins); a bin holds fewer samples, or none, when reads are slow or fail"),
+		fd("bin_s", tNum, false, fmt.Sprintf("width of the time bins, seconds: --bin (at least --interval, at most %d bins over --duration; equal to --duration for one bin), or automatic, chosen when the window ends from the time actually measured (at least 5 polling intervals per bin, at most %d bins); a bin holds fewer samples, or none, when reads are slow or fail", maxBins, maxAutoBins)),
 		fref("bins", tArr, "bin", false, "the window cut into bins of bin_s seconds, in time order (the last one may be shorter): the shape over time that min/mean/max hide. Empty bins have samples 0"),
 		fd("energy_wh", tNum, false, "energy over integrated_s, watt-hours; positive = delivered receptacle -> plug"),
 		fd("charge_mah", tNum, false, "charge over integrated_s, milliamp-hours; positive = delivered receptacle -> plug"),
@@ -338,7 +339,7 @@ func buildSchema(root *cobra.Command) map[string]any {
 			"Preferred command for agents: how much power/energy the attached device draws, and what the charger offered and negotiated.",
 			"The meter samples at its configured rate (info: settings.sample_rate_sps); polling faster only repeats values.",
 			"USB-PD is only exchanged on attach or renegotiation: start measure, then connect the device, to capture it.",
-			"measure keeps every reading until the window ends (for the percentiles), so a window holds at most 1,000,000 readings (about 28 h at 100 ms); longer runs are a usage error: use log.",
+			fmt.Sprintf("measure keeps every reading until the window ends (for the percentiles), so a window holds at most %d readings (just under 28 h at 100 ms, up to about 200 MB of memory); longer runs are a usage error: use log.", maxSamples),
 		}},
 		"log": {out("json_lines", "csv columns with --format csv: "+strings.Join(csvColumns, ","), "snapshot"), false,
 			"powerz log --duration 30s --interval 500ms --json", []string{"Runs until --duration/--count or interrupt; always pass --duration or --count from automation."}},
