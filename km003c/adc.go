@@ -83,12 +83,13 @@ func TailLayoutFor(version string) TailLayout {
 	return TailUnknown
 }
 
-// Version boundaries (major*10000 + minor*100 + patch). Verified by firmware
-// analysis: 1.9.5 (captured), 1.9.9 and 2.0.0 use line averages; 2.0.6 (device
-// observation by open-powerz) and 2.0.7 use the status layout.
+// Version boundaries (major*10000 + minor*100 + patch), from analysis of every
+// official image (docs/firmware.html §8): 1.9.5 (also captured), 1.9.7, 1.9.9
+// and 2.0.0 use line averages; every build from 2.0.1 to 2.0.7 uses the status
+// layout.
 const (
 	tailLastLineAverages = 20000
-	tailFirstStatus      = 20006
+	tailFirstStatus      = 20001
 )
 
 // ApplyTail decodes the firmware-dependent tail bytes.

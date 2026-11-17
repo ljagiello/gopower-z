@@ -90,7 +90,8 @@ func CheckRequest(frame []byte, k TransportKind) error {
 
 	case TypeConnect:
 		if k != Bulk {
-			// On CDC this byte starts a push stream; over HID it is ignored.
+			// On CDC (firmware 2.0.x) this byte starts a push stream; over
+			// HID it is ignored.
 			return fmt.Errorf("km003c: CONNECT is only allowed on bulk")
 		}
 		if len(frame) != 4 || h.Word != 0 {

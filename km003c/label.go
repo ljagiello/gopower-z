@@ -1,18 +1,27 @@
 package km003c
 
 // DashboardLabels reproduces the two D+/D− protocol labels the meter shows on
-// its dashboard. The meter computes them from VBUS, D+ and D− alone, so the
-// same strings can be derived from an ADC snapshot. Ported from firmware
-// 2.0.7 (FUN_00022098 and FUN_00021bd4); see docs/firmware.html.
+// its dashboard, using the algorithm of the meter's own firmware generation:
 //
-// They describe what the voltages on the data lines look like. Protocols
-// detected by sniffing (AFC/FCP/SCP/UFCS/VOOC codes) and USB-PD details are
-// not part of this function.
+//   - firmware <= 2.0.0 (TailLineAverages): 1.9.5 FUN_0001fb44, inputs VBUS,
+//     IBUS (mA) and the D+/D− 50-sample averages;
+//   - newer or unknown firmware: 2.0.7 FUN_00022098 / FUN_00021bd4, inputs
+//     VBUS and the instantaneous D+/D−.
+//
+// See docs/firmware.html §10. When the meter has identified a proprietary
+// session (VOOC/SVOOC/VFCP/UFCS) it shows that instead; that state is not
+// exposed over USB, so these functions return the voltage-based labels only.
 func DashboardLabels(a ADC) (line1, line2 string) {
 	v := int(a.VBusUV / 1000)
+	if a.Layout == TailLineAverages && a.HasLineAvg {
+		// IBUS mA as the firmware's u16: negative currents compare as large.
+		i := int(uint16(int16(a.IBusUA / 1000)))
+		dp, dm := int(a.DPAvgMV), int(a.DMAvgMV)
+		return label1v195(v, i, dp, dm), label2v195(v, i, dp, dm)
+	}
 	dp := int(a.DP) / 10
 	dm := int(a.DM) / 10
-	return dashboardLabel1(v, dp, dm), dashboardLabel2(v, dp, dm)
+	return label1v207(v, dp, dm), label2v207(v, dp, dm)
 }
 
 const labelNA = "[ N/A ]"
@@ -26,7 +35,106 @@ func abs(x int) int {
 	return x
 }
 
-func dashboardLabel1(v, dp, dm int) string {
+// label1v195 is line 1 of the 1.9.5 dashboard label (FUN_0001fb44).
+func label1v195(v, i, dp, dm int) string {
+	switch {
+	case v < 3300:
+		return labelNA
+	case dp > 2800:
+		switch {
+		case dm > 2800:
+			switch {
+			case v >= 19001:
+				return "QC2.0 20V"
+			case v > 7000 && i > 1000:
+				return "VFCP | UFCS"
+			case v < 5500:
+				return "DCP 1.5A"
+			}
+			return labelNA
+		case in(dm, 451, 1099):
+			if v > 8500 {
+				return "QC2.0 9V"
+			}
+			return "VOOC"
+		case v > 8500:
+			return "SVOOC"
+		}
+		return labelNA
+	case in(dp, 2501, 2800):
+		if v < 5500 && in(dm, 2501, 2899) {
+			return "Apple 2.4A"
+		}
+		return labelNA
+	case in(dp, 1101, 1300):
+		if v < 5500 && in(dm, 1101, 1299) {
+			return "Samsung 2.0A"
+		}
+		return labelNA
+	case in(dp, 501, 1000):
+		switch {
+		case dm > 2800:
+			return "QC3.0 | QC3+"
+		case in(dm, 501, 699):
+			if in(v, 10501, 12499) {
+				return "QC2.0 12V"
+			}
+			if in(v, 4501, 5499) {
+				return "DCP 1.5A"
+			}
+			return labelNA
+		case dm < 200:
+			switch {
+			case i >= 2001:
+				return "QC2.0 | SCP"
+			case in(v, 8501, 12499):
+				return "FCP | AFC"
+			case in(v, 4501, 5499):
+				return "QC2.0 5V"
+			}
+			return labelNA
+		}
+	}
+	return labelNA
+}
+
+// label2v195 is line 2 of the 1.9.5 dashboard label.
+func label2v195(v, i, dp, dm int) string {
+	switch {
+	case v < 3300:
+		return labelNA
+	case in(v, 8501, 9999) && in(dp, 1100, 1699) && in(dm, 1100, 1699):
+		return "SFCP 9V"
+	case in(v, 10000, 12499) && in(dp, 2100, 2699) && in(dm, 2100, 2699):
+		return "SFCP 12V"
+	case v >= 12500 && dp < 700:
+		return "FCP | SCP"
+	case i <= 2000:
+		alt := labelNA
+		if abs(dp-dm) < 100 {
+			if in(v, 4501, 5499) {
+				alt = "DCP 1.5A"
+			} else if v < 19500 && dp > 3000 {
+				alt = "QC2.0 20V Err"
+			}
+		}
+		if in(dp, 501, 699) && dm < 300 {
+			return "FCP | SCP | AFC"
+		}
+		return alt
+	case dp > 2900:
+		if v >= 7001 {
+			return "SVOOC"
+		}
+		if v < 5500 {
+			return "VOOC"
+		}
+	}
+	return labelNA
+}
+
+// label1v207 is line 1 of the 2.0.7 dashboard label (FUN_00022098).
+func label1v207(v, dp, dm int) string {
 	switch {
 	case v < 3300:
 		return labelNA
@@ -72,7 +180,8 @@ func dashboardLabel1(v, dp, dm int) string {
 	return labelNA
 }
 
-func dashboardLabel2(v, dp, dm int) string {
+// label2v207 is line 2 of the 2.0.7 dashboard label (FUN_00021bd4).
+func label2v207(v, dp, dm int) string {
 	switch {
 	case v < 3300:
 		return labelNA
