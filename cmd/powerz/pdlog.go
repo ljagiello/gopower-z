@@ -1,0 +1,244 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/usbpd"
+)
+
+// pdo is the JSON form of a source power data object.
+type pdo struct {
+	Index       int     `json:"index"`
+	Type        string  `json:"type"` // fixed, battery, variable, pps, epr_avs, spr_avs, unknown
+	MinVoltageV float64 `json:"min_voltage_v"`
+	MaxVoltageV float64 `json:"max_voltage_v"`
+	MaxCurrentA float64 `json:"max_current_a,omitempty"`
+	MaxPowerW   float64 `json:"max_power_w,omitempty"`
+	RawHex      string  `json:"raw_hex"`
+	Text        string  `json:"text"`
+}
+
+func toPDO(i int, p usbpd.PDO) pdo {
+	t := map[usbpd.PDOKind]string{
+		usbpd.PDOFixed: "fixed", usbpd.PDOBattery: "battery", usbpd.PDOVariable: "variable",
+		usbpd.PDOPPS: "pps", usbpd.PDOEPRAVS: "epr_avs", usbpd.PDOSPRAVS: "spr_avs",
+	}[p.Kind]
+	if t == "" {
+		t = "unknown"
+	}
+	out := pdo{
+		Index: i, Type: t, MinVoltageV: round(p.MinVolts, 3), MaxVoltageV: round(p.MaxVolts, 3),
+		MaxCurrentA: round(p.MaxAmps, 3), MaxPowerW: round(p.MaxWatts, 3),
+		RawHex: fmt.Sprintf("%08X", p.Raw), Text: p.String(),
+	}
+	if out.MaxPowerW == 0 && p.MaxAmps > 0 {
+		out.MaxPowerW = round(p.MaxVolts*p.MaxAmps, 3)
+	}
+	return out
+}
+
+// rdo is the JSON form of a sink request.
+type rdo struct {
+	ObjectPosition     int     `json:"object_position"`
+	VoltageV           float64 `json:"voltage_v,omitempty"` // PPS / AVS requests
+	OperatingCurrentA  float64 `json:"operating_current_a,omitempty"`
+	MaxCurrentA        float64 `json:"max_current_a,omitempty"`
+	OperatingPowerW    float64 `json:"operating_power_w,omitempty"`
+	CapabilityMismatch bool    `json:"capability_mismatch"`
+	EPR                bool    `json:"epr"`
+	PDO                *pdo    `json:"pdo,omitempty"` // the source PDO it selects, if seen
+	RawHex             string  `json:"raw_hex"`
+	Text               string  `json:"text"`
+}
+
+// pdRecord is the JSON form of one captured PD message or event.
+type pdRecord struct {
+	SchemaVersion int    `json:"schema_version"`
+	MeterTimeMS   uint32 `json:"meter_time_ms"`
+	Kind          string `json:"kind"` // "message" or "event"
+	// message fields
+	SOP          string   `json:"sop,omitempty"`
+	Message      string   `json:"message,omitempty"`
+	Class        string   `json:"class,omitempty"`      // control, data, extended
+	PowerRole    string   `json:"power_role,omitempty"` // source or sink (SOP only)
+	DataRole     string   `json:"data_role,omitempty"`  // dfp or ufp (SOP only)
+	SpecRevision string   `json:"spec_revision,omitempty"`
+	MessageID    *int     `json:"message_id,omitempty"`
+	FromMeter    bool     `json:"from_meter,omitempty"`
+	ObjectsHex   []string `json:"objects_hex,omitempty"`
+	SourceCaps   []pdo    `json:"source_capabilities,omitempty"`
+	Request      *rdo     `json:"request,omitempty"`
+	// event fields
+	Event  string `json:"event,omitempty"`
+	CC     int    `json:"cc,omitempty"`
+	Param  int    `json:"param,omitempty"`
+	RawHex string `json:"raw_hex"`
+}
+
+// pdTracker decodes PD records, remembering the most recent source
+// capabilities so requests can be resolved to the PDO they select.
+type pdTracker struct {
+	showGoodCRC bool
+	srcCaps     []usbpd.PDO
+	lastReq     *rdo
+	contract    *rdo // request confirmed by PS_RDY
+	messages    int
+	events      int
+}
+
+func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
+	out := pdRecord{SchemaVersion: schemaVersion, MeterTimeMS: r.TimestampMS, RawHex: hexdump(r.Raw)}
+	if !r.IsMessage {
+		t.events++
+		out.Kind = "event"
+		out.Event = r.Event.String()
+		if (r.Event == 1 || r.Event == 2) && (r.EventParam == 1 || r.EventParam == 2) {
+			out.CC = int(r.EventParam)
+		} else {
+			out.Param = int(r.EventParam)
+		}
+		if r.Event == 2 || r.Event == 4 { // detach or hard reset ends the contract
+			t.contract, t.lastReq = nil, nil
+		}
+		return out, true
+	}
+	m := r.Message
+	h := m.Header
+	if h.IsControl() && h.Type() == 1 && !t.showGoodCRC {
+		return out, false
+	}
+	t.messages++
+	id := h.MessageID()
+	out.Kind = "message"
+	out.SOP = r.SOP.String()
+	out.Message = h.Name()
+	out.SpecRevision = h.Rev()
+	out.MessageID = &id
+	out.FromMeter = r.FromMeter
+	switch {
+	case h.Extended():
+		out.Class = "extended"
+	case h.IsControl():
+		out.Class = "control"
+	default:
+		out.Class = "data"
+	}
+	if r.SOP == 0 {
+		out.PowerRole = map[int]string{0: "sink", 1: "source"}[h.PortPowerRole()]
+		out.DataRole = map[int]string{0: "ufp", 1: "dfp"}[h.PortDataRole()]
+	}
+	for _, o := range m.Objects {
+		out.ObjectsHex = append(out.ObjectsHex, fmt.Sprintf("%08X", o))
+	}
+	switch out.Message {
+	case "Source_Capabilities", "EPR_Source_Capabilities":
+		t.srcCaps = t.srcCaps[:0]
+		for i, o := range m.Objects {
+			p := usbpd.DecodeSourcePDO(o)
+			t.srcCaps = append(t.srcCaps, p)
+			out.SourceCaps = append(out.SourceCaps, toPDO(i+1, p))
+		}
+	case "Request", "EPR_Request":
+		if len(m.Objects) > 0 {
+			out.Request = t.decodeRequest(m.Objects[0])
+			t.lastReq = out.Request
+		}
+	case "PS_RDY":
+		if t.lastReq != nil {
+			t.contract = t.lastReq
+		}
+	case "Hard_Reset", "Soft_Reset":
+		t.contract = nil
+	}
+	return out, true
+}
+
+func (t *pdTracker) decodeRequest(v uint32) *rdo {
+	pos := int(v>>28) & 0xF
+	var ref *usbpd.PDO
+	if pos >= 1 && pos <= len(t.srcCaps) {
+		ref = &t.srcCaps[pos-1]
+	}
+	r := usbpd.DecodeRDO(v, ref)
+	out := &rdo{
+		ObjectPosition: r.Position, VoltageV: round(r.Volts, 3),
+		OperatingCurrentA: round(r.OpAmps, 3), MaxCurrentA: round(r.MaxAmps, 3),
+		OperatingPowerW: round(r.OpWatts, 3), CapabilityMismatch: r.CapMismatch, EPR: r.EPRMode,
+		RawHex: fmt.Sprintf("%08X", v), Text: r.String(),
+	}
+	if ref != nil {
+		p := toPDO(pos, *ref)
+		out.PDO = &p
+		out.Text += " -> " + ref.String()
+	}
+	return out
+}
+
+// pdSummary is included in `measure` output.
+type pdSummary struct {
+	Messages           int        `json:"messages"`
+	Events             int        `json:"events"`
+	SourceCapabilities []pdo      `json:"source_capabilities"`
+	LastRequest        *rdo       `json:"last_request"`
+	Contract           *rdo       `json:"contract"` // last request acknowledged with PS_RDY
+	Records            []pdRecord `json:"records,omitempty"`
+}
+
+func (t *pdTracker) summary(records []pdRecord) *pdSummary {
+	s := &pdSummary{
+		Messages: t.messages, Events: t.events, SourceCapabilities: []pdo{},
+		LastRequest: t.lastReq, Contract: t.contract, Records: records,
+	}
+	for i, p := range t.srcCaps {
+		s.SourceCapabilities = append(s.SourceCapabilities, toPDO(i+1, p))
+	}
+	return s
+}
+
+func (t *pdTracker) capsText() string {
+	parts := make([]string, len(t.srcCaps))
+	for i, p := range t.srcCaps {
+		parts[i] = p.String()
+	}
+	return strings.Join(parts, " | ")
+}
+
+// text renders a record as human-readable line(s).
+func (r pdRecord) text() string {
+	ts := fmt.Sprintf("%10.3fs", float64(r.MeterTimeMS)/1000)
+	if r.Kind == "event" {
+		s := ts + "  EVENT " + r.Event
+		if r.CC != 0 {
+			s += fmt.Sprintf(" CC%d", r.CC)
+		} else if r.Param != 0 {
+			s += fmt.Sprintf(" (param %d)", r.Param)
+		}
+		return s
+	}
+	role := "   "
+	switch r.PowerRole {
+	case "source":
+		role = "SRC"
+	case "sink":
+		role = "SNK"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s  %-5s %s %-24s id=%d rev=%s", ts, r.SOP, role, r.Message, *r.MessageID, r.SpecRevision)
+	if r.FromMeter {
+		b.WriteString(" [meter]")
+	}
+	for _, p := range r.SourceCaps {
+		fmt.Fprintf(&b, "\n%14s#%d %s", "", p.Index, p.Text)
+	}
+	if r.Request != nil {
+		fmt.Fprintf(&b, "\n%14s%s", "", r.Request.Text)
+	}
+	if r.SourceCaps == nil && r.Request == nil {
+		for i, o := range r.ObjectsHex {
+			fmt.Fprintf(&b, "\n%14sobj%d 0x%s", "", i, o)
+		}
+	}
+	return b.String()
+}

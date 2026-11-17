@@ -1,0 +1,50 @@
+name: Bug report
+description: Something powerz does wrong, or a reading that disagrees with the meter's screen.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not include anything you consider private.
+        Note: powerz is read-only by design; feature requests that would change meter settings, trigger fast-charge protocols or flash firmware are out of scope.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you run, what did you expect, what did you get?
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command line and its stdout/stderr. If a value looks wrong, include what the meter's screen showed at the same time.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: Output of `powerz info -json`
+      description: Shows the meter's model and firmware version, which affects the protocol.
+      render: json
+  - type: textarea
+    id: trace
+    attributes:
+      label: Raw frames (optional)
+      description: Re-run the failing command with `-trace` and paste the hex frames printed to stderr.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: powerz version
+      placeholder: output of `powerz version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS (Apple Silicon), macOS (Intel), Linux (x86-64), Linux (arm64), Other]
+    validations:
+      required: true

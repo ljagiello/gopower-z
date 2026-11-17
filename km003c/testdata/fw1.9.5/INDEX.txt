@@ -1,0 +1,58 @@
+KM003C active whitelisted-read capture, 2026-11-16
+Format: plain hex, space separated, one frame per file.
+Naming: <transport>_<step>_<n>_<kind>.hex; transport = bulk (IF0 EP01/81), hid (IF3), cdc (/dev/cu.usbmodem0500022).
+Request ids come from ONE global counter starting at 1 (bulk 1-14, hid 15-17, cdc 18-20).
+HID *_req.hex files hold the 65-byte hidapi buffer: leading 0x00 is the report-ID byte, NOT sent on the wire (wire = 64 B).
+No drain/stray/trailing transfer carried data, so no *_drain_* / *_stray_* files exist
+(the only non-timeout drain results were 0-byte ZLPs after each MemoryRead data transfer; see active_bulk_log.json).
+
+file                               bytes   id  echo        latency  description
+bulk_W1_1_req.hex                      4    1                       request as sent
+bulk_W1_1_resp.hex                    52    1  True        0.61 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W1_2_req.hex                      4    2                       request as sent
+bulk_W1_2_resp.hex                    52    2  True        0.58 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W1_3_req.hex                      4    3                       request as sent
+bulk_W1_3_resp.hex                    52    3  True        0.55 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W1_4_req.hex                      4    4                       request as sent
+bulk_W1_4_resp.hex                    52    4  True        0.54 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W1_5_req.hex                      4    5                       request as sent
+bulk_W1_5_resp.hex                    52    5  True        0.74 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W2_1_req.hex                      4    6                       request as sent
+bulk_W2_1_resp.hex                   188    6  True        0.71 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W3_1_req.hex                      4    7                       request as sent
+bulk_W3_1_resp.hex                    20    7  True        0.54 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W3_2_req.hex                      4    8                       request as sent
+bulk_W3_2_resp.hex                    20    8  True        0.47 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W3_3_req.hex                      4    9                       request as sent
+bulk_W3_3_resp.hex                    20    9  True        0.55 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W4_1_req.hex                      4   10                       request as sent
+bulk_W4_1_resp.hex                    68   10  True        0.62 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W5_1_req.hex                      4   11                       request as sent
+bulk_W5_1_resp.hex                     4   11  True        0.49 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W6_1_plain.hex                   64   12                       MemoryRead data decrypted with key0 (AES-128-ECB), truncated to 64 B (derived, not on the wire)
+bulk_W6_1_req.hex                     36   12                       request as sent
+bulk_W6_1_req_plain.hex               32   12                       MemoryRead plaintext P (32 B) before AES encryption (derived, not on the wire)
+bulk_W6_1_resp.hex                    20   12  True        1.27 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W6_1_respdata.hex                64   12         14.57 ms tot  MemoryRead unframed ciphertext (separate IN transfer after the 20-byte C4 confirmation)
+bulk_W6_2_plain.hex                   64   13                       MemoryRead data decrypted with key0 (AES-128-ECB), truncated to 64 B (derived, not on the wire)
+bulk_W6_2_req.hex                     36   13                       request as sent
+bulk_W6_2_req_plain.hex               32   13                       MemoryRead plaintext P (32 B) before AES encryption (derived, not on the wire)
+bulk_W6_2_resp.hex                    20   13  True        1.07 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W6_2_respdata.hex                64   13         14.52 ms tot  MemoryRead unframed ciphertext (separate IN transfer after the 20-byte C4 confirmation)
+bulk_W6_3_plain.hex                   64   14                       MemoryRead data decrypted with key0 (AES-128-ECB), truncated to 64 B (derived, not on the wire)
+bulk_W6_3_req.hex                     36   14                       request as sent
+bulk_W6_3_req_plain.hex               32   14                       MemoryRead plaintext P (32 B) before AES encryption (derived, not on the wire)
+bulk_W6_3_resp.hex                    20   14  True        1.42 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+bulk_W6_3_respdata.hex                64   14          15.2 ms tot  MemoryRead unframed ciphertext (separate IN transfer after the 20-byte C4 confirmation)
+cdc_W1_1_req.hex                       4   18                       request as sent
+cdc_W1_1_resp.hex                     52   18  True        0.29 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+cdc_W1_2_req.hex                       4   19                       request as sent
+cdc_W1_2_resp.hex                     52   19  True        0.28 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+cdc_W1_3_req.hex                       4   20                       request as sent
+cdc_W1_3_resp.hex                     52   20  True        0.25 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+hid_W1_1_req.hex                      65   15                       request as sent
+hid_W1_1_resp.hex                     64   15  True        2.23 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+hid_W1_2_req.hex                      65   16                       request as sent
+hid_W1_2_resp.hex                     64   16  True        2.41 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+hid_W1_3_req.hex                      65   17                       request as sent
+hid_W1_3_resp.hex                     64   17  True        2.29 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)

@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new command, output field or decoding improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: Describe the task (for a human or an AI agent driving powerz), not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: Command, flags and example JSON output, if you have them in mind.
+  - type: checkboxes
+    id: readonly
+    attributes:
+      label: Scope
+      options:
+        - label: This only needs read access to the meter (powerz never writes settings, triggers protocols or flashes firmware).
+          required: true

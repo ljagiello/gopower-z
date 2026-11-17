@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ljagiello/gopower-z/security/advisories/new
+    about: Report security issues privately, not as public issues.
+  - name: Protocol documentation
+    url: https://ljagiello.github.io/gopower-z/protocol.html
+    about: Byte-level KM003C USB protocol notes used by powerz.

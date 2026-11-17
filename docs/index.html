@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gopower-z Docs</title>
+<meta name="description" content="powerz: a read-only, AI-agent-friendly Go CLI and library for the ChargerLAB POWER-Z KM003C USB-C power meter, with protocol, hardware, firmware and reverse-engineering notes.">
+<style>
+:root {
+  --bg: #ffffff; --fg: #1d2127; --muted: #5a6370; --border: #d9dde3;
+  --surface: #f5f7f9; --accent: #1f5fbf; --code-bg: #eef1f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+    --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+  --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 900px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.8rem; margin: 0 0 6px; }
+h2 { font-size: 1.15rem; margin: 32px 0 10px; }
+p { margin: 0 0 12px; }
+.meta { color: var(--muted); }
+a { color: var(--accent); }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.card { display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px; text-decoration: none; color: inherit; }
+.card:hover { border-color: var(--accent); }
+.card strong { display: block; color: var(--accent); margin-bottom: 4px; }
+.card span { color: var(--muted); font-size: 0.92rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>gopower-z</h1>
+<p class="meta"><code>powerz</code> is a read-only Go CLI and library for the ChargerLAB POWER-Z KM003C USB-C power meter. It is built to be driven by people and by AI agents: JSON output, structured errors, stable exit codes, and a self-describing schema.</p>
+
+<pre><code>go install github.com/ljagiello/gopower-z/cmd/powerz@latest   # needs libusb + pkg-config
+powerz measure -duration 10s</code></pre>
+
+<h2>Documentation</h2>
+<div class="cards">
+  <a class="card" href="cli.html"><strong>CLI reference</strong><span>Commands, JSON fields, exit codes, agent recipes, safety model.</span></a>
+  <a class="card" href="protocol.html"><strong>USB protocol</strong><span>Byte-level KM003C protocol with sources and results verified on a real device.</span></a>
+  <a class="card" href="hardware.html"><strong>Hardware</strong><span>Specs, components, sample rates, teardown notes, official downloads.</span></a>
+  <a class="card" href="official-software-re.html"><strong>Official software</strong><span>How ChargerLab's Windows app talks to the meter, from decompilation.</span></a>
+  <a class="card" href="firmware.html"><strong>Firmware</strong><span>The .mencrypt container and analysis of the meter firmware.</span></a>
+</div>
+
+<h2>Project</h2>
+<p><a href="https://github.com/ljagiello/gopower-z">Source on GitHub</a>. Apache License 2.0. Not affiliated with ChargerLAB.</p>
+</main>
+</body>
+</html>

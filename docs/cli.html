@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>powerz CLI Reference</title>
+<meta name="description" content="Usage, JSON output contract, exit codes and agent recipes for powerz, the read-only CLI for the ChargerLAB POWER-Z KM003C USB-C power meter.">
+<style>
+:root {
+  --bg: #ffffff; --fg: #1d2127; --muted: #5a6370; --border: #d9dde3;
+  --surface: #f5f7f9; --accent: #1f5fbf; --code-bg: #eef1f4;
+  --ok: #1d6b3a; --ok-bg: #e3f3e8;
+  --warn-bg: #fff6e0; --warn-border: #e6c26a; --danger: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+    --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+    --ok: #8fd8a8; --ok-bg: #1d3426;
+    --warn-bg: #2f2814; --warn-border: #7a6526; --danger: #ff8a80;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+  --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+  --ok: #8fd8a8; --ok-bg: #1d3426;
+  --warn-bg: #2f2814; --warn-border: #7a6526; --danger: #ff8a80;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; }
+h2 { font-size: 1.25rem; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+h2, h3 { scroll-margin-top: 12px; }
+p, ul, ol { margin: 0 0 12px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; overflow-x: auto; margin: 8px 0 16px; line-height: 1.4; }
+pre code { background: none; padding: 0; overflow-wrap: normal; white-space: pre; font-size: 0.85rem; }
+.meta { color: var(--muted); margin-bottom: 16px; }
+nav.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 16px; margin: 16px 0 8px; }
+nav.toc ul { margin: 0; padding-left: 0; list-style: none; columns: 2; column-gap: 28px; }
+nav.toc li { break-inside: avoid; }
+@media (max-width: 600px) { nav.toc ul { columns: 1; } }
+.note { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0; }
+.good { background: var(--ok-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0; }
+.tw { overflow-x: auto; margin: 8px 0 16px; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.docs-nav { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.92rem; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<main>
+<div class="docs-nav">
+  <a href="index.html">Docs home</a>
+  <a href="cli.html">CLI reference</a>
+  <a href="protocol.html">USB protocol</a>
+  <a href="hardware.html">Hardware</a>
+  <a href="official-software-re.html">Official software RE</a>
+  <a href="firmware.html">Firmware</a>
+</div>
+<h1>powerz CLI reference</h1>
+<p class="meta">Read-only command-line client for the ChargerLAB POWER-Z KM003C (USB <code>5fc9:0063</code>). Built for humans at a terminal and for AI agents and scripts: JSON on stdout, structured errors, stable exit codes, and a self-describing <code>powerz schema</code>.</p>
+
+<nav class="toc"><ul>
+  <li><a href="#build">1. Build and connect</a></li>
+  <li><a href="#quick">2. Quick start</a></li>
+  <li><a href="#contract">3. Agent contract</a></li>
+  <li><a href="#commands">4. Commands</a></li>
+  <li><a href="#fields">5. Output fields</a></li>
+  <li><a href="#errors">6. Errors and exit codes</a></li>
+  <li><a href="#recipes">7. Agent recipes</a></li>
+  <li><a href="#safety">8. Safety model</a></li>
+  <li><a href="#caveats">9. Caveats</a></li>
+</ul></nav>
+
+<h2 id="build">1. Build and connect</h2>
+<p>powerz talks to the meter's vendor USB interface through libusb (cgo).</p>
+<pre><code># macOS
+brew install libusb pkgconf
+# Debian/Ubuntu
+sudo apt install libusb-1.0-0-dev pkg-config
+
+go build -o powerz ./cmd/powerz</code></pre>
+<p>Connect the meter's USB-C port marked <strong>HID</strong> to the computer. The device under test goes between the meter's male and female USB-C ports. On macOS no driver or root is needed. On Linux, the in-kernel <code>powerz</code> hwmon driver owns the interface; powerz detaches it while running. Grant access with a udev rule for <code>5fc9:0063</code> or you get exit code 6.</p>
+
+<h2 id="quick">2. Quick start</h2>
+<pre><code>powerz                       # dashboard on a terminal, one JSON reading when piped
+powerz read                  # one snapshot
+powerz measure -duration 10s # min/mean/max, energy, charge, PD contract
+powerz info                  # model, firmware, serial, settings
+powerz pd -duration 30s      # decoded USB-PD traffic
+powerz log -duration 1m -interval 500ms -format csv &gt; run.csv
+powerz schema                # everything below, as JSON</code></pre>
+
+<h2 id="contract">3. Agent contract</h2>
+<div class="good">
+<ul>
+  <li><strong>JSON whenever stdout is not a terminal.</strong> Force it with <code>-json</code> or force text with <code>-text</code>. Every object carries <code>schema_version</code> (currently <code>1</code>).</li>
+  <li><strong>stdout is data only.</strong> Diagnostics, traces and errors go to stderr.</li>
+  <li><strong>Units are in field names:</strong> <code>_v</code> volts, <code>_a</code> amperes, <code>_w</code> watts, <code>_wh</code> watt-hours, <code>_mah</code> milliamp-hours, <code>_c</code> °C, <code>_s</code> seconds, <code>_ms</code> milliseconds.</li>
+  <li><strong>Errors are one JSON line on stderr</strong> with a stable <code>code</code>, a <code>retryable</code> flag and a <code>hint</code>.</li>
+  <li><strong>Every command can be bounded.</strong> <code>read</code>, <code>measure</code>, <code>info</code>, <code>devices</code> and <code>schema</code> terminate on their own. <code>log</code> and <code>pd</code> take <code>-duration</code> or <code>-n</code>, and automation should always pass one.</li>
+  <li><strong>One process per meter.</strong> The USB interface is exclusive. A concurrent call fails with <code>busy</code> (exit 4, retryable) unless you pass <code>-wait 10s</code>, which queues behind the other process.</li>
+  <li><strong>Common flags work anywhere</strong>, before or after the command: <code>-json -text -serial S -timeout D -wait D -trace</code>.</li>
+  <li><strong>Interpretations are separated from measurements.</strong> Fields under <code>inferred</code> are powerz's interpretation of voltages, not data from the meter.</li>
+</ul>
+</div>
+
+<h2 id="commands">4. Commands</h2>
+<div class="tw"><table>
+<tr><th>Command</th><th>Output</th><th>Terminates</th><th>Flags</th><th>Purpose</th></tr>
+<tr><td><code>read</code></td><td>JSON object</td><td>yes</td><td>-</td><td>One measurement snapshot. Default command when stdout is not a terminal.</td></tr>
+<tr><td><code>measure</code></td><td>JSON object</td><td>yes</td><td><code>-duration 5s</code> <code>-interval 100ms</code> <code>-pd=true</code> <code>-pd-records</code></td><td>Samples for a fixed time and returns min/mean/max/last for V, A, W and °C, plus energy, charge and the captured USB-PD capabilities and contract. <strong>The main command for agents.</strong></td></tr>
+<tr><td><code>log</code></td><td>JSON lines or CSV</td><td>with <code>-duration</code>/<code>-n</code></td><td><code>-interval 200ms</code> <code>-format jsonl|csv</code> <code>-n</code> <code>-duration</code></td><td>Streams snapshots (same fields as <code>read</code>).</td></tr>
+<tr><td><code>pd</code></td><td>JSON lines</td><td>with <code>-duration</code>/<code>-n</code></td><td><code>-interval 25ms</code> <code>-duration</code> <code>-n</code> <code>-goodcrc</code></td><td>Passively captured USB-PD messages and connection events, decoded (PDOs, requests).</td></tr>
+<tr><td><code>info</code></td><td>JSON object</td><td>yes</td><td>-</td><td>USB descriptors, model, firmware and hardware versions, serial, UUID, settings (sample rate, name, brightness).</td></tr>
+<tr><td><code>devices</code></td><td>JSON object</td><td>yes</td><td>-</td><td>Lists connected meters without claiming them, so it works while another process uses the meter.</td></tr>
+<tr><td><code>watch</code></td><td>terminal UI</td><td>on <code>q</code></td><td><code>-interval 200ms</code> <code>-no-pd</code></td><td>Live dashboard for humans. Refuses to run when stdout or stdin is not a terminal.</td></tr>
+<tr><td><code>schema</code></td><td>JSON object</td><td>yes</td><td>-</td><td>Machine-readable reference: commands, flags with types and defaults, fields, exit codes, caveats.</td></tr>
+<tr><td><code>version</code></td><td>JSON object</td><td>yes</td><td>-</td><td>Tool version and schema version.</td></tr>
+</table></div>
+
+<h3>Example: <code>powerz read</code> (piped)</h3>
+<p>Captured from a real meter with nothing attached (firmware 1.9.5):</p>
+<pre><code>{"schema_version":1,"time":"2026-11-16T16:35:46.541866-08:00","serial":"050002",
+ "vbus_v":0.005192,"ibus_a":0.000008,"power_w":0,"vbus_avg_v":0.005304,"ibus_avg_a":-0.000019,
+ "power_avg_w":0,"temp_c":27.844,"cc1_v":0.0696,"cc2_v":0.028,"dp_v":0.0863,"dm_v":0.0906,
+ "vdd_v":3.2052,"cc2_avg_v":0.026,"dp_avg_v":0.085,"dm_avg_v":0.091,
+ "inferred":{"cc":"no Type-C termination detected","data_lines":"idle (no data-line signalling)"},
+ "raw":{"vbus_uncal_avg_uv":5404,"ibus_uncal_avg_ua":-63,"tail_hex":"00 80 1A 00 55 00 5B 00"}}</code></pre>
+
+<h3>Example: <code>powerz measure -duration 2s</code></h3>
+<pre><code>{"schema_version":1,"serial":"050002","start":"…","end":"…","duration_s":2.001,"interval_s":0.1,
+ "samples":20,"errors":0,
+ "vbus_v":{"min":0.005173,"mean":0.005329,"max":0.005564,"last":0.005427},
+ "ibus_a":{"min":-0.000044,"mean":-0.000006,"max":0.00004,"last":-0.000044},
+ "power_w":{"min":0,"mean":0,"max":0,"last":0},
+ "temp_c":{"min":27.836,"mean":27.852,"max":27.867,"last":27.852},
+ "energy_wh":0,"charge_mah":-0.000002,
+ "last":{ …same fields as read… },
+ "pd":{"messages":0,"events":0,"source_capabilities":[],"last_request":null,"contract":null}}</code></pre>
+
+<h3>Example: <code>powerz info</code></h3>
+<pre><code>{"schema_version":1,
+ "usb":{"manufacturer":"ChargerLab","product":"POWER-Z KM003C","serial":"050002","bus":2,"address":20},
+ "device":{"model":"KM003C","firmware_version":"1.9.5","firmware_date":"2025.1.7","hardware_version":"2.2",
+           "hardware_date":"2024.9.23","serial":"050002","uuid":"0123456789ABCDEF0123456789ABCDEF"},
+ "settings":{"device_name":"POWER-Z","sample_rate_sps":50,"brightness_percent":49,"rotation":2,
+             "auto_rotate":true,"language":1,"theme":0,"checksum_ok":true}}</code></pre>
+
+<h3>Example: <code>powerz pd</code> record</h3>
+<p>One line per message or event. A <code>Source_Capabilities</code> message carries decoded PDOs. A <code>Request</code> carries the decoded RDO and the PDO it selects. The record below is illustrative: it was built from the unit-test vectors, not captured live, because nothing was negotiating PD through the meter during development.</p>
+<pre><code>{"schema_version":1,"meter_time_ms":10000,"kind":"message","sop":"SOP","message":"Source_Capabilities",
+ "class":"data","power_role":"source","data_role":"dfp","spec_revision":"3.x","message_id":0,
+ "objects_hex":["0001912C","0002D12C"],
+ "source_capabilities":[
+   {"index":1,"type":"fixed","min_voltage_v":5,"max_voltage_v":5,"max_current_a":3,"max_power_w":15,"raw_hex":"0001912C","text":"Fixed 5.00V 3.00A (15.0W)"},
+   {"index":2,"type":"fixed","min_voltage_v":9,"max_voltage_v":9,"max_current_a":3,"max_power_w":27,"raw_hex":"0002D12C","text":"Fixed 9.00V 3.00A (27.0W)"}],
+ "raw_hex":"…"}</code></pre>
+
+<h2 id="fields">5. Output fields</h2>
+<div class="tw"><table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>vbus_v</code>, <code>ibus_a</code>, <code>power_w</code></td><td>Instantaneous bus voltage, current (signed) and their product. Resolution 1 µV / 1 µA.</td></tr>
+<tr><td><code>vbus_avg_v</code>, <code>ibus_avg_a</code>, <code>power_avg_w</code></td><td>The meter's own smoothed averages, updated about once per second.</td></tr>
+<tr><td><code>temp_c</code></td><td>Meter temperature; <code>null</code> when the meter flags it invalid (e.g. at 1000 SPS).</td></tr>
+<tr><td><code>cc1_v</code>, <code>cc2_v</code></td><td>Type-C configuration channel voltages.</td></tr>
+<tr><td><code>dp_v</code>, <code>dm_v</code></td><td>USB D+ / D− voltages (used by BC1.2, Apple, QC, etc. signalling).</td></tr>
+<tr><td><code>cc2_avg_v</code>, <code>dp_avg_v</code>, <code>dm_avg_v</code></td><td>The meter's averages of CC2, D+ and D− (1 mV resolution), verified on firmware 1.9.5.</td></tr>
+<tr><td><code>vdd_v</code></td><td>The meter's internal supply voltage.</td></tr>
+<tr><td><code>inferred.cc</code></td><td>powerz's reading of the CC levels (Default USB / 1.5 A / 3.0 A Type-C advertisement). Inference.</td></tr>
+<tr><td><code>inferred.data_lines</code></td><td>powerz's reading of D+/D− levels against known Apple, BC1.2 and QC patterns. Inference.</td></tr>
+<tr><td><code>raw.*</code></td><td>Uncalibrated averages and the ADC tail bytes, for debugging.</td></tr>
+<tr><td><code>energy_wh</code>, <code>charge_mah</code></td><td>(measure) Signed integrals of power and current over the measurement.</td></tr>
+<tr><td><code>pd.source_capabilities</code></td><td>(measure) PDOs most recently advertised by the charger.</td></tr>
+<tr><td><code>pd.contract</code></td><td>(measure) The sink request acknowledged by <code>PS_RDY</code>, i.e. the negotiated contract, or <code>null</code>.</td></tr>
+</table></div>
+<p>The complete, authoritative list is in <code>powerz schema</code>.</p>
+
+<h2 id="errors">6. Errors and exit codes</h2>
+<pre><code>{"schema_version":1,"error":{"code":"busy","message":"km003c: meter is in use by another program (…)",
+ "retryable":true,"hint":"another program holds the meter (…) - wait and retry"}}</code></pre>
+<div class="tw"><table>
+<tr><th>Exit</th><th>code</th><th>Retryable</th><th>Meaning</th></tr>
+<tr><td>0</td><td>-</td><td>-</td><td>Success</td></tr>
+<tr><td>1</td><td><code>error</code></td><td>no</td><td>I/O or protocol failure</td></tr>
+<tr><td>2</td><td><code>usage</code></td><td>no</td><td>Unknown command, bad flag or argument</td></tr>
+<tr><td>3</td><td><code>not_found</code></td><td>no</td><td>No meter connected (or none with <code>-serial</code>)</td></tr>
+<tr><td>4</td><td><code>busy</code></td><td>yes</td><td>Another process holds the meter; use <code>-wait</code></td></tr>
+<tr><td>5</td><td><code>timeout</code></td><td>yes</td><td>The meter did not answer in time</td></tr>
+<tr><td>6</td><td><code>permission_denied</code></td><td>no</td><td>The OS denied USB access (Linux udev)</td></tr>
+<tr><td>7</td><td><code>partial</code></td><td>yes</td><td>Output was printed but part of it is missing (e.g. some <code>measure</code> samples failed, or <code>info</code> could not read a block)</td></tr>
+<tr><td>130</td><td><code>interrupted</code></td><td>no</td><td>SIGINT / SIGTERM</td></tr>
+</table></div>
+
+<h2 id="recipes">7. Agent recipes</h2>
+<h3>How much power does the attached device draw?</h3>
+<pre><code>powerz measure -duration 30s -wait 10s -json
+# use .power_w.mean, .power_w.max, .energy_wh, .vbus_v.mean, .ibus_a.mean</code></pre>
+<h3>What does this charger offer, and what did the device negotiate?</h3>
+<p>Plug the charger into the meter's female port and the device into the male port. Start the capture before connecting the device, then connect it during the window:</p>
+<pre><code>powerz measure -duration 20s -json
+# .pd.source_capabilities[]  -&gt; offered PDOs (fixed/PPS/AVS, V, A, W)
+# .pd.contract               -&gt; the request acknowledged with PS_RDY
+# .vbus_v.last               -&gt; the voltage actually on the bus</code></pre>
+<h3>Is a meter connected, and which one?</h3>
+<pre><code>powerz devices -json      # {"count":1,"devices":[{"serial":"050002",…}]}</code></pre>
+<h3>Handling failures</h3>
+<ul>
+  <li>Exit 4 or 5: retry. Pass <code>-wait 10s</code> to avoid exit 4 altogether.</li>
+  <li>Exit 3: ask the human to connect the meter.</li>
+  <li>Exit 7: the JSON on stdout is still valid; check <code>errors</code> / <code>last_error</code>.</li>
+  <li>Do not run two powerz commands against the same meter in parallel.</li>
+</ul>
+
+<h2 id="safety">8. Safety model</h2>
+<p>Every frame is checked against a whitelist (<code>km003c/guard.go</code>) right before it goes to the device. Only these frames are allowed:</p>
+<ul>
+  <li><code>GET_DATA</code> for ADC, settings and the PD buffer, on the vendor bulk interface. Only the ADC read is allowed on HID and CDC.</li>
+  <li><code>CONNECT</code>.</li>
+  <li><code>MemoryRead</code> of exactly three fixed 64-byte information blocks.</li>
+</ul>
+<p>Never sent: settings writes, factory reset, firmware/DFU commands, authentication, stream start/stop, and the CDC text commands that make a charger raise VBUS. powerz cannot change the voltage on the bus.</p>
+<div class="note"><strong>Learned the hard way:</strong> the meter stalls, and its watchdog reboots it, if a new request arrives while a previous reply or zero-length packet is still queued on its IN endpoint. powerz consumes the zero-length packet after MemoryRead data and drains the endpoint after any failed or timed-out exchange before writing again. Regression tests in <code>km003c/device_test.go</code> cover both cases.</div>
+
+<h2 id="caveats">9. Caveats</h2>
+<ul>
+  <li><strong>IBUS sign convention:</strong> which direction is positive has not yet been verified with a known load. Energy and charge are signed accordingly.</li>
+  <li><strong>Detected fast-charge protocol:</strong> the protocol the meter shows on its screen is not exposed over USB by any known command. <code>inferred</code> fields and PD capture are the substitutes.</li>
+  <li><strong>Polling rate:</strong> the meter samples at its configured rate (2, 10, 50 or 1000 SPS, see <code>info</code>). Polling faster only repeats values.</li>
+  <li><strong>PD buffer:</strong> reading PD drains the meter's PD buffer, so only one consumer sees each record.</li>
+</ul>
+</main>
+</body>
+</html>
