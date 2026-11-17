@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .body { fill: #0f1a20; }
+    .port { fill: none; stroke: #d9e4ea; stroke-width: 2; }
+    .rail { fill: none; stroke: #f2c230; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect class="body" width="32" height="32" rx="7"/>
+  <rect class="port" x="3.5" y="9" width="25" height="14" rx="7"/>
+  <path class="rail" d="M8 16h3l2-4 3 8 2-4h6"/>
+</svg>

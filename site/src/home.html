@@ -1,0 +1,114 @@
+<section class="hero">
+  <div class="hero-text">
+    <h1>Measure USB&#8209;C power from the command line.</h1>
+    <p class="lede"><code>powerz</code> is a read-only CLI and Go library for the ChargerLAB POWER-Z KM003C. Piped output is JSON with units in the field names, errors have stable exit codes, and <code>powerz schema</code> describes the whole interface, so scripts and AI agents can drive the meter as easily as you can.</p>
+
+    <div class="install" data-tabs>
+      <div class="tabs" role="tablist" aria-label="Operating system">
+        <button type="button" role="tab" id="tab-mac" aria-controls="pane-mac" aria-selected="true">macOS</button>
+        <button type="button" role="tab" id="tab-linux" aria-controls="pane-linux" aria-selected="false" tabindex="-1">Debian / Ubuntu</button>
+      </div>
+      <div role="tabpanel" id="pane-mac" aria-labelledby="tab-mac">
+<pre><code>brew install libusb pkgconf
+go install github.com/ljagiello/gopower-z/cmd/powerz@latest</code></pre>
+      </div>
+      <div role="tabpanel" id="pane-linux" aria-labelledby="tab-linux" hidden>
+<pre><code>sudo apt install libusb-1.0-0-dev pkg-config
+go install github.com/ljagiello/gopower-z/cmd/powerz@latest</code></pre>
+      </div>
+    </div>
+
+    <p class="hero-actions">
+      <a class="btn" href="/cli" data-cta="cli_reference">Read the CLI reference</a>
+      <a class="btn btn-quiet" href="https://github.com/ljagiello/gopower-z/releases" data-cta="download_binary">Download a prebuilt binary</a>
+    </p>
+  </div>
+
+  <figure class="meter" aria-labelledby="meter-cap">
+    <div class="meter-face">
+      <div class="meter-head">
+        <span class="meter-cmd"><span class="prompt">$</span> powerz read</span>
+        <span class="meter-id">KM003C, fw 1.9.5</span>
+      </div>
+      <dl class="readout">
+        <div class="ch ch-v">
+          <dt><span class="ch-name">VBUS</span><code>"vbus_v"</code></dt>
+          <dd><span class="digits" data-value="5.076484" data-places="4">5.0765</span><span class="unit">V</span></dd>
+        </div>
+        <div class="ch ch-a">
+          <dt><span class="ch-name">IBUS</span><code>"ibus_a"</code></dt>
+          <dd><span class="digits" data-value="0.132566" data-places="4">0.1326</span><span class="unit">A</span></dd>
+        </div>
+        <div class="ch ch-w">
+          <dt><span class="ch-name">Power</span><code>"power_w"</code></dt>
+          <dd><span class="digits" data-value="0.672969" data-places="4">0.6730</span><span class="unit">W</span></dd>
+        </div>
+      </dl>
+      <div class="meter-foot">
+        <span>27.9 °C</span>
+        <span>Type-C attached on CC2, source advertises 3.0A</span>
+      </div>
+    </div>
+    <figcaption id="meter-cap">Real <code>powerz read</code> output from a KM003C powering a test board.</figcaption>
+  </figure>
+</section>
+
+<section class="block" aria-labelledby="cmds">
+  <h2 id="cmds">Commands</h2>
+  <p class="block-intro">On a terminal, plain <code>powerz</code> opens a live dashboard. Piped, it prints one JSON reading. Every command below has a fixed output shape.</p>
+  <dl class="cmds">
+    <div><dt><code>powerz read</code></dt><dd>One snapshot: VBUS, IBUS, power, temperature, CC and D+/D− lines.</dd></div>
+    <div><dt><code>powerz measure --duration 10s</code></dt><dd>Min, mean and max of V, A and W, plus Wh, mAh and the USB-PD contract.</dd></div>
+    <div><dt><code>powerz log --format csv</code></dt><dd>A stream of snapshots as JSON lines or CSV.</dd></div>
+    <div><dt><code>powerz pd --duration 30s</code></dt><dd>Decoded USB Power Delivery messages, then a summary line.</dd></div>
+    <div><dt><code>powerz info</code></dt><dd>Model, firmware and hardware versions, serial, settings.</dd></div>
+    <div><dt><code>powerz schema</code></dt><dd>Every command, flag, field and exit code, as JSON, for agents.</dd></div>
+  </dl>
+  <p><a href="/cli#commands">All commands and flags</a></p>
+</section>
+
+<section class="block" aria-labelledby="safe">
+  <h2 id="safe">Read-only by design</h2>
+  <p class="block-intro">Every frame is checked against a whitelist right before it goes to the meter, and a fuzz test proves the whitelist accepts nothing else. powerz cannot change the voltage on the bus.</p>
+  <div class="whitelist">
+    <div class="wl wl-yes">
+      <h3>Sent</h3>
+      <ul>
+        <li><code>GET_DATA</code> for ADC, settings and the PD buffer</li>
+        <li><code>CONNECT</code> and <code>DISCONNECT</code></li>
+        <li><code>MemoryRead</code> of three fixed 64-byte information blocks</li>
+      </ul>
+    </div>
+    <div class="wl wl-no">
+      <h3>Never sent</h3>
+      <ul>
+        <li>Settings writes and factory reset</li>
+        <li>Firmware and DFU commands</li>
+        <li>Authentication and stream control</li>
+        <li>CDC text commands that make a charger raise VBUS</li>
+      </ul>
+    </div>
+  </div>
+  <p><a href="/cli#safety">How the safety model works</a></p>
+</section>
+
+<section class="block" aria-labelledby="docs">
+  <h2 id="docs">Documentation</h2>
+  <div class="doc-groups">
+    <div class="doc-group">
+      <h3>Using powerz</h3>
+      <ul class="doc-list">
+        <li><a href="/cli"><strong>CLI reference</strong><span>Commands, JSON fields, exit codes, agent recipes and the safety model.</span></a></li>
+      </ul>
+    </div>
+    <div class="doc-group">
+      <h3>How the meter works</h3>
+      <ul class="doc-list">
+        <li><a href="/protocol"><strong>USB protocol</strong><span>The KM003C protocol byte by byte, with sources and results verified on a real device.</span></a></li>
+        <li><a href="/hardware"><strong>Hardware</strong><span>Specs, components, sample rates, teardown notes and official downloads.</span></a></li>
+        <li><a href="/official-software-re"><strong>Official software</strong><span>How ChargerLAB's Windows app talks to the meter, from decompilation.</span></a></li>
+        <li><a href="/firmware"><strong>Firmware</strong><span>The <code>.mencrypt</code> container and analysis of the meter firmware.</span></a></li>
+      </ul>
+    </div>
+  </div>
+</section>
