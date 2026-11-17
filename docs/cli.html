@@ -214,7 +214,7 @@ powerz schema</code></pre>
   <li><strong>Output size:</strong> the automatic width gives up to 120 bins, about 25 KB of JSON (twice that pretty-printed on a terminal). <code>--bin</code> equal to <code>--duration</code> gives a single bin when only the totals matter.</li>
 </ul>
 
-<h3 id="levels">Level changes: <code>levels</code></h3>
+<h3 id="levels">Level changes: <code>levels</code> (after v0.2.0)</h3>
 <p><code>levels</code> splits the window where the typical current changes and stays changed: one level when nothing changed, two when a charger switched on partway, three when a device paused and resumed. Each level has its <code>start_s</code> and <code>end_s</code> (seconds from the start of the window), its <code>samples</code>, the min, mean and max of <code>vbus_v</code> and <code>power_w</code>, and the full statistics of <code>ibus_a</code>; its <code>p50</code> is the typical current that defines the level. Real output from a 40 s window on an ESP32 board that pulses to about 130 mA every 4 s, parked in its bootloader at 16 s (the pulse stops and the current drops to 61 mA until the chip reboots itself 7 s later):</p>
 <pre><code>"levels": [
   {"start_s": 0, "end_s": 16.002, "samples": 160, "vbus_v": {…},
