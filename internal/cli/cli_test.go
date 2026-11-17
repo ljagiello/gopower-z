@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,6 +171,70 @@ func TestCLIMeasure(t *testing.T) {
 		pd["contract"] == nil || len(pd["records"].([]any)) != 5 {
 		t.Errorf("measure %v", m)
 	}
+	// The fake meter repeats one reading, so every statistic must equal the
+	// last reading's value for its own field: this catches fields wired to
+	// the wrong ADC value (D+ for D-, power for current).
+	stats, last := m["stats"].(map[string]any), m["last"].(map[string]any)
+	for _, f := range []string{"vbus_v", "ibus_a", "power_w", "dp_v", "dm_v"} {
+		st := stats[f].(map[string]any)
+		if st["mean"] != last[f] || st["min"] != last[f] || st["p95"] != last[f] || st["stdev"] != float64(0) {
+			t.Errorf("stats.%s = %v, last.%s = %v", f, st, f, last[f])
+		}
+	}
+	// A 300 ms window is far too short for a confidence interval.
+	if m["bin_s"] != 0.5 || stats["ibus_a"].(map[string]any)["ci95"] != nil || m["shifts_truncated"] != false {
+		t.Errorf("bin_s %v, ci95 %v, shifts_truncated %v", m["bin_s"], stats["ibus_a"].(map[string]any)["ci95"], m["shifts_truncated"])
+	}
+}
+
+// adcPayload is the captured ADC reading with the current (amperes,
+// positive receptacle -> plug) and VBUS (volts) replaced.
+func adcPayload(t *testing.T, flowA, vbusV float64) []byte {
+	t.Helper()
+	p := slices.Clone(fakemeter.Frame(t, "bulk_W1_1_resp")[8:])
+	binary.LittleEndian.PutUint32(p[0x00:], uint32(int32(math.Round(vbusV*1e6))))
+	binary.LittleEndian.PutUint32(p[0x04:], uint32(int32(math.Round(-flowA*1e6)))) // the meter's sign is reversed
+	return p
+}
+
+// A step in the meter's reading comes out of measure as one shift, located
+// in time, with the levels on either side.
+func TestCLIMeasureStep(t *testing.T) {
+	c := newCLI(t)
+	for range 20 {
+		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.134, 5.076))
+	}
+	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.441, 5.076))
+	if code := c.run(context.Background(), "measure", "--duration", "1s", "--interval", "20ms", "--bin", "100ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	checkShape(t, "measure", m)
+	shifts := m["shifts"].([]any)
+	if len(shifts) != 1 {
+		t.Fatalf("shifts %v", shifts)
+	}
+	s := shifts[0].(map[string]any)
+	if s["field"] != "ibus_a" || s["kind"] != "step" || s["from"] != 0.134 || s["to"] != 0.441 ||
+		s["t_s"].(float64) < 0.2 || s["t_s"].(float64) > 0.8 || m["direction"] != "receptacle_to_plug" {
+		t.Errorf("shift %v, direction %v", s, m["direction"])
+	}
+}
+
+// direction describes the mean current of the window, not the last reading.
+func TestCLIMeasureDirectionFromMean(t *testing.T) {
+	c := newCLI(t)
+	for range 12 {
+		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, -0.2, 5.076))
+	}
+	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.05, 5.076))
+	if code := c.run(context.Background(), "measure", "--duration", "300ms", "--interval", "20ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	if m["direction"] != "plug_to_receptacle" || m["last"].(map[string]any)["direction"] != "receptacle_to_plug" {
+		t.Errorf("direction %v, last direction %v", m["direction"], m["last"].(map[string]any)["direction"])
+	}
 }
 
 // Failed samples are counted, the result is printed, and the exit status is
@@ -200,6 +266,11 @@ func TestCLIMeasureInterrupted(t *testing.T) {
 	checkShape(t, "measure", m)
 	if m["end_reason"] != "interrupted" || m["samples"].(float64) < 1 || m["duration_s"].(float64) > 5 {
 		t.Errorf("measure %v", m)
+	}
+	// The bins cover the time actually measured, not the requested 30 s.
+	bins := m["bins"].([]any)
+	if lastBin := bins[len(bins)-1].(map[string]any); lastBin["t_s"].(float64) >= m["duration_s"].(float64) {
+		t.Errorf("%d bins, the last starting at %v s, for a %v s window", len(bins), lastBin["t_s"], m["duration_s"])
 	}
 	if c.fm.Connected {
 		t.Error("session left open after an interrupt")
@@ -280,22 +351,62 @@ func TestCLIMeasureBins(t *testing.T) {
 	}
 }
 
+// The text layout, line by line, from a hand-built result with round
+// values: units and scaling of every row, the interval only where there is
+// one, D+ and D- each from their own stats, an empty bin as a gap in the
+// sparkline, steps and ramps, and the truncation note.
 func TestMeasureText(t *testing.T) {
-	ss := series(20, 0.1, 0.002, 9, func(t float64) float64 {
-		if t >= 12 {
-			return 0.441
-		}
-		return 0.134
-	})
-	a := analyze(ss, 20, 0.5, 0)
+	r := measureResult{Serial: "050002", DurationS: 60, Samples: 600, FailedSamples: 2, Direction: "receptacle_to_plug",
+		EndReason: "completed", EnergyWh: 0.0211, ChargeMAh: 4.1667, IntegratedS: 59.9,
+		Stats: measureStats{
+			VBusV:  &statJSON{Min: 5.07, Mean: 5.076, Max: 5.08, Last: 5.076, Stdev: 0.002, P5: 5.072, P50: 5.076, P95: 5.079, CI95: new(0.0005)},
+			IBusA:  &statJSON{Min: 0.12, Mean: 0.25, Max: 0.45, Last: 0.44, Stdev: 0.15, P5: 0.13, P50: 0.2, P95: 0.44, CI95: new(0.0004)},
+			PowerW: &statJSON{Min: 0.6, Mean: 1.27, Max: 2.29, Last: 2.23, Stdev: 0.76, P5: 0.66, P50: 1.01, P95: 2.23},
+			TempC:  &statJSON{Min: 27.9, Mean: 28, Max: 28.1, Last: 28, Stdev: 0.05, P5: 27.9, P50: 28, P95: 28.1, CI95: new(0.01)},
+			DPV:    &statJSON{Min: 0.01, Max: 3},
+			DMV:    &statJSON{Min: 0.002, Max: 0.004},
+		},
+		BinS: 20, Bins: []binJSON{
+			{TS: 0, Samples: 200, IBusA: &rangeJSON{Mean: 0.13}},
+			{TS: 20},
+			{TS: 40, Samples: 200, IBusA: &rangeJSON{Mean: 0.44}},
+		},
+		Shifts: []shiftJSON{
+			{TS: 12.5, Field: "dp_v", Kind: kindStep, From: 3, To: 0.01},
+			{TS: 41.2, Field: "ibus_a", Kind: kindStep, From: 0.134, To: 0.441},
+			{TS: 45, Field: "vbus_v", Kind: kindRamp, DurationS: 3.5, From: 5, To: 9},
+		},
+		ShiftsTruncated: true,
+	}
 	var b strings.Builder
-	printMeasureText(&b, style{}, measureResult{Serial: "050002", DurationS: 20, Samples: len(ss), Direction: "receptacle_to_plug",
-		EndReason: "completed", Stats: a.Stats, BinS: a.BinS, Bins: a.Bins, Shifts: a.Shifts})
-	out := b.String()
-	for _, want := range []string{"IBUS  mean 256.", " mA", "±", "p95", "IBUS per 0.5s bin", "shift at 12.000s  ibus_a  133.7 -> 441.5 mA", "D+ 3.000..3.000 V"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("text output lacks %q:\n%s", want, out)
-		}
+	printMeasureText(&b, style{}, r)
+	want := strings.Join([]string{
+		"POWER-Z measure  050002  60.0s  600 samples  2 failed  flow receptacle_to_plug  (completed)",
+		"  VBUS  mean 5.0760 ±0.0005 V   min 5.0700  p5 5.0720  p50 5.0760  p95 5.0790  max 5.0800  sd 0.0020",
+		"  IBUS  mean 250.000 ±0.400 mA   min 120.000  p5 130.000  p50 200.000  p95 440.000  max 450.000  sd 150.000",
+		"  PWR   mean 1.2700 W   min 0.6000  p5 0.6600  p50 1.0100  p95 2.2300  max 2.2900  sd 0.7600",
+		"  TEMP  mean 28.00 ±0.01 °C   min 27.90  p5 27.90  p50 28.00  p95 28.10  max 28.10  sd 0.05",
+		"  D+ 0.010..3.000 V   D- 0.002..0.004 V",
+		"  energy 0.021100 Wh   charge 4.1667 mAh   over 59.900 s",
+		"  IBUS per 20s  ▁ █",
+		"  step at 12.500s  dp_v  3.000 -> 0.010 V",
+		"  step at 41.200s  ibus_a  134.0 -> 441.0 mA",
+		"  ramp over 3.500s from 45.000s  vbus_v  5.000 -> 9.000 V",
+		"  (more shifts than listed: at most 32 per field)",
+		"",
+	}, "\n")
+	if got := b.String(); got != want {
+		t.Errorf("text output:\n%s\nwant:\n%s", got, want)
+	}
+	// Many bins are averaged down to the sparkline width, not cut.
+	many := measureResult{BinS: 1}
+	for k := range 1000 {
+		many.Bins = append(many.Bins, binJSON{TS: float64(k), Samples: 10, IBusA: &rangeJSON{Mean: float64(k)}})
+	}
+	b.Reset()
+	printMeasureText(&b, style{}, many)
+	if !strings.Contains(b.String(), "  IBUS per 9s  ▁") || !strings.Contains(b.String(), "█\n") {
+		t.Errorf("1000 bins:\n%s", b.String())
 	}
 }
 

@@ -39,6 +39,7 @@ func f6(v float64) string {
 
 var sparkRunes = []rune("▁▂▃▄▅▆▇█")
 
+// sparkline draws the last width values; NaN marks a gap (drawn as a space).
 func sparkline(vals []float64, width int) string {
 	if len(vals) > width {
 		vals = vals[len(vals)-width:]
@@ -46,13 +47,19 @@ func sparkline(vals []float64, width int) string {
 	if len(vals) == 0 {
 		return ""
 	}
-	lo, hi := vals[0], vals[0]
+	lo, hi := math.Inf(1), math.Inf(-1)
 	for _, v := range vals {
-		lo = math.Min(lo, v)
-		hi = math.Max(hi, v)
+		if !math.IsNaN(v) {
+			lo = math.Min(lo, v)
+			hi = math.Max(hi, v)
+		}
 	}
 	var b strings.Builder
 	for _, v := range vals {
+		if math.IsNaN(v) {
+			b.WriteByte(' ')
+			continue
+		}
 		idx := 0
 		if hi > lo {
 			idx = int((v - lo) / (hi - lo) * float64(len(sparkRunes)-1))

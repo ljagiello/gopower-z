@@ -133,6 +133,7 @@ type measureResult struct {
 	BinS            float64      `json:"bin_s"`
 	Bins            []binJSON    `json:"bins"`
 	Shifts          []shiftJSON  `json:"shifts"`
+	ShiftsTruncated bool         `json:"shifts_truncated"`
 	EnergyWh        float64      `json:"energy_wh"`
 	ChargeMAh       float64      `json:"charge_mah"`
 	Last            *snapshot    `json:"last"`
@@ -210,7 +211,6 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		}
 
 		var samples []sample
-		var meterPeriod float64 // seconds between the meter's own samples; 0 if unknown
 		var in integrator
 		var last *snapshot
 		var lastErr, stop error
@@ -251,9 +251,6 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 				in.add(now, a.FlowPower(), a.FlowA())
 				samples = append(samples, sample{T: now.Sub(start).Seconds(), V: a.VBus(), I: a.FlowA(), P: a.FlowPower(),
 					DP: a.DPV(), DM: a.DMV(), Temp: a.TempC(), TempOK: a.TempValid()})
-				if sps := km003c.SampleRate(a.RateIndex).SamplesPerSecond(); a.RateIndex >= 0 && sps > 0 {
-					meterPeriod = 1 / float64(sps)
-				}
 				s := toSnapshot(a, now, m.usb.Serial, m.FirmwareVersion(), m.firmwareError())
 				last = &s
 				res.Samples++
@@ -277,8 +274,8 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		// A completed window ends a little after --duration (the last read and
 		// the timer); analysing that tail as its own bin would add a sliver.
 		window := math.Min(end.Sub(start).Seconds(), duration.Seconds())
-		an := analyze(samples, window, binW.Seconds(), meterPeriod)
-		res.Stats, res.BinS, res.Bins, res.Shifts = an.Stats, an.BinS, an.Bins, an.Shifts
+		an := analyze(samples, window, binW.Seconds())
+		res.Stats, res.BinS, res.Bins, res.Shifts, res.ShiftsTruncated = an.Stats, an.BinS, an.Bins, an.Shifts, an.ShiftsTruncated
 		res.Direction = string(km003c.FlowNone)
 		if an.Stats.IBusA != nil {
 			res.Direction = meanDirection(an.Stats.IBusA.Mean)
@@ -344,21 +341,40 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 		_, _ = fmt.Fprintf(w, "  D+ %.3f..%.3f V   D- %.3f..%.3f V\n", r.Stats.DPV.Min, r.Stats.DPV.Max, r.Stats.DMV.Min, r.Stats.DMV.Max)
 	}
 	_, _ = fmt.Fprintf(w, "  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
-	var means []float64
-	for _, b := range r.Bins {
-		if b.IBusA != nil {
-			means = append(means, b.IBusA.Mean)
+	// The sparkline covers the whole window: groups of bins are averaged down
+	// to at most sparkWidth columns, and empty bins stay as gaps.
+	const sparkWidth = 120
+	if len(r.Bins) > 1 {
+		group := (len(r.Bins) + sparkWidth - 1) / sparkWidth
+		var cols []float64
+		for i := 0; i < len(r.Bins); i += group {
+			sum, n := 0.0, 0
+			for _, b := range r.Bins[i:min(i+group, len(r.Bins))] {
+				if b.IBusA != nil {
+					sum, n = sum+b.IBusA.Mean*float64(b.Samples), n+b.Samples
+				}
+			}
+			if n == 0 {
+				cols = append(cols, math.NaN())
+			} else {
+				cols = append(cols, sum/float64(n))
+			}
 		}
-	}
-	if len(means) > 1 {
-		_, _ = fmt.Fprintf(w, "  IBUS per %gs bin  %s\n", r.BinS, sparkline(means, 120))
+		_, _ = fmt.Fprintf(w, "  IBUS per %gs  %s\n", r.BinS*float64(group), sparkline(cols, sparkWidth))
 	}
 	for _, s := range r.Shifts {
 		unit, scale, prec := "V", 1.0, 3
 		if s.Field == "ibus_a" {
 			unit, scale, prec = "mA", 1000, 1
 		}
-		_, _ = fmt.Fprintf(w, "  shift at %.3fs  %s  %.*f -> %.*f %s\n", s.TS, s.Field, prec, s.From*scale, prec, s.To*scale, unit)
+		what := "step at"
+		if s.Kind == kindRamp {
+			what = fmt.Sprintf("ramp over %.3fs from", s.DurationS)
+		}
+		_, _ = fmt.Fprintf(w, "  %s %.3fs  %s  %.*f -> %.*f %s\n", what, s.TS, s.Field, prec, s.From*scale, prec, s.To*scale, unit)
+	}
+	if r.ShiftsTruncated {
+		_, _ = fmt.Fprintf(w, "  (more shifts than listed: at most %d per field)\n", maxShiftsPerField)
 	}
 	if r.PD != nil {
 		_, _ = fmt.Fprintf(w, "  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)

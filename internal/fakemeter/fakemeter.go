@@ -98,6 +98,10 @@ type Meter struct {
 	Babble bool
 	// ADC, if set, replaces the 44-byte ADC payload of every ADC reply.
 	ADC []byte
+	// ADCSeq, if set, serves successive ADC replies in order; once it is
+	// down to its last payload, that one repeats. It takes precedence over
+	// ADC, so a test can drive a changing reading through a command.
+	ADCSeq [][]byte
 	// PD holds PD_PACKET payloads (12-byte status block plus records)
 	// served by successive PD reads; when empty, the captured idle payload
 	// is used.
@@ -248,6 +252,13 @@ func (m *Meter) getData(h km003c.Header) {
 }
 
 func (m *Meter) adc() []byte {
+	if len(m.ADCSeq) > 0 {
+		p := m.ADCSeq[0]
+		if len(m.ADCSeq) > 1 {
+			m.ADCSeq = m.ADCSeq[1:]
+		}
+		return p
+	}
 	if m.ADC != nil {
 		return m.ADC
 	}

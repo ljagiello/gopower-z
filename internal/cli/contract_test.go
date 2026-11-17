@@ -192,30 +192,35 @@ func TestSchemaContract(t *testing.T) {
 	if !kinds["message"] || !kinds["event"] || !kinds["undecoded"] {
 		t.Fatalf("sample does not cover every record kind: %v", kinds)
 	}
-	// A window with a current step (so shifts is populated) and a gap of
-	// failed readings (so one bin is empty and its value objects are null).
+	// A 40 s window with a current step and a VBUS ramp (so shifts holds
+	// both kinds), a gap of failed readings (so one bin is empty and its
+	// value objects are null), and a steady temperature (so ci95 is set).
 	var ss []sample
-	for k := range 100 {
+	for k := range 400 {
 		if k >= 20 && k < 30 {
 			continue
 		}
-		cur := 0.134
-		if k >= 60 {
+		cur, v := 0.134, 5+4*math.Min(1, math.Max(0, (float64(k)/10-5)/15))
+		if k >= 250 {
 			cur = 0.441
 		}
-		ss = append(ss, sample{T: float64(k) / 10, V: 5.076, I: cur, P: 5.076 * cur, DP: 3, DM: 0.002, Temp: 28, TempOK: k%2 == 0})
+		ss = append(ss, sample{T: float64(k) / 10, V: v, I: cur, P: v * cur, DP: 3, DM: 0.002, Temp: 28, TempOK: k%2 == 0})
 	}
-	an := analyze(ss, 10, 1, 0)
-	if len(an.Shifts) == 0 || an.Bins[2].Samples != 0 || an.Stats.IBusA.CI95 == nil {
-		t.Fatalf("sample analysis does not cover shifts, an empty bin and ci95: %+v", an)
+	an := analyze(ss, 40, 1)
+	shiftKinds := map[string]bool{}
+	for _, s := range an.Shifts {
+		shiftKinds[s.Kind] = true
+	}
+	if !shiftKinds[kindStep] || !shiftKinds[kindRamp] || an.Bins[2].Samples != 0 || an.Stats.TempC.CI95 == nil || an.Stats.IBusA.CI95 != nil {
+		t.Fatalf("sample analysis does not cover both shift kinds, an empty bin, a set and a null ci95: %+v", an)
 	}
 	m := measureResult{SchemaVersion: schemaVersion, Serial: "050002", FirmwareVersion: new("1.9.5"),
-		Start: utcTime(now), End: utcTime(now.Add(10 * time.Second)), EndReason: "completed", DurationS: 10, IntegratedS: 9.9,
-		IntervalS: 0.1, Samples: 90, FailedSamples: 10, LastError: new("timeout"), Direction: "receptacle_to_plug",
-		Stats: an.Stats, BinS: an.BinS, Bins: an.Bins, Shifts: an.Shifts,
+		Start: utcTime(now), End: utcTime(now.Add(40 * time.Second)), EndReason: "completed", DurationS: 40, IntegratedS: 39.9,
+		IntervalS: 0.1, Samples: 390, FailedSamples: 10, LastError: new("timeout"), Direction: "receptacle_to_plug",
+		Stats: an.Stats, BinS: an.BinS, Bins: an.Bins, Shifts: an.Shifts, ShiftsTruncated: true,
 		EnergyWh: 0.006, ChargeMAh: 1.2, Last: &snap, PD: sum}
 	checkShape(t, "measure", toAny(t, m))
-	none := analyze(nil, 0, 1, 0)
+	none := analyze(nil, 0, 1)
 	empty := measureResult{SchemaVersion: schemaVersion, Serial: "050002", Stats: none.Stats,
 		BinS: none.BinS, Bins: none.Bins, Shifts: none.Shifts,
 		FirmwareError: new("km003c: read timeout"), EndReason: "interrupted",
