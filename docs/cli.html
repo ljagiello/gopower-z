@@ -187,9 +187,9 @@ powerz schema</code></pre>
     "records": []
   }
 }</code></pre>
-<p>Captured before the following fields were added. Builds after v0.1.0 add <code>stdev</code>, <code>p5</code>, <code>p50</code> and <code>p95</code> to every <code>stats</code> entry, <code>stats.dp_v</code> and <code>stats.dm_v</code>, and the <code>bin_s</code> and <code>bins</code> described next.</p>
+<p>Captured with v0.1.0. v0.2.0 adds <code>stdev</code>, <code>p5</code>, <code>p50</code> and <code>p95</code> to every <code>stats</code> entry, <code>stats.dp_v</code> and <code>stats.dm_v</code>, and the <code>bin_s</code> and <code>bins</code> described next.</p>
 
-<h3 id="shape">Shape over time: <code>bins</code> (after v0.1.0)</h3>
+<h3 id="shape">Shape over time: <code>bins</code> (v0.2.0)</h3>
 <p>Min, mean and max show that the current moved between about 134 and 441 mA, but not when or how: one step partway through, or switching back and forth. <code>bins</code> cuts the window into <code>bin_s</code> slices, each with the min, mean and max of <code>vbus_v</code>, <code>ibus_a</code> and <code>power_w</code>. The width is automatic, chosen when the window ends from the time actually measured (at least 5 polling intervals per bin, at most 120 bins), so a long window stopped early keeps its shape; or it is set with <code>--bin 1s</code> (at least <code>--interval</code>, at most 1000 bins). Illustrative excerpt, computed by powerz with <code>--bin 1s</code> (the automatic width for 60 s would be 0.5 s) from a synthetic 60 s window in which the current steps from 134 to 441 mA at 42.3 s:</p>
 <pre><code>"stats": {
   "ibus_a": {"min": 0.124744, "mean": 0.224602, "max": 0.447845, "last": 0.43735, "stdev": 0.140219,
