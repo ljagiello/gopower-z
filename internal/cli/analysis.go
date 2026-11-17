@@ -410,10 +410,14 @@ func findShifts(ss []sample, bounds []int, window, binS float64, field string, f
 		levels[k] = level{splits[k], splits[k+1]}
 	}
 
-	// 3. Merge levels that do not last minLevelBins bins. A short level at
-	// an edge joins its neighbour. In the middle, a short level that returns
-	// to where it came from is a burst and all three merge; one between two
-	// different levels is part of the transition and joins the next level.
+	// 3. A level that does not last minLevelBins bins joins its neighbour
+	// (the next one, or the previous one at the end of the window). Then
+	// neighbours whose medians agree within the threshold are one level: a
+	// burst that joined the next level leaves that level's median where it
+	// was, so the burst disappears, while a short level that was part of a
+	// real transition leaves the change in place. Means would not do: a
+	// level that has absorbed a burst has a raised mean.
+	med := func(l level) float64 { return medianOf(ss, l.lo, l.hi, f) }
 	duration := func(l level) float64 {
 		stop := window
 		if l.hi < len(ss) {
@@ -426,37 +430,37 @@ func findShifts(ss []sample, bounds []int, window, binS float64, field string, f
 			i++
 			continue
 		}
-		switch {
-		case i == 0:
-			levels[1].lo = levels[0].lo
-			levels = slices.Delete(levels, 0, 1)
-		case i == len(levels)-1:
+		if i == len(levels)-1 {
 			levels[i-1].hi = levels[i].hi
 			levels = slices.Delete(levels, i, i+1)
 			i--
-		case math.Abs(meanOf(ss, levels[i-1].lo, levels[i-1].hi, f)-meanOf(ss, levels[i+1].lo, levels[i+1].hi, f)) > thr:
-			levels[i+1].lo = levels[i].lo
-			levels = slices.Delete(levels, i, i+1)
-		default:
-			levels[i-1].hi = levels[i+1].hi
-			levels = slices.Delete(levels, i, i+2)
-			i--
+			continue
 		}
-		i = max(i, 0)
+		levels[i+1].lo = levels[i].lo
+		levels = slices.Delete(levels, i, i+1)
+	}
+	for i := 1; i < len(levels); {
+		if math.Abs(med(levels[i])-med(levels[i-1])) <= thr {
+			levels[i-1].hi = levels[i].hi
+			levels = slices.Delete(levels, i, i+1)
+			continue
+		}
+		i++
 	}
 	if len(levels) < 2 {
 		return nil
 	}
 
-	// 4. Steps and ramps. drift is the sign of a level's change between its
-	// first and second half (0 when it is flat). A ramp cut into a staircase
-	// drifts within each level by about half the step between levels; a flat
-	// level drifts by noise only. So a level drifts when the change is at
-	// least 30% of its smaller neighbouring step and three standard errors
-	// of the bin noise.
-	means := make([]float64, len(levels))
+	// 4. Steps and ramps, again on medians so bursts inside a level neither
+	// move its value nor look like drift. drift is the sign of a level's
+	// change between its first and second half (0 when it is flat). A ramp
+	// cut into a staircase drifts within each level by about half the step
+	// between levels; a flat level drifts by noise only. So a level drifts
+	// when the change is at least 30% of its smaller neighbouring step and
+	// three standard errors of the bin noise.
+	means := make([]float64, len(levels)) // the level of each, as a median
 	for k, l := range levels {
-		means[k] = meanOf(ss, l.lo, l.hi, f)
+		means[k] = med(l)
 	}
 	drift := make([]float64, len(levels))
 	for k, l := range levels {
@@ -468,7 +472,7 @@ func findShifts(ss []sample, bounds []int, window, binS float64, field string, f
 		if h-l.lo < 2 || l.hi-h < 2 {
 			continue
 		}
-		d := meanOf(ss, h, l.hi, f) - meanOf(ss, l.lo, h, f)
+		d := medianOf(ss, h, l.hi, f) - medianOf(ss, l.lo, h, f)
 		step := math.Inf(1)
 		if k > 0 {
 			step = math.Abs(means[k] - means[k-1])
@@ -482,20 +486,20 @@ func findShifts(ss []sample, bounds []int, window, binS float64, field string, f
 		}
 	}
 	at := func(i int) float64 { return ss[min(i, len(ss)-1)].T }
-	// edgeMean is the mean of the first or last bin's worth of a level.
-	edgeMean := func(l level, last bool) float64 {
+	// edgeLevel is the median of the first or last bin's worth of a level.
+	edgeLevel := func(l level, last bool) float64 {
 		if last {
 			lo := l.hi - 1
 			for lo > l.lo && ss[l.hi-1].T-ss[lo-1].T < binS {
 				lo--
 			}
-			return meanOf(ss, lo, l.hi, f)
+			return medianOf(ss, lo, l.hi, f)
 		}
 		hi := l.lo + 1
 		for hi < l.hi && ss[hi].T-ss[l.lo].T < binS {
 			hi++
 		}
-		return meanOf(ss, l.lo, hi, f)
+		return medianOf(ss, l.lo, hi, f)
 	}
 	r := func(v float64) float64 { return round(v, decimals) }
 	var out []shiftJSON
@@ -528,15 +532,24 @@ func findShifts(ss []sample, bounds []int, window, binS float64, field string, f
 		}
 		from, to := means[k-1], means[j-1]
 		if first == k-1 {
-			from = edgeMean(levels[first], false)
+			from = edgeLevel(levels[first], false)
 		}
 		if last == j-1 {
-			to = edgeMean(levels[last], true)
+			to = edgeLevel(levels[last], true)
 		}
 		out = append(out, shiftJSON{TS: r3(start), Field: field, Kind: kindRamp, DurationS: r3(stop - start), From: r(from), To: r(to)})
 		k = j
 	}
 	return out
+}
+
+func medianOf(ss []sample, lo, hi int, f func(sample) float64) float64 {
+	xs := make([]float64, hi-lo)
+	for k, s := range ss[lo:hi] {
+		xs[k] = f(s)
+	}
+	slices.Sort(xs)
+	return quantile(xs, 0.5)
 }
 
 func meanOf(ss []sample, lo, hi int, f func(sample) float64) float64 {

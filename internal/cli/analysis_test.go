@@ -168,15 +168,96 @@ func TestShiftIgnoresShortBursts(t *testing.T) {
 			t.Fatalf("burst of %.2f s at %.2f s reported as %+v", length, at, a.Shifts)
 		}
 	}
-	// A radio waking briefly every 2.3 s.
-	ss := series(60, 0.05, 0.002, 9, func(t float64) float64 {
-		if math.Mod(t, 2.3) < 0.15 {
+	// Several bursts in one window: once a level has absorbed one burst, the
+	// next must still be recognised as a burst (levels are compared by
+	// median, which a burst does not move).
+	for name, c := range map[string]struct {
+		dt, binS float64
+		on       func(t float64) bool
+	}{
+		"radio every 2.3 s":                  {0.05, 0.5, func(t float64) bool { return math.Mod(t, 2.3) < 0.15 }},
+		"0.3 s every 5 s across 1 s edges":   {0.05, 1, func(t float64) bool { return math.Mod(t+0.15, 5) < 0.3 }},
+		"two 0.9 s bursts":                   {0.05, 0.5, func(t float64) bool { return (t >= 10 && t < 10.9) || (t >= 20 && t < 20.9) }},
+		"0.3-0.9 s bursts of varying length": {0.05, 0.5, func(t float64) bool { return math.Mod(t, 3.1) < 0.3+0.6*math.Abs(math.Sin(math.Floor(t/3.1))) }},
+	} {
+		ss := series(60, c.dt, 0.002, 9, func(t float64) float64 {
+			if c.on(t) {
+				return 0.35
+			}
+			return 0.09
+		})
+		if a := analyze(ss, 60, c.binS); len(a.Shifts) != 0 {
+			t.Errorf("%s reported as %+v", name, a.Shifts)
+		}
+	}
+}
+
+// A burst does not hide or distort a real step that follows it.
+func TestShiftBurstThenStep(t *testing.T) {
+	ss := series(60, 0.05, 0.002, 4, func(t float64) float64 {
+		switch {
+		case t >= 25 && t < 25.9:
 			return 0.35
+		case t >= 30:
+			return 0.105
 		}
 		return 0.09
 	})
-	if a := analyze(ss, 60, 0.5); len(a.Shifts) != 0 {
-		t.Errorf("periodic bursts reported as %+v", a.Shifts)
+	a := analyze(ss, 60, 0.5)
+	if len(a.Shifts) != 1 || a.Shifts[0].Kind != kindStep || !near(a.Shifts[0].TS, 30, 0.11) ||
+		!near(a.Shifts[0].From, 0.09, 0.001) || !near(a.Shifts[0].To, 0.105, 0.001) {
+		t.Errorf("shifts %+v, want one step 0.090 -> 0.105 at 30 s", a.Shifts)
+	}
+}
+
+// Random mixtures of steps, bursts, ramps and gaps: the analysis never
+// panics, always marshals, keeps shifts in order and inside the window, and
+// never lists a step smaller than the floor (a level change that is not
+// one).
+func TestShiftRandomMixtures(t *testing.T) {
+	r := rand.New(rand.NewPCG(42, 43))
+	for k := range 500 {
+		window := 10 + 110*r.Float64()
+		binS := []float64{0.5, 1, 2}[r.IntN(3)]
+		type feature struct{ at, length, height float64 }
+		var feats []feature
+		for range r.IntN(6) {
+			feats = append(feats, feature{window * r.Float64(), 3 * r.Float64(), 0.3*r.Float64() - 0.1})
+		}
+		level := 0.05 + 0.5*r.Float64()
+		slope := 0.0
+		if r.IntN(3) == 0 {
+			slope = (r.Float64() - 0.5) * 0.02
+		}
+		gapAt, gapLen := window*r.Float64(), 2*r.Float64()
+		var ss []sample
+		for _, s := range series(window, 0.05+0.1*r.Float64(), 0.001+0.02*r.Float64(), uint64(k), func(t float64) float64 {
+			v := level + slope*t
+			for _, f := range feats {
+				if t >= f.at && (f.length > 2 || t < f.at+f.length) {
+					v += f.height
+				}
+			}
+			return v
+		}) {
+			if s.T < gapAt || s.T >= gapAt+gapLen {
+				ss = append(ss, s)
+			}
+		}
+		a := analyze(ss, window, binS)
+		if _, err := json.Marshal(measureResult{Stats: a.Stats, BinS: a.BinS, Bins: a.Bins, Shifts: a.Shifts}); err != nil {
+			t.Fatalf("case %d: %v", k, err)
+		}
+		for i, s := range a.Shifts {
+			// t_s and duration_s are rounded to milliseconds.
+			if s.TS < 0 || s.TS > window+5e-4 || s.DurationS < 0 || s.TS+s.DurationS > window+1e-3 ||
+				(i > 0 && s.TS < a.Shifts[i-1].TS) {
+				t.Fatalf("case %d: shift %d out of place: %+v", k, i, a.Shifts)
+			}
+			if s.Field == "ibus_a" && s.Kind == kindStep && math.Abs(s.To-s.From) <= 0.005 {
+				t.Fatalf("case %d: a step smaller than the 5 mA floor: %+v", k, s)
+			}
+		}
 	}
 }
 
@@ -221,17 +302,20 @@ func TestShiftCapPerField(t *testing.T) {
 // stays a list of steps.
 func TestShiftRamps(t *testing.T) {
 	cases := []struct {
-		name       string
-		window     float64
-		binS       float64
-		cur        func(float64) float64
-		at, length float64
-		from, to   float64
+		name           string
+		window         float64
+		binS           float64
+		cur            func(float64) float64
+		at             float64
+		minLen, maxLen float64
+		from, to       float64
 	}{
-		{"linear ramp", 60, 0.5, func(t float64) float64 { return 0.1 + 0.25*t/60 }, 0, 60, 0.1, 0.35},
-		{"exponential decay", 60, 0.5, func(t float64) float64 { return 0.1 + 0.9*math.Exp(-t/10) }, 0, 60, 0.98, 0.1},
-		{"CV taper", 600, 5, func(t float64) float64 { return 0.5 + 1.5*math.Exp(-t/200) }, 0, 600, 1.98, 0.59},
-		{"flat, ramp, flat", 60, 0.5, func(t float64) float64 { return 0.1 + 0.3*math.Min(1, math.Max(0, (t-20)/20)) }, 21, 18, 0.1, 0.4},
+		{"linear ramp", 60, 0.5, func(t float64) float64 { return 0.1 + 0.25*t/60 }, 0, 54, 60, 0.1, 0.35},
+		// After about 30 s the decay is slower than the bin noise, so the
+		// ramp may end there and the tail count as the level it settles at.
+		{"exponential decay", 60, 0.5, func(t float64) float64 { return 0.1 + 0.9*math.Exp(-t/10) }, 0, 25, 60, 0.98, 0.1},
+		{"CV taper", 600, 5, func(t float64) float64 { return 0.5 + 1.5*math.Exp(-t/200) }, 0, 450, 600, 1.98, 0.59},
+		{"flat, ramp, flat", 60, 0.5, func(t float64) float64 { return 0.1 + 0.3*math.Min(1, math.Max(0, (t-20)/20)) }, 21, 14, 22, 0.1, 0.4},
 	}
 	for _, c := range cases {
 		a := analyze(series(c.window, 0.1, 0.003, 3, c.cur), c.window, c.binS)
@@ -240,10 +324,9 @@ func TestShiftRamps(t *testing.T) {
 			continue
 		}
 		s := a.Shifts[0]
-		tol := 0.1 * c.window
-		if s.Kind != kindRamp || !near(s.TS, c.at, tol) || !near(s.DurationS, c.length, tol) ||
+		if s.Kind != kindRamp || !near(s.TS, c.at, 0.1*c.window) || s.DurationS < c.minLen || s.DurationS > c.maxLen ||
 			!near(s.From, c.from, 0.03) || !near(s.To, c.to, 0.03) {
-			t.Errorf("%s: %+v, want a ramp from %.2f to %.2f over about %v s from %v s", c.name, s, c.from, c.to, c.length, c.at)
+			t.Errorf("%s: %+v, want a ramp from %.2f to %.2f lasting %v-%v s from %v s", c.name, s, c.from, c.to, c.minLen, c.maxLen, c.at)
 		}
 	}
 	stairs := analyze(series(60, 0.1, 0.003, 7, func(t float64) float64 { return 0.1 + 0.1*math.Floor(t/15) }), 60, 0.5)
