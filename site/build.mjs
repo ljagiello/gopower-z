@@ -213,6 +213,19 @@ async function buildDoc(page) {
     el.attr("href", cleanHref(el.attr("href")));
   });
 
+  // Shell comments in code blocks render muted so the commands stand out.
+  // Only plain-text blocks that are not JSON output are touched.
+  main.find("pre > code").each((_, el) => {
+    const code = $(el);
+    if (code.children().length || /^\s*[{[]/.test(code.text())) return;
+    const marked = code
+      .html()
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)(#(?![0-9a-fx]+;).*)$/i, '$1<span class="c">$2</span>'))
+      .join("\n");
+    code.html(marked);
+  });
+
   const used = new Set();
   main.find("[id]").each((_, el) => used.add($(el).attr("id")));
   main.find("h2, h3").each((_, el) => {

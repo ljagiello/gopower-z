@@ -185,9 +185,11 @@
     const pick = () => {
       queued = false;
       if (!rail.offsetParent) return; // rail hidden on narrow screens
+      // A section counts as current once its heading passes 30% of the viewport.
+      const line = Math.max(140, innerHeight * 0.3);
       let current = null;
       for (const h of heads) {
-        if (h.getBoundingClientRect().top < 140) current = h;
+        if (h.getBoundingClientRect().top < line) current = h;
         else break;
       }
       railLinks.forEach((a) => a.classList.remove("active"));
