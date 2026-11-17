@@ -1,11 +1,11 @@
-package main
+package cli
 
 import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ljagiello/gopower-z/hardware/km003c"
+	"github.com/spf13/pflag"
 )
 
 func TestClassify(t *testing.T) {
@@ -63,20 +64,21 @@ func noMeterEnv(t *testing.T) (*env, *bytes.Buffer, *bytes.Buffer) {
 func TestUsageErrorsExitTwo(t *testing.T) {
 	for _, args := range [][]string{
 		{"frobnicate"},
-		{"read", "-bogus"},
+		{"read", "--bogus"},
 		{"read", "extra-arg"},
-		{"measure", "-duration", "0s"},
-		{"measure", "-interval", "5ms"},
-		{"log", "-format", "xml"},
-		{"log", "-n", "-1"},
-		{"pd", "-interval", "0s"},
-		{"read", "-timeout", "50ms"},
-		{"read", "-wait", "-1s"},
-		{"measure", "-duration", "banana"},
-		{"watch"}, // not a terminal
+		{"measure", "--duration", "0s"},
+		{"measure", "--interval", "5ms"},
+		{"log", "--format", "xml"},
+		{"log", "--count", "-1"},
+		{"pd", "--interval", "0s"},
+		{"read", "--timeout", "50ms"},
+		{"read", "--wait", "-1s"},
+		{"measure", "--duration", "banana"},
+		{"measure", "-duration", "1s"}, // single-dash long flag
+		{"watch"},                      // not a terminal
 	} {
 		e, out, errb := noMeterEnv(t)
-		if got := run(context.Background(), e, append([]string{"-json"}, args...)); got != exitUsage {
+		if got := run(context.Background(), e, append([]string{"--json"}, args...)); got != exitUsage {
 			t.Errorf("run(%v) = %d, want %d", args, got, exitUsage)
 		}
 		if out.Len() != 0 || !strings.Contains(errb.String(), `"code":"usage"`) {
@@ -86,25 +88,53 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 }
 
 func TestUsageHints(t *testing.T) {
-	if got := nearestCommand("mesure"); got != "measure" {
-		t.Errorf("nearestCommand(mesure) = %q", got)
+	hint := func(args ...string) string {
+		t.Helper()
+		e, _, errb := noMeterEnv(t)
+		if code := run(context.Background(), e, append([]string{"--json"}, args...)); code != exitUsage {
+			t.Fatalf("%v: exit %d", args, code)
+		}
+		var v struct {
+			Error cliError `json:"error"`
+		}
+		if err := json.Unmarshal(errb.Bytes(), &v); err != nil {
+			t.Fatalf("%v: stderr %q", args, errb.String())
+		}
+		return v.Error.Hint
 	}
-	if got := nearestCommand("zzzzzzzz"); got != "" {
-		t.Errorf("nearestCommand(zzzzzzzz) = %q", got)
+	if h := hint("mesure"); !strings.Contains(h, "did you mean `powerz measure`") {
+		t.Errorf("unknown command hint %q", h)
+	}
+	if h := hint("zzzzzzzz"); strings.Contains(h, "did you mean") || !strings.Contains(h, "measure") {
+		t.Errorf("no-suggestion hint %q", h)
+	}
+	if h := hint("measure", "-duration", "1s"); !strings.Contains(h, "two dashes") || !strings.Contains(h, "--duration") {
+		t.Errorf("single-dash hint %q", h)
+	}
+	if h := hint("measure", "--duration", "banana"); !strings.Contains(h, "durations look like") {
+		t.Errorf("bad duration hint %q", h)
+	}
+}
+
+// --help prints cobra's help on stdout and exits 0 without touching the
+// meter; --version prints the version.
+func TestHelpAndVersionFlags(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"measure", "--help"}, {"--version"}, {"help", "pd"}} {
+		e, out, _ := noMeterEnv(t)
+		if code := run(context.Background(), e, args); code != exitOK || out.Len() == 0 {
+			t.Errorf("%v: exit %d, stdout %q", args, code, out.String())
+		}
 	}
 }
 
 // Flag help must not contain backquotes: Go's flag package turns
 // `quoted` text into the argument name shown by -h.
 func TestFlagUsageHasNoBackquotes(t *testing.T) {
-	for name, c := range commands {
-		fs := flag.NewFlagSet(name, flag.ContinueOnError)
-		var g globals
-		addCommon(fs, &g)
-		c.setup(fs)
-		fs.VisitAll(func(f *flag.Flag) {
+	root := newRootCmd(&globals{env: &env{}})
+	for _, c := range append(root.Commands(), root) {
+		c.Flags().VisitAll(func(f *pflag.Flag) {
 			if strings.Contains(f.Usage, "`") {
-				t.Errorf("%s -%s usage contains a backquote: %q", name, f.Name, f.Usage)
+				t.Errorf("%s --%s usage contains a backquote: %q", c.Name(), f.Name, f.Usage)
 			}
 		})
 	}

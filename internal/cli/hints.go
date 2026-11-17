@@ -1,4 +1,4 @@
-package main
+package cli
 
 // ccInfo is powerz's interpretation of the CC line voltages as seen by an
 // inline meter: which CC line carries the Type-C connection and what current

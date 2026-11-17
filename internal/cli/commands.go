@@ -1,10 +1,9 @@
-package main
+package cli
 
 import (
 	"context"
 	"encoding/csv"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ljagiello/gopower-z/hardware/km003c"
+	"github.com/spf13/pflag"
 )
 
 func isBrokenPipe(err error) bool {
@@ -23,8 +23,8 @@ func isBrokenPipe(err error) bool {
 // silently changing them).
 func checkInterval(cmd string, d, minimum time.Duration) error {
 	if d < minimum {
-		return withHint(usageErr("%s: -interval must be at least %v (got %v)", cmd, minimum, d),
-			fmt.Sprintf("use e.g. -interval %v; the meter itself samples at 2-1000 SPS, so faster polling only repeats values", max(minimum, 100*time.Millisecond)))
+		return withHint(usageErr("%s: --interval must be at least %v (got %v)", cmd, minimum, d),
+			fmt.Sprintf("use e.g. --interval %v; the meter itself samples at 2-1000 SPS, so faster polling only repeats values", max(minimum, 100*time.Millisecond)))
 	}
 	return nil
 }
@@ -42,7 +42,7 @@ func endReason(stop error) string {
 
 // ---------------------------------------------------------------- read
 
-func setupRead(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupRead(fs *pflag.FlagSet) func(context.Context, globals) error {
 	return func(ctx context.Context, g globals) error {
 		m, err := open(ctx, g)
 		if err != nil {
@@ -179,13 +179,13 @@ func fatalMidRun(err error) bool {
 	return errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) || errors.Is(err, km003c.ErrStuck)
 }
 
-func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 	duration := fs.Duration("duration", 5*time.Second, "how long to sample")
 	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval, at least 20ms (the meter's own sample rate bounds how often values change)")
 	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract, records)")
 	return func(ctx context.Context, g globals) error {
 		if *duration <= 0 {
-			return usageErr("measure: -duration must be positive (e.g. 10s)")
+			return usageErr("measure: --duration must be positive (e.g. 10s)")
 		}
 		if err := checkInterval("measure", *interval, 20*time.Millisecond); err != nil {
 			return err
@@ -336,18 +336,18 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 
 // ---------------------------------------------------------------- log
 
-// csvColumns are the columns of `log -format csv`, in order.
+// csvColumns are the columns of `log --format csv`, in order.
 var csvColumns = []string{"time", "vbus_v", "ibus_a", "power_w", "direction", "vbus_avg_v", "ibus_avg_a",
 	"power_avg_w", "temp_c", "cc1_v", "cc2_v", "dp_v", "dm_v", "vdd_v"}
 
-func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupLog(fs *pflag.FlagSet) func(context.Context, globals) error {
 	interval := fs.Duration("interval", 200*time.Millisecond, "sampling interval, at least 20ms")
 	format := fs.String("format", "", "jsonl or csv (default: jsonl in JSON mode, csv otherwise); csv columns: "+strings.Join(csvColumns, ","))
-	count := fs.Int("n", 0, "stop after n samples (0 = no limit)")
-	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; automation should always set -duration or -n)")
+	count := fs.IntP("count", "n", 0, "stop after this many samples (0 = no limit)")
+	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; automation should always set --duration or --count)")
 	return func(ctx context.Context, g globals) error {
 		if *count < 0 || *duration < 0 {
-			return usageErr("log: -n and -duration must not be negative")
+			return usageErr("log: --count and --duration must not be negative")
 		}
 		if err := checkInterval("log", *interval, 20*time.Millisecond); err != nil {
 			return err
@@ -379,7 +379,7 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 				return w.Error()
 			}
 		default:
-			return usageErr("log: unknown -format %q (want jsonl or csv)", f)
+			return usageErr("log: unknown --format %q (want jsonl or csv)", f)
 		}
 
 		m, err := open(ctx, g)
@@ -451,14 +451,14 @@ func newPDEnd(sum *pdSummary, now time.Time, durationS float64, reason string) p
 		SourceCapabilities: sum.SourceCapabilities, LastRequest: sum.LastRequest, Contract: sum.Contract, Note: sum.Note}
 }
 
-func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupPD(fs *pflag.FlagSet) func(context.Context, globals) error {
 	interval := fs.Duration("interval", 25*time.Millisecond, "polling interval, at least 10ms (the meter buffers PD traffic between polls)")
-	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; automation should always set -duration)")
-	count := fs.Int("n", 0, "stop after n records (0 = no limit; without PD traffic it waits, so combine with -duration)")
+	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; automation should always set --duration)")
+	count := fs.IntP("count", "n", 0, "stop after this many records (0 = no limit; without PD traffic it waits, so combine with --duration)")
 	goodCRC := fs.Bool("goodcrc", false, "include GoodCRC acknowledgements")
 	return func(ctx context.Context, g globals) error {
 		if *count < 0 || *duration < 0 {
-			return usageErr("pd: -n and -duration must not be negative")
+			return usageErr("pd: --count and --duration must not be negative")
 		}
 		if err := checkInterval("pd", *interval, 10*time.Millisecond); err != nil {
 			return err
@@ -583,7 +583,7 @@ func splitErrors(err error) []error {
 	return []error{err}
 }
 
-func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupInfo(fs *pflag.FlagSet) func(context.Context, globals) error {
 	return func(ctx context.Context, g globals) error {
 		m, err := open(ctx, g)
 		if err != nil {
@@ -677,7 +677,7 @@ type devicesResult struct {
 	Devices       []km003c.USBDescription `json:"devices"`
 }
 
-func setupDevices(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupDevices(fs *pflag.FlagSet) func(context.Context, globals) error {
 	return func(_ context.Context, g globals) error {
 		devs, err := g.env.listUSB()
 		if err != nil {

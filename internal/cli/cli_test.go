@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -55,7 +55,7 @@ func (c *cli) env() *env {
 
 func (c *cli) run(ctx context.Context, args ...string) int {
 	c.t.Helper()
-	code := run(ctx, c.env(), append([]string{"-timeout", "100ms"}, args...))
+	code := run(ctx, c.env(), append([]string{"--timeout", "100ms"}, args...))
 	if c.opened && !c.fm.Closed {
 		c.t.Errorf("%v: the meter was not closed", args)
 	}
@@ -159,7 +159,7 @@ func TestCLIReadFirmwareUnknown(t *testing.T) {
 func TestCLIMeasure(t *testing.T) {
 	c := newCLI(t)
 	c.fm.PD = [][]byte{negotiation()}
-	if code := c.run(context.Background(), "measure", "-duration", "300ms", "-interval", "20ms"); code != exitOK {
+	if code := c.run(context.Background(), "measure", "--duration", "300ms", "--interval", "20ms"); code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	m := c.one()
@@ -176,7 +176,7 @@ func TestCLIMeasure(t *testing.T) {
 func TestCLIMeasureFailedSamples(t *testing.T) {
 	c := newCLI(t)
 	c.fm.DropOnly, c.fm.DropReplies = km003c.TypeGetData, 2 // one sample: both attempts
-	code := c.run(context.Background(), "measure", "-duration", "700ms", "-interval", "20ms", "-pd=false")
+	code := c.run(context.Background(), "measure", "--duration", "700ms", "--interval", "20ms", "--pd=false")
 	if code != exitPartial || c.errCode() != "partial" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -192,7 +192,7 @@ func TestCLIMeasureInterrupted(t *testing.T) {
 	c := newCLI(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(400*time.Millisecond, cancel)
-	code := c.run(ctx, "measure", "-duration", "30s", "-interval", "20ms")
+	code := c.run(ctx, "measure", "--duration", "30s", "--interval", "20ms")
 	if code != exitInterrupt || c.errCode() != "interrupted" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -213,7 +213,7 @@ func TestCLIMeasureInterruptedDuringRead(t *testing.T) {
 	c.fm.SilentAfter = 6 // CONNECT, MemoryRead, a few samples, then nothing
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(600*time.Millisecond, cancel)
-	code := run(ctx, c.env(), []string{"-timeout", "1s", "measure", "-duration", "30s", "-interval", "20ms"})
+	code := run(ctx, c.env(), []string{"--timeout", "1s", "measure", "--duration", "30s", "--interval", "20ms"})
 	if code != exitInterrupt || c.errCode() != "interrupted" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -230,7 +230,7 @@ func TestCLIMeasureMeterGone(t *testing.T) {
 	c := newCLI(t)
 	c.fm.GoneAfter = 8 // CONNECT, MemoryRead, a few samples
 	c.fm.ErrGone = fmt.Errorf("%w (bulk write: no device)", km003c.ErrNotFound)
-	code := c.run(context.Background(), "measure", "-duration", "10s", "-interval", "20ms")
+	code := c.run(context.Background(), "measure", "--duration", "10s", "--interval", "20ms")
 	if code != exitNotFound || c.errCode() != "not_found" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -244,7 +244,7 @@ func TestCLIMeasureMeterGone(t *testing.T) {
 func TestCLIMeasureNoSamples(t *testing.T) {
 	c := newCLI(t)
 	c.fm.DropOnly, c.fm.DropReplies = km003c.TypeGetData, 1000
-	code := c.run(context.Background(), "measure", "-duration", "250ms", "-interval", "20ms")
+	code := c.run(context.Background(), "measure", "--duration", "250ms", "--interval", "20ms")
 	if code != exitTimeout || c.errCode() != "timeout" || c.stdout.Len() != 0 {
 		t.Fatalf("exit %d, stdout %q, stderr %s", code, c.stdout.String(), c.stderr.String())
 	}
@@ -256,7 +256,7 @@ func TestCLIPD(t *testing.T) {
 		negotiation(),
 		pdPayload(pdMsg(10_000, 5, hdrAccept), []byte{0x81, 0xFF}), // reserved SOP, trailing bytes
 	}
-	if code := c.run(context.Background(), "pd", "-duration", "300ms"); code != exitOK {
+	if code := c.run(context.Background(), "pd", "--duration", "300ms"); code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	lines := c.lines()
@@ -289,7 +289,7 @@ func TestCLIPDMeterGone(t *testing.T) {
 	c.fm.PD = [][]byte{negotiation()}
 	c.fm.GoneAfter = 3
 	c.fm.ErrGone = fmt.Errorf("%w (bulk write: no device)", km003c.ErrNotFound)
-	code := c.run(context.Background(), "pd", "-duration", "10s")
+	code := c.run(context.Background(), "pd", "--duration", "10s")
 	if code != exitNotFound || c.errCode() != "not_found" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -305,7 +305,7 @@ func TestCLIPDInterrupted(t *testing.T) {
 	c := newCLI(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(150*time.Millisecond, cancel)
-	code := c.run(ctx, "pd", "-duration", "30s")
+	code := c.run(ctx, "pd", "--duration", "30s")
 	if code != exitInterrupt || c.errCode() != "interrupted" {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
@@ -320,7 +320,7 @@ func TestCLIPDInterrupted(t *testing.T) {
 func TestCLIPDCount(t *testing.T) {
 	c := newCLI(t)
 	c.fm.PD = [][]byte{negotiation()}
-	if code := c.run(context.Background(), "pd", "-n", "2", "-duration", "5s"); code != exitOK {
+	if code := c.run(context.Background(), "pd", "--count", "2", "--duration", "5s"); code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	if lines := c.lines(); len(lines) != 3 || lines[2].(map[string]any)["end_reason"] != "completed" {
@@ -330,7 +330,7 @@ func TestCLIPDCount(t *testing.T) {
 
 func TestCLILog(t *testing.T) {
 	c := newCLI(t)
-	if code := c.run(context.Background(), "log", "-n", "3", "-interval", "20ms"); code != exitOK {
+	if code := c.run(context.Background(), "log", "--count", "3", "--interval", "20ms"); code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	lines := c.lines()
@@ -341,7 +341,7 @@ func TestCLILog(t *testing.T) {
 		checkShape(t, "snapshot", l)
 	}
 	c2 := newCLI(t)
-	if code := c2.run(context.Background(), "log", "-n", "2", "-interval", "20ms", "-format", "csv"); code != exitOK {
+	if code := c2.run(context.Background(), "log", "--count", "2", "--interval", "20ms", "--format", "csv"); code != exitOK {
 		t.Fatalf("csv exit %d", code)
 	}
 	rows := strings.Split(strings.TrimSpace(c2.stdout.String()), "\n")
@@ -392,7 +392,7 @@ func TestCLIInfoPartial(t *testing.T) {
 func TestCLIWaitForBusyMeter(t *testing.T) {
 	c := newCLI(t)
 	c.busyOpens = 2
-	if code := c.run(context.Background(), "read", "-wait", "3s"); code != exitOK || c.opens != 3 {
+	if code := c.run(context.Background(), "read", "--wait", "3s"); code != exitOK || c.opens != 3 {
 		t.Fatalf("exit %d after %d opens, stderr %s", code, c.opens, c.stderr.String())
 	}
 	checkShape(t, "snapshot", c.one())

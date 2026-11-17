@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -236,7 +236,7 @@ func TestSchemaContract(t *testing.T) {
 // Every command's output reference must exist, and every definition must be
 // reachable from some command.
 func TestSchemaReferences(t *testing.T) {
-	s := buildSchema()
+	s := buildSchema(newRootCmd(&globals{env: &env{}}))
 	reached := map[string]bool{}
 	var mark func(string)
 	mark = func(def string) {

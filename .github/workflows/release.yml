@@ -191,7 +191,7 @@ jobs:
 
       - name: Smoke test
         run: |
-          "$RUNNER_TEMP/out/powerz" version -json
+          "$RUNNER_TEMP/out/powerz" version --json
           "$RUNNER_TEMP/out/powerz" schema >/dev/null
 
       - name: Package
@@ -376,7 +376,7 @@ jobs:
 
       - name: Smoke test
         run: |
-          "$RUNNER_TEMP/out/powerz" version -json
+          "$RUNNER_TEMP/out/powerz" version --json
           "$RUNNER_TEMP/out/powerz" schema >/dev/null
 
       - name: Package

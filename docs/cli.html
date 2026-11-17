@@ -100,25 +100,25 @@ go install github.com/ljagiello/gopower-z/cmd/powerz@latest</code></pre>
 <h2 id="quick">2. Quick start</h2>
 <pre><code>powerz                       # dashboard on a terminal, one JSON reading when piped
 powerz read                  # one snapshot
-powerz measure -duration 10s # min/mean/max, energy, charge, USB-PD capture
+powerz measure --duration 10s # min/mean/max, energy, charge, USB-PD capture
 powerz info                  # model, firmware, serial, settings
-powerz pd -duration 30s      # decoded USB-PD traffic, then a summary line
-powerz log -duration 1m -interval 500ms -format csv &gt; run.csv
+powerz pd --duration 30s      # decoded USB-PD traffic, then a summary line
+powerz log --duration 1m --interval 500ms --format csv &gt; run.csv
 powerz schema                # the machine-readable reference</code></pre>
 
 <h2 id="contract">3. Agent contract</h2>
 <div class="good">
 <ul>
-  <li><strong>JSON whenever stdout is not a terminal</strong> (force it with <code>-json</code>, or text with <code>-text</code>). stdout carries data only; diagnostics and errors go to stderr.</li>
+  <li><strong>JSON whenever stdout is not a terminal</strong> (force it with <code>--json</code>, or text with <code>--text</code>). stdout carries data only; diagnostics and errors go to stderr.</li>
   <li><strong>Fixed shapes.</strong> Every documented key is always present. Unavailable values are <code>null</code> and empty lists are <code>[]</code>. Every object carries <code>schema_version</code> (currently <code>1</code>).</li>
   <li><strong>Units are in field names:</strong> <code>_v</code>, <code>_a</code>, <code>_w</code>, <code>_wh</code>, <code>_mah</code>, <code>_c</code>, <code>_s</code>, <code>_ms</code>, <code>_uv</code>, <code>_ua</code>, <code>_sps</code>, <code>_percent</code>.</li>
   <li><strong>Timestamps</strong> are UTC ISO 8601 with milliseconds: <code>2026-11-17T01:34:25.627Z</code>.</li>
   <li><strong>Direction.</strong> Current and power are positive when flowing from the meter's female receptacle to its male plug, which is the normal set-up and matches the meter's screen. <code>direction</code> says so explicitly (<code>receptacle_to_plug</code>, <code>plug_to_receptacle</code> or <code>none</code>), and <code>raw.ibus_ua</code> keeps the meter's own signed value.</li>
   <li><strong>Errors</strong> are one JSON object on stderr with <code>code</code>, <code>exit_code</code>, <code>retryable</code> and an actionable <code>hint</code>.</li>
   <li><strong>A non-zero exit can still carry data.</strong> <code>measure</code> prints its object and <code>pd</code> its summary line when they end early: on SIGINT/SIGTERM (exit 130, <code>"end_reason":"interrupted"</code>, which is what an agent harness timeout sends) or when the meter disappears, is taken by another program or cannot be drained (exit 3, 4 or 1, <code>"end_reason":"error"</code>). <code>log</code> lines already printed stay valid. Read stdout before discarding it.</li>
-  <li><strong>Bounded.</strong> <code>read</code>, <code>measure</code>, <code>info</code>, <code>devices</code> and <code>schema</code> terminate on their own. <code>log</code> and <code>pd</code> take <code>-duration</code>, which automation should always set.</li>
-  <li><strong>One process per meter.</strong> A concurrent call fails with <code>busy</code> (exit 4, retryable) unless it passes <code>-wait 10s</code> to queue.</li>
-  <li><strong>Validation, not silent changes.</strong> Out-of-range values such as <code>-interval 5ms</code> are usage errors that state the limit.</li>
+  <li><strong>Bounded.</strong> <code>read</code>, <code>measure</code>, <code>info</code>, <code>devices</code> and <code>schema</code> terminate on their own. <code>log</code> and <code>pd</code> take <code>--duration</code>, which automation should always set.</li>
+  <li><strong>One process per meter.</strong> A concurrent call fails with <code>busy</code> (exit 4, retryable) unless it passes <code>--wait 10s</code> to queue.</li>
+  <li><strong>Validation, not silent changes.</strong> Out-of-range values such as <code>--interval 5ms</code> are usage errors that state the limit.</li>
   <li><strong>Interpretations are separate.</strong> Fields under <code>inferred</code> are computed by powerz, not reported by the meter.</li>
   <li><strong>Unknown is not the same as empty.</strong> Firmware-dependent fields are decoded only for firmware 1.7.9 to 2.0.7, the versions that were analysed. For any other firmware, or when the version cannot be read (<code>firmware_error</code> says why), they are <code>null</code>, <code>raw.tail_layout</code> is <code>unknown</code> and <code>inferred.dashboard_classifier</code> is <code>null</code>. A <code>null</code> dashboard label with a non-null classifier means the screen shows [N/A].</li>
 </ul>
@@ -128,16 +128,18 @@ powerz schema                # the machine-readable reference</code></pre>
 <div class="tw"><table>
 <tr><th>Command</th><th>Output</th><th>Flags</th><th>Purpose</th></tr>
 <tr><td><code>read</code></td><td>one JSON object</td><td>-</td><td>One snapshot. Default command when stdout is not a terminal. Reads the firmware version first (CONNECT plus one MemoryRead) to decode the firmware-dependent fields.</td></tr>
-<tr><td><code>measure</code></td><td>one JSON object</td><td><code>-duration 5s</code> <code>-interval 100ms</code> (≥ 20 ms) <code>-pd=true</code></td><td>Samples for a fixed time. Returns <code>stats</code> (min/mean/max/last of V, A, W, °C), energy and charge over <code>integrated_s</code>, the dominant <code>direction</code>, and the USB-PD capture with every record. <code>end_reason</code> says whether the window completed or ended early. <strong>The main command for agents.</strong></td></tr>
-<tr><td><code>log</code></td><td>JSON lines or CSV</td><td><code>-interval 200ms</code> (≥ 20 ms) <code>-format jsonl|csv</code> <code>-n</code> <code>-duration</code></td><td>Streams snapshots (same shape as <code>read</code>). CSV columns: <code>time, vbus_v, ibus_a, power_w, direction, vbus_avg_v, ibus_avg_a, power_avg_w, temp_c, cc1_v, cc2_v, dp_v, dm_v, vdd_v</code>.</td></tr>
-<tr><td><code>pd</code></td><td>JSON lines</td><td><code>-interval 25ms</code> (≥ 10 ms) <code>-duration</code> <code>-n</code> <code>-goodcrc</code></td><td>One record per captured USB-PD message or event, then a final <code>"kind":"summary"</code> line with counts, capabilities, contract, <code>end_reason</code> and a <code>note</code> when nothing was captured. Bytes the meter delivered that cannot be parsed are kept as <code>"kind":"undecoded"</code> records. Sends only GET_DATA for the PD buffer: no session and no memory reads.</td></tr>
+<tr><td><code>measure</code></td><td>one JSON object</td><td><code>--duration 5s</code> <code>--interval 100ms</code> (≥ 20 ms) <code>--pd=true</code></td><td>Samples for a fixed time. Returns <code>stats</code> (min/mean/max/last of V, A, W, °C), energy and charge over <code>integrated_s</code>, the dominant <code>direction</code>, and the USB-PD capture with every record. <code>end_reason</code> says whether the window completed or ended early. <strong>The main command for agents.</strong></td></tr>
+<tr><td><code>log</code></td><td>JSON lines or CSV</td><td><code>--interval 200ms</code> (≥ 20 ms) <code>--format jsonl|csv</code> <code>--count</code>/<code>-n</code> <code>--duration</code></td><td>Streams snapshots (same shape as <code>read</code>). CSV columns: <code>time, vbus_v, ibus_a, power_w, direction, vbus_avg_v, ibus_avg_a, power_avg_w, temp_c, cc1_v, cc2_v, dp_v, dm_v, vdd_v</code>.</td></tr>
+<tr><td><code>pd</code></td><td>JSON lines</td><td><code>--interval 25ms</code> (≥ 10 ms) <code>--duration</code> <code>--count</code>/<code>-n</code> <code>--goodcrc</code></td><td>One record per captured USB-PD message or event, then a final <code>"kind":"summary"</code> line with counts, capabilities, contract, <code>end_reason</code> and a <code>note</code> when nothing was captured. Bytes the meter delivered that cannot be parsed are kept as <code>"kind":"undecoded"</code> records. Sends only GET_DATA for the PD buffer: no session and no memory reads.</td></tr>
 <tr><td><code>info</code></td><td>one JSON object</td><td>-</td><td>USB descriptors; model, firmware and hardware versions (ISO dates), serial and UUID; settings (sample rate, name, brightness, raw codes). The identity comes from three memory blocks: a block that cannot be read leaves only its fields <code>null</code> and is listed in <code>errors</code> (exit 7).</td></tr>
 <tr><td><code>devices</code></td><td>one JSON object</td><td>-</td><td>Lists connected meters without claiming them, so it works while another process holds the meter.</td></tr>
-<tr><td><code>watch</code></td><td>terminal UI</td><td><code>-interval 200ms</code> <code>-no-pd</code></td><td>Live dashboard for humans; refuses to run without a terminal.</td></tr>
+<tr><td><code>watch</code></td><td>terminal UI</td><td><code>--interval 200ms</code> <code>--no-pd</code></td><td>Live dashboard for humans; refuses to run without a terminal.</td></tr>
 <tr><td><code>schema</code></td><td>one JSON object</td><td>-</td><td>Commands, flags with types and defaults, typed field definitions with nullability, exit codes, verified facts and caveats.</td></tr>
-<tr><td><code>version</code></td><td>one JSON object</td><td>-</td><td>Tool and schema version.</td></tr>
+<tr><td><code>version</code></td><td>one JSON object</td><td>-</td><td>Tool and schema version (also <code>--version</code>).</td></tr>
+<tr><td><code>completion</code></td><td>shell script</td><td><code>bash|zsh|fish|powershell</code></td><td>Shell completion for commands and flags.</td></tr>
+<tr><td><code>help</code></td><td>text</td><td>-</td><td>Usage of powerz or of one command (also <code>--help</code> on any command).</td></tr>
 </table></div>
-<p>Common flags, accepted before or after the command: <code>-json -text -serial S -timeout D</code> (≥ 100 ms) <code>-wait D -trace</code>.</p>
+<p>Common flags, accepted before or after the command: <code>--json --text --serial S --timeout D</code> (≥ 100 ms) <code>--wait D --trace</code>. Flags take two dashes (<code>--duration 10s</code> or <code>--duration=10s</code>); <code>-n</code> for <code>--count</code> is the only shorthand. A single-dash long flag such as <code>-duration</code> is a usage error whose hint says so.</p>
 
 <h2 id="examples">5. Output examples</h2>
 <p>All captured live from a KM003C on firmware 1.9.5 powering a test board at about 0.13 A.</p>
@@ -161,7 +163,7 @@ powerz schema                # the machine-readable reference</code></pre>
 }</code></pre>
 <p><code>dashboard_label</code> / <code>dashboard_label_2</code> reproduce the two protocol lines on the meter's screen (here <code>[N/A]</code> and <code>VOOC</code>) using the meter firmware's own algorithm, named by <code>dashboard_classifier</code>. They describe the D+/D− voltage signature, not a confirmed protocol session. When the classifier is <code>null</code> (unknown or unanalysed firmware) the labels are unknown, not [N/A].</p>
 
-<h3><code>powerz measure -duration 2s</code></h3>
+<h3><code>powerz measure --duration 2s</code></h3>
 <pre><code>{
   "schema_version": 1, "serial": "050002", "firmware_version": "1.9.5", "firmware_error": null,
   "start": "2026-11-17T01:35:07.564Z", "end": "2026-11-17T01:35:09.565Z", "end_reason": "completed",
@@ -194,7 +196,7 @@ powerz schema                # the machine-readable reference</code></pre>
   "errors": []
 }</code></pre>
 
-<h3><code>powerz pd -duration 20s</code></h3>
+<h3><code>powerz pd --duration 20s</code></h3>
 <p>One line per record, then a summary. PD records keep a fixed shape too: message fields are <code>null</code> on events and the other way round. A record looks like this:</p>
 <pre><code>{"schema_version":1,"time":"…","meter_time_ms":10000,"kind":"message","sop":"SOP","message":"Source_Capabilities",
  "class":"data","power_role":"source","data_role":"dfp","spec_revision":"3.x","message_id":0,"from_meter":false,
@@ -209,7 +211,7 @@ powerz schema                # the machine-readable reference</code></pre>
 
 <h2 id="errors">6. Errors and exit codes</h2>
 <pre><code>{"schema_version":1,"error":{"code":"busy","exit_code":4,"message":"km003c: meter is in use by another program (…)",
- "retryable":true,"hint":"another program holds the meter (…); retry, or pass -wait 10s to queue behind it"}}
+ "retryable":true,"hint":"another program holds the meter (…); retry, or pass --wait 10s to queue behind it"}}
 {"schema_version":1,"error":{"code":"usage","exit_code":2,"message":"unknown command \"mesure\"",
  "retryable":false,"hint":"did you mean `powerz measure`? commands: devices, help, info, log, measure, pd, read, schema, version, watch"}}</code></pre>
 <div class="tw"><table>
@@ -217,8 +219,8 @@ powerz schema                # the machine-readable reference</code></pre>
 <tr><td>0</td><td>-</td><td>-</td><td>Success</td></tr>
 <tr><td>1</td><td><code>error</code></td><td>no</td><td>I/O or protocol failure</td></tr>
 <tr><td>2</td><td><code>usage</code></td><td>no</td><td>Unknown command, bad flag or value (the hint lists valid flags and formats)</td></tr>
-<tr><td>3</td><td><code>not_found</code></td><td>no</td><td>No meter connected (or none with <code>-serial</code>; the message lists connected serials). If the meter disappeared mid-run, <code>measure</code>/<code>pd</code> printed what they had (<code>end_reason</code> <code>error</code>)</td></tr>
-<tr><td>4</td><td><code>busy</code></td><td>yes</td><td>Another process holds the meter; use <code>-wait</code>. If it was taken mid-run, <code>measure</code>/<code>pd</code> printed what they had</td></tr>
+<tr><td>3</td><td><code>not_found</code></td><td>no</td><td>No meter connected (or none with <code>--serial</code>; the message lists connected serials). If the meter disappeared mid-run, <code>measure</code>/<code>pd</code> printed what they had (<code>end_reason</code> <code>error</code>)</td></tr>
+<tr><td>4</td><td><code>busy</code></td><td>yes</td><td>Another process holds the meter; use <code>--wait</code>. If it was taken mid-run, <code>measure</code>/<code>pd</code> printed what they had</td></tr>
 <tr><td>5</td><td><code>timeout</code></td><td>yes</td><td>The meter did not answer in time</td></tr>
 <tr><td>6</td><td><code>permission_denied</code></td><td>no</td><td>The OS denied USB access (Linux udev)</td></tr>
 <tr><td>7</td><td><code>partial</code></td><td>yes</td><td>stdout JSON is valid but incomplete (<code>failed_samples</code> &gt; 0, or <code>info.errors</code> not empty)</td></tr>
@@ -227,18 +229,18 @@ powerz schema                # the machine-readable reference</code></pre>
 
 <h2 id="recipes">7. Agent recipes</h2>
 <h3>How much power does the attached device draw?</h3>
-<pre><code>powerz measure -duration 30s -wait 10s
+<pre><code>powerz measure --duration 30s --wait 10s
 # .stats.power_w.mean / .max (peak draw), .energy_wh over .integrated_s, .direction</code></pre>
 <h3>What does this charger offer, and what did the device negotiate?</h3>
 <p>USB-PD is only exchanged when the device attaches or renegotiates, so start the capture first and connect the device during it:</p>
-<pre><code>powerz measure -duration 20s
+<pre><code>powerz measure --duration 20s
 # .pd.source_capabilities[]  offered PDOs (fixed/PPS/AVS: volts, amps, watts)
 # .pd.contract               the Request the source accepted and confirmed with PS_RDY
 # .pd.note                   set when nothing was captured
 # .last.inferred.dashboard_label*  the meter's D+/D- protocol labels</code></pre>
 <h3>Handling failures</h3>
 <ul>
-  <li>Exit 4 or 5: retry; pass <code>-wait 10s</code> to avoid exit 4.</li>
+  <li>Exit 4 or 5: retry; pass <code>--wait 10s</code> to avoid exit 4.</li>
   <li>Exit 3: ask the human to connect the meter (data port to the computer).</li>
   <li>Exit 7: the JSON on stdout is valid; check <code>failed_samples</code>, <code>last_error</code> or <code>errors</code>.</li>
   <li>Exit 130, 3, 4 or 1 from <code>measure</code> or <code>pd</code>: stdout may still hold a result for the part of the window that was captured; <code>end_reason</code> tells.</li>

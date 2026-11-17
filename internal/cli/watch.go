@@ -1,8 +1,7 @@
-package main
+package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ljagiello/gopower-z/hardware/km003c"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 )
 
@@ -56,7 +56,7 @@ func (s *session) addPD(pd *km003c.PDPacket) {
 	}
 }
 
-func setupWatch(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupWatch(fs *pflag.FlagSet) func(context.Context, globals) error {
 	interval := fs.Duration("interval", 200*time.Millisecond, "refresh interval (min 50ms)")
 	noPD := fs.Bool("no-pd", false, "do not read the PD event stream")
 	return func(ctx context.Context, g globals) error {
@@ -69,7 +69,7 @@ func setupWatch(fs *flag.FlagSet) func(context.Context, globals) error {
 
 func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool) error {
 	if !g.env.tty || !isTTY(os.Stdin) {
-		return usageErr("watch needs an interactive terminal; use `powerz measure -duration 10s` or `powerz log -duration 10s` instead")
+		return usageErr("watch needs an interactive terminal; use `powerz measure --duration 10s` or `powerz log --duration 10s` instead")
 	}
 
 	m, err := open(ctx, g)

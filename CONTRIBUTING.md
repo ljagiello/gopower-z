@@ -12,7 +12,7 @@ versions, and pull requests are all welcome.
   reboots it if it receives a request while a reply or zero-length packet is
   still queued. Use `Device.exchange`/`memoryRead`, which handle this.
 - **The JSON output is a contract.** Renaming or removing a field requires
-  bumping `schemaVersion` in `cmd/powerz/main.go` and updating `powerz schema`.
+  bumping `schemaVersion` in `internal/cli/root.go` and updating `powerz schema`.
 - **Docs are HTML.** Documentation lives in `docs/*.html` (self-contained,
   inline CSS, light/dark). Please don't add Markdown documentation.
 
@@ -35,11 +35,12 @@ it and check their real output against `powerz schema`.
 
 Layout: `hardware/<model>/` holds one package per supported meter
 (`hardware/km003c`), `usbpd/` decodes USB Power Delivery messages and is
-shared by all of them, and `cmd/powerz/` is the CLI.
+shared by all of them, `internal/cli/` holds the commands (cobra) and
+`cmd/powerz/` is the entrypoint.
 
 If you have a meter on a different firmware version, captured frames are very
-useful. Run the failing command with `-trace` and attach the output to an
-issue, together with `powerz info -json`.
+useful. Run the failing command with `--trace` and attach the output to an
+issue, together with `powerz info --json`.
 
 ## Releasing
 

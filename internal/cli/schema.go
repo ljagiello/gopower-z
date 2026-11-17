@@ -1,10 +1,11 @@
-package main
+package cli
 
 import (
 	"context"
-	"flag"
-	"sort"
 	"strings"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // fieldDoc documents one JSON field. Nested object fields use dotted names
@@ -118,7 +119,7 @@ var definitions = map[string][]fieldDoc{
 		fd("firmware_error", tStr, true, "why firmware_version is null, otherwise null"),
 		fd("start", tStr, false, "start of the window, UTC ISO 8601"),
 		fd("end", tStr, false, "end of the window, UTC ISO 8601"),
-		fenum("end_reason", false, "completed: ran for -duration (exit 0, or 7 if samples failed); interrupted: stopped by SIGINT/SIGTERM (exit 130); error: the meter went away, was taken by another program or could not be drained (exit with that error's code). The object is printed in every case once a sample was collected", endReasons...),
+		fenum("end_reason", false, "completed: ran for --duration (exit 0, or 7 if samples failed); interrupted: stopped by SIGINT/SIGTERM (exit 130); error: the meter went away, was taken by another program or could not be drained (exit with that error's code). The object is printed in every case once a sample was collected", endReasons...),
 		fd("duration_s", tNum, false, "wall-clock length of the window, seconds"),
 		fd("integrated_s", tNum, false, "time span covered by energy_wh / charge_mah (first sample to end), seconds"),
 		fd("interval_s", tNum, false, "requested sampling interval, seconds"),
@@ -150,7 +151,7 @@ var definitions = map[string][]fieldDoc{
 		fd("schema_version", tInt, false, "output schema version"),
 		fenum("kind", false, "marks the last line of `pd` output", "summary"),
 		fd("time", tStr, false, "host time, UTC ISO 8601"),
-		fenum("end_reason", false, "completed: -duration or -n reached (exit 0); interrupted: SIGINT/SIGTERM (exit 130); error: reading failed (exit with that error's code). This line is printed in every case", endReasons...),
+		fenum("end_reason", false, "completed: --duration or --count reached (exit 0); interrupted: SIGINT/SIGTERM (exit 130); error: reading failed (exit with that error's code). This line is printed in every case", endReasons...),
 		fd("duration_s", tNum, false, "length of the capture, seconds"),
 		fd("messages", tInt, false, "as in pd_summary"),
 		fd("events", tInt, false, "as in pd_summary"),
@@ -279,40 +280,30 @@ type commandDoc struct {
 }
 
 type flagDoc struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
+	Name        string `json:"name"`                // e.g. --duration
+	Shorthand   string `json:"shorthand,omitempty"` // e.g. -n
+	Type        string `json:"type"`                // bool, int, duration, string
 	Default     string `json:"default"`
 	Description string `json:"description"`
 }
 
-var commonFlags = map[string]bool{"serial": true, "trace": true, "timeout": true, "wait": true, "json": true, "text": true}
-
-func flagType(f *flag.Flag) string {
-	if g, ok := f.Value.(flag.Getter); ok {
-		switch g.Get().(type) {
-		case bool:
-			return "bool"
-		case int:
-			return "int"
-		case interface{ Seconds() float64 }:
-			return "duration"
-		}
-	}
-	return "string"
-}
-
-func flagsOf(fs *flag.FlagSet, common bool) []flagDoc {
+func flagsOf(fs *pflag.FlagSet) []flagDoc {
 	out := []flagDoc{}
-	fs.VisitAll(func(f *flag.Flag) {
-		if commonFlags[f.Name] != common {
+	fs.VisitAll(func(f *pflag.Flag) {
+		if f.Hidden || f.Name == "help" {
 			return
 		}
-		out = append(out, flagDoc{Name: "-" + f.Name, Type: flagType(f), Default: f.DefValue, Description: f.Usage})
+		d := flagDoc{Name: "--" + f.Name, Type: f.Value.Type(), Default: f.DefValue, Description: f.Usage}
+		if f.Shorthand != "" {
+			d.Shorthand = "-" + f.Shorthand
+		}
+		out = append(out, d)
 	})
 	return out
 }
 
-func buildSchema() map[string]any {
+// buildSchema describes the command tree rooted at root.
+func buildSchema(root *cobra.Command) map[string]any {
 	type spec struct {
 		out     output
 		bounded bool
@@ -320,57 +311,45 @@ func buildSchema() map[string]any {
 		notes   []string
 	}
 	specs := map[string]spec{
-		"read": {out("json_object", "", "snapshot"), true, "powerz read -json", []string{
+		"read": {out("json_object", "", "snapshot"), true, "powerz read --json", []string{
 			"Reads the firmware version first (CONNECT plus one MemoryRead), which selects the decoding of firmware-dependent fields.",
 		}},
-		"measure": {out("json_object", "", "measure"), true, "powerz measure -duration 10s -json", []string{
+		"measure": {out("json_object", "", "measure"), true, "powerz measure --duration 10s --json", []string{
 			"Preferred command for agents: how much power/energy the attached device draws, and what the charger offered and negotiated.",
 			"The meter samples at its configured rate (info: settings.sample_rate_sps); polling faster only repeats values.",
 			"USB-PD is only exchanged on attach or renegotiation: start measure, then connect the device, to capture it.",
 		}},
-		"log": {out("json_lines", "csv columns with -format csv: "+strings.Join(csvColumns, ","), "snapshot"), false,
-			"powerz log -duration 30s -interval 500ms -json", []string{"Runs until -duration/-n or interrupt; always pass -duration or -n from automation."}},
+		"log": {out("json_lines", "csv columns with --format csv: "+strings.Join(csvColumns, ","), "snapshot"), false,
+			"powerz log --duration 30s --interval 500ms --json", []string{"Runs until --duration/--count or interrupt; always pass --duration or --count from automation."}},
 		"pd": {out("json_lines", "one pd_record per captured record, then one pd_end summary line (kind=summary)", "pd_record", "pd_end"), false,
-			"powerz pd -duration 20s -json", []string{
+			"powerz pd --duration 20s --json", []string{
 				"Passive capture: the meter sniffs traffic between the charger and the device plugged through it; powerz never sends PD messages.",
 				"Sends only GET_DATA for the PD buffer: no CONNECT session and no memory reads.",
 				"Reading drains the meter's PD buffer, so only one consumer sees each record.",
 				"An empty capture is normal when nothing negotiated during the window; the summary line's note says so.",
-				"Always pass -duration from automation (-n alone waits for traffic).",
+				"Always pass --duration from automation (--count alone waits for traffic).",
 			}},
-		"info":    {out("json_object", "", "info"), true, "powerz info -json", []string{}},
-		"devices": {out("json_object", "", "devices"), true, "powerz devices -json", []string{"Does not claim the meter, so it works while another program uses it."}},
+		"info":    {out("json_object", "", "info"), true, "powerz info --json", []string{}},
+		"devices": {out("json_object", "", "devices"), true, "powerz devices --json", []string{"Does not claim the meter, so it works while another program uses it."}},
 		"watch":   {out("text", "full-screen terminal UI"), false, "powerz watch", []string{"Interactive terminals only; agents should use measure/log/pd."}},
 		"schema":  {out("json_object", "this document"), true, "powerz schema", []string{}},
-		"version": {out("json_object", "", "version"), true, "powerz version -json", []string{}},
-		"help":    {out("text", "usage text"), true, "powerz help", []string{}},
+		"version": {out("json_object", "", "version"), true, "powerz version --json", []string{}},
 	}
-	names := make([]string, 0, len(commands))
-	for n := range commands {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var cmds []commandDoc
-	var common []flagDoc
-	for _, n := range names {
-		c := commands[n]
-		fs := flag.NewFlagSet(n, flag.ContinueOnError)
-		var g globals
-		addCommon(fs, &g)
-		c.setup(fs)
-		if common == nil {
-			common = flagsOf(fs, true)
+	for _, sub := range root.Commands() {
+		sp, ok := specs[sub.Name()]
+		if !ok {
+			continue // cobra's help and completion commands
 		}
-		sp := specs[n]
 		cmds = append(cmds, commandDoc{
-			Name: n, Summary: c.summary, Output: sp.out, Bounded: sp.bounded,
-			Flags: flagsOf(fs, false), Example: sp.example, Notes: sp.notes,
+			Name: sub.Name(), Summary: sub.Short, Output: sp.out, Bounded: sp.bounded,
+			Flags: flagsOf(sub.LocalNonPersistentFlags()), Example: sp.example, Notes: sp.notes,
 		})
 	}
 	return map[string]any{
 		"schema_version": schemaVersion,
 		"tool":           "powerz",
-		"version":        version,
+		"version":        Version,
 		"description":    "Read-only CLI for the ChargerLAB POWER-Z KM003C USB-C power meter (USB 5fc9:0063).",
 		"device": map[string]any{
 			"ranges":       "VBUS 0-50 V, current 0-6 A in either direction, resolution 1 µV / 1 µA",
@@ -379,25 +358,27 @@ func buildSchema() map[string]any {
 		},
 		"output_contract": []string{
 			"stdout carries only data; diagnostics and errors go to stderr",
-			"JSON is the default whenever stdout is not a terminal; -json / -text override",
+			"JSON is the default whenever stdout is not a terminal; --json / --text override",
+			"flags take two dashes (--duration 10s); --count has the shorthand -n",
 			"every documented key is always present; unavailable values are null, empty lists are []",
 			"field names end in their unit: _v volts, _a amperes, _w watts, _wh watt-hours, _mah milliamp-hours, _c °C, _s seconds, _ms milliseconds, _uv microvolts, _ua microamperes, _sps samples per second, _percent percent",
 			"timestamps are UTC ISO 8601 with milliseconds (2026-01-02T03:04:05.678Z)",
 			"current and power are positive when flowing from the meter's female receptacle to its male plug (the normal set-up), matching the meter's screen; see direction",
 			"errors are one JSON object on stderr: {\"schema_version\":1,\"error\":{\"code\",\"exit_code\",\"message\",\"retryable\",\"hint\"}}",
 			"fields under inferred are computed by powerz, not reported by the meter",
-			"only one powerz process may use a meter at a time; concurrent calls fail with code busy unless -wait is given",
+			"only one powerz process may use a meter at a time; concurrent calls fail with code busy unless --wait is given",
 			"a non-zero exit does not always mean empty stdout: measure prints its object and pd its summary line when they end early (end_reason interrupted or error), and log lines already printed stay valid; read stdout before discarding it",
 		},
-		"common_flags": common,
+		"common_flags": flagsOf(root.PersistentFlags()),
+		"completion":   "powerz completion bash|zsh|fish|powershell prints a shell completion script",
 		"commands":     cmds,
 		"definitions":  definitions,
 		"exit_codes": []map[string]any{
 			{"exit_code": exitOK, "code": "ok", "retryable": false, "meaning": "success"},
 			{"exit_code": exitError, "code": "error", "retryable": false, "meaning": "I/O or protocol failure"},
 			{"exit_code": exitUsage, "code": "usage", "retryable": false, "meaning": "bad command, flag or argument"},
-			{"exit_code": exitNotFound, "code": "not_found", "retryable": false, "meaning": "no meter connected (or none with -serial); if it disappeared mid-run, measure/pd printed what they had (end_reason error)"},
-			{"exit_code": exitBusy, "code": "busy", "retryable": true, "meaning": "another program holds the meter; retry or use -wait; if it was taken mid-run, measure/pd printed what they had (end_reason error)"},
+			{"exit_code": exitNotFound, "code": "not_found", "retryable": false, "meaning": "no meter connected (or none with --serial); if it disappeared mid-run, measure/pd printed what they had (end_reason error)"},
+			{"exit_code": exitBusy, "code": "busy", "retryable": true, "meaning": "another program holds the meter; retry or use --wait; if it was taken mid-run, measure/pd printed what they had (end_reason error)"},
 			{"exit_code": exitTimeout, "code": "timeout", "retryable": true, "meaning": "the meter did not answer in time"},
 			{"exit_code": exitPermission, "code": "permission_denied", "retryable": false, "meaning": "the OS denied USB access"},
 			{"exit_code": exitPartial, "code": "partial", "retryable": true, "meaning": "output was printed but some requested data is missing"},
@@ -417,8 +398,8 @@ func buildSchema() map[string]any {
 	}
 }
 
-func setupSchema(fs *flag.FlagSet) func(context.Context, globals) error {
+func setupSchema(*pflag.FlagSet) func(context.Context, globals) error {
 	return func(_ context.Context, g globals) error {
-		return g.emitIndented(buildSchema())
+		return g.emitIndented(buildSchema(g.root))
 	}
 }
