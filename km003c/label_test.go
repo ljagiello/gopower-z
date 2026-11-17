@@ -87,6 +87,24 @@ func TestDashboardLabelsV195(t *testing.T) {
 	}
 }
 
+// Bench-verified on firmware 1.9.5: source on the receptacle, 0.44 A load on
+// the plug; the meter reported raw -442099 µA and its screen +0.433 A with the
+// arrow toward the plug.
+func TestFlowDirection(t *testing.T) {
+	a := ADC{VBusUV: 5_021_015, IBusUA: -442_099, IBusAvgUA: -440_935, VBusAvgUV: 5_020_406}
+	if a.Direction() != FlowToPlug || a.FlowA() != 0.442099 || a.FlowPower() <= 2.2 {
+		t.Errorf("normal flow: dir=%s I=%v P=%v", a.Direction(), a.FlowA(), a.FlowPower())
+	}
+	a.IBusUA = 300_000
+	if a.Direction() != FlowToReceptacle || a.FlowA() >= 0 {
+		t.Errorf("reverse flow: dir=%s I=%v", a.Direction(), a.FlowA())
+	}
+	a.IBusUA = -84 // idle noise
+	if a.Direction() != FlowNone {
+		t.Errorf("idle: dir=%s", a.Direction())
+	}
+}
+
 func TestDashboardLabelsDispatch(t *testing.T) {
 	// Captured idle frame on firmware 1.9.5: VBUS ~5 mV -> below 3.3 V -> N/A,
 	// matching the meter's screen.

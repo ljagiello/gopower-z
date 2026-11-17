@@ -20,6 +20,15 @@ func isBrokenPipe(err error) bool {
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
 }
 
+// checkInterval rejects polling intervals the meter cannot serve (instead of
+// silently changing them).
+func checkInterval(cmd string, d, minimum time.Duration) error {
+	if d < minimum {
+		return usageErr("%s: -interval must be at least %v (got %v)", cmd, minimum, d)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------- read
 
 func setupRead(fs *flag.FlagSet) func(context.Context, globals) error {
@@ -42,15 +51,22 @@ func setupRead(fs *flag.FlagSet) func(context.Context, globals) error {
 	}
 }
 
+func deref(p *string, def string) string {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
 func printSnapshotText(s snapshot, a km003c.ADC) {
 	st := style{on: colorOn()}
 	row := func(label, val, extra string) {
 		fmt.Printf("  %-6s %s  %s\n", label, val, st.dim(extra))
 	}
-	fmt.Println(st.bold("POWER-Z KM003C") + st.dim("  "+s.Serial+"  "+s.Time.Format(time.RFC3339)))
+	fmt.Println(st.bold("POWER-Z KM003C") + st.dim("  "+s.Serial+"  "+s.Time))
 	row("VBUS", st.green(grouped(a.VBus())+" V"), fmt.Sprintf("meter avg %.6f V", s.VBusAvgV))
-	row("IBUS", st.pink(grouped(a.IBus())+" A"), fmt.Sprintf("meter avg %.6f A", s.IBusAvgA))
-	row("PWR", st.blue(grouped(a.Power())+" W"), fmt.Sprintf("meter avg %.6f W", s.PowerAvgW))
+	row("IBUS", st.pink(grouped(a.FlowA())+" A"), fmt.Sprintf("meter avg %.6f A · flow %s", s.IBusAvgA, s.Direction))
+	row("PWR", st.blue(grouped(a.FlowPower())+" W"), fmt.Sprintf("meter avg %.6f W", s.PowerAvgW))
 	temp := "invalid"
 	if s.TempC != nil {
 		temp = fmt.Sprintf("%.2f °C", *s.TempC)
@@ -62,10 +78,11 @@ func printSnapshotText(s snapshot, a km003c.ADC) {
 	row("D-", st.yellow(fmt.Sprintf("%.4f V", s.DMV)), avgText(s.DMAvgV))
 	row("VDD", fmt.Sprintf("%.4f V", s.VDDV), "meter internal supply")
 	fmt.Println()
-	fmt.Println("  " + st.dim("label: ") + s.Inferred.DashboardLabel + " / " + s.Inferred.DashboardLabel2 + st.dim("  (meter's D+/D- dashboard labels, recomputed)"))
-	fmt.Println("  " + st.dim("CC:    ") + s.Inferred.CC + st.dim("  (inferred)"))
-	if s.FirmwareVersion != "" {
-		fmt.Println("  " + st.dim("firmware "+s.FirmwareVersion))
+	fmt.Println("  " + st.dim("label: ") + deref(s.Inferred.DashboardLabel, "[N/A]") + " / " +
+		deref(s.Inferred.DashboardLabel2, "[N/A]") + st.dim("  (meter's D+/D- dashboard labels, recomputed)"))
+	fmt.Println("  " + st.dim("CC:    ") + s.Inferred.CC.Text + st.dim("  (inferred)"))
+	if s.FirmwareVersion != nil {
+		fmt.Println("  " + st.dim("firmware "+*s.FirmwareVersion))
 	}
 }
 
@@ -78,36 +95,73 @@ func avgText(v *float64) string {
 
 // ---------------------------------------------------------------- measure
 
+type measureStats struct {
+	VBusV  *statJSON `json:"vbus_v"`
+	IBusA  *statJSON `json:"ibus_a"`
+	PowerW *statJSON `json:"power_w"`
+	TempC  *statJSON `json:"temp_c"`
+}
+
 type measureResult struct {
-	SchemaVersion int        `json:"schema_version"`
-	Serial        string     `json:"serial"`
-	Start         time.Time  `json:"start"`
-	End           time.Time  `json:"end"`
-	DurationS     float64    `json:"duration_s"`
-	IntervalS     float64    `json:"interval_s"`
-	Samples       int        `json:"samples"`
-	Errors        int        `json:"errors"`
-	LastError     string     `json:"last_error,omitempty"`
-	VBusV         *statJSON  `json:"vbus_v"`
-	IBusA         *statJSON  `json:"ibus_a"`
-	PowerW        *statJSON  `json:"power_w"`
-	TempC         *statJSON  `json:"temp_c"`
-	EnergyWh      float64    `json:"energy_wh"`
-	ChargeMAh     float64    `json:"charge_mah"`
-	Last          *snapshot  `json:"last"`
-	PD            *pdSummary `json:"pd,omitempty"`
+	SchemaVersion   int          `json:"schema_version"`
+	Serial          string       `json:"serial"`
+	FirmwareVersion *string      `json:"firmware_version"`
+	Start           string       `json:"start"`
+	End             string       `json:"end"`
+	DurationS       float64      `json:"duration_s"`
+	IntegratedS     float64      `json:"integrated_s"`
+	IntervalS       float64      `json:"interval_s"`
+	Samples         int          `json:"samples"`
+	FailedSamples   int          `json:"failed_samples"`
+	LastError       *string      `json:"last_error"`
+	Direction       string       `json:"direction"`
+	Stats           measureStats `json:"stats"`
+	EnergyWh        float64      `json:"energy_wh"`
+	ChargeMAh       float64      `json:"charge_mah"`
+	Last            *snapshot    `json:"last"`
+	PD              *pdSummary   `json:"pd"`
+}
+
+// integrator accumulates energy and charge, holding each sample until the
+// next one arrives (and the last one until the end of the window), so the
+// integrated time equals the sampled window.
+type integrator struct {
+	first, prevT time.Time
+	prevW, prevA float64
+	wh, ah       float64
+	ok           bool
+}
+
+func (in *integrator) add(t time.Time, w, a float64) {
+	if in.ok {
+		dt := t.Sub(in.prevT).Hours()
+		in.wh += in.prevW * dt
+		in.ah += in.prevA * dt
+	} else {
+		in.first = t
+	}
+	in.prevT, in.prevW, in.prevA, in.ok = t, w, a, true
+}
+
+func (in *integrator) finish(end time.Time) (wh, ah, seconds float64) {
+	if !in.ok {
+		return 0, 0, 0
+	}
+	in.add(end, 0, 0)
+	return in.wh, in.ah, end.Sub(in.first).Seconds()
 }
 
 func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 	duration := fs.Duration("duration", 5*time.Second, "how long to sample")
-	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval (min 20ms; the meter's own sample rate bounds how often values change)")
-	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract)")
-	records := fs.Bool("pd-records", false, "include every captured PD record in the output")
+	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval, at least 20ms (the meter's own sample rate bounds how often values change)")
+	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract, records)")
 	return func(ctx context.Context, g globals) error {
 		if *duration <= 0 {
-			return usageErr("measure: -duration must be positive")
+			return usageErr("measure: -duration must be positive (e.g. 10s)")
 		}
-		*interval = max(*interval, 20*time.Millisecond)
+		if err := checkInterval("measure", *interval, 20*time.Millisecond); err != nil {
+			return err
+		}
 		m, err := open(ctx, g)
 		if err != nil {
 			return err
@@ -115,13 +169,14 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 		defer m.close()
 
 		var v, i, p, temp stat
-		var wh, ah float64
+		var in integrator
 		var last *snapshot
 		var lastErr error
-		var lastT time.Time
 		tr := &pdTracker{}
-		var recs []pdRecord
-		res := measureResult{SchemaVersion: schemaVersion, Serial: m.usb.Serial, Start: time.Now(), IntervalS: interval.Seconds()}
+		recs := []pdRecord{}
+		start := time.Now()
+		res := measureResult{SchemaVersion: schemaVersion, Serial: m.usb.Serial,
+			FirmwareVersion: strOrNil(m.FirmwareVersion()), Start: utcTime(start), IntervalS: interval.Seconds()}
 
 		deadline := time.NewTimer(*duration)
 		defer deadline.Stop()
@@ -141,22 +196,17 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			case ctx.Err() != nil:
 				return ctx.Err()
 			case err != nil:
-				res.Errors++
-				res.LastError = err.Error()
+				res.FailedSamples++
+				res.LastError = new(err.Error())
 				lastErr = err
 				if errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) || errors.Is(err, km003c.ErrStuck) {
 					return err
 				}
 			default:
-				if !lastT.IsZero() {
-					dt := now.Sub(lastT).Hours()
-					wh += a.Power() * dt
-					ah += a.IBus() * dt
-				}
-				lastT = now
+				in.add(now, a.FlowPower(), a.FlowA())
 				v.add(a.VBus())
-				i.add(a.IBus())
-				p.add(a.Power())
+				i.add(a.FlowA())
+				p.add(a.FlowPower())
 				if a.TempValid() {
 					temp.add(a.TempC())
 				}
@@ -165,7 +215,7 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 				res.Samples++
 				if pd != nil {
 					for _, r := range pd.Records {
-						if rec, ok := tr.process(r); ok && *records {
+						if rec, ok := tr.process(r); ok {
 							recs = append(recs, rec)
 						}
 					}
@@ -179,9 +229,13 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			case <-tick.C:
 			}
 		}
-		res.End = time.Now()
-		res.DurationS = round(res.End.Sub(res.Start).Seconds(), 3)
-		res.VBusV, res.IBusA, res.PowerW, res.TempC = v.json(6), i.json(6), p.json(6), temp.json(3)
+		end := time.Now()
+		wh, ah, integrated := in.finish(end)
+		res.End = utcTime(end)
+		res.DurationS = round(end.Sub(start).Seconds(), 3)
+		res.IntegratedS = round(integrated, 3)
+		res.Stats = measureStats{VBusV: v.json(6), IBusA: i.json(6), PowerW: p.json(6), TempC: temp.json(3)}
+		res.Direction = meanDirection(i.avg())
 		res.EnergyWh = round(wh, 9)
 		res.ChargeMAh = round(ah*1000, 6)
 		res.Last = last
@@ -192,7 +246,7 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			if lastErr == nil {
 				lastErr = km003c.ErrTimeout
 			}
-			return fmt.Errorf("measure: no samples collected (%d errors): %w", res.Errors, lastErr)
+			return fmt.Errorf("measure: no samples collected (%d failed): %w", res.FailedSamples, lastErr)
 		}
 		if g.jsonMode() {
 			if err := emitIndented(res); err != nil {
@@ -201,8 +255,9 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 		} else {
 			printMeasureText(res)
 		}
-		if res.Errors > 0 {
-			return partialErr{fmt.Sprintf("%d of %d samples failed (last: %s)", res.Errors, res.Samples+res.Errors, res.LastError)}
+		if res.FailedSamples > 0 {
+			return partialErr{fmt.Sprintf("%d of %d samples failed (last: %s)",
+				res.FailedSamples, res.Samples+res.FailedSamples, deref(res.LastError, ""))}
 		}
 		return nil
 	}
@@ -210,43 +265,54 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 
 func printMeasureText(r measureResult) {
 	st := style{on: colorOn()}
-	fmt.Printf("%s  %s  %.1fs  %d samples  %d errors\n", st.bold("POWER-Z measure"), r.Serial, r.DurationS, r.Samples, r.Errors)
+	fmt.Printf("%s  %s  %.1fs  %d samples  %d failed  flow %s\n", st.bold("POWER-Z measure"),
+		r.Serial, r.DurationS, r.Samples, r.FailedSamples, r.Direction)
 	row := func(name, unit string, s *statJSON) {
 		if s == nil {
 			return
 		}
 		fmt.Printf("  %-5s min %12.6f  mean %12.6f  max %12.6f  last %12.6f %s\n", name, s.Min, s.Mean, s.Max, s.Last, unit)
 	}
-	row("VBUS", "V", r.VBusV)
-	row("IBUS", "A", r.IBusA)
-	row("PWR", "W", r.PowerW)
-	row("TEMP", "°C", r.TempC)
-	fmt.Printf("  energy %.6f Wh   charge %.4f mAh\n", r.EnergyWh, r.ChargeMAh)
+	row("VBUS", "V", r.Stats.VBusV)
+	row("IBUS", "A", r.Stats.IBusA)
+	row("PWR", "W", r.Stats.PowerW)
+	row("TEMP", "°C", r.Stats.TempC)
+	fmt.Printf("  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
 	if r.PD != nil {
 		fmt.Printf("  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)
 		for _, p := range r.PD.SourceCapabilities {
 			fmt.Printf("    #%d %s\n", p.Index, p.Text)
 		}
-		if r.PD.Contract != nil {
+		switch {
+		case r.PD.Contract != nil:
 			fmt.Printf("  contract: %s\n", r.PD.Contract.Text)
-		} else if r.PD.LastRequest != nil {
+		case r.PD.LastRequest != nil:
 			fmt.Printf("  last request: %s\n", r.PD.LastRequest.Text)
+		}
+		if r.PD.Note != nil {
+			fmt.Println("  " + st.dim(*r.PD.Note))
 		}
 	}
 }
 
 // ---------------------------------------------------------------- log
 
+// csvColumns are the columns of `log -format csv`, in order.
+var csvColumns = []string{"time", "vbus_v", "ibus_a", "power_w", "direction", "vbus_avg_v", "ibus_avg_a",
+	"power_avg_w", "temp_c", "cc1_v", "cc2_v", "dp_v", "dm_v", "vdd_v"}
+
 func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
-	interval := fs.Duration("interval", 200*time.Millisecond, "sampling interval (min 20ms)")
-	format := fs.String("format", "", "jsonl or csv (default: jsonl in JSON mode, csv otherwise)")
+	interval := fs.Duration("interval", 200*time.Millisecond, "sampling interval, at least 20ms")
+	format := fs.String("format", "", "jsonl or csv (default: jsonl in JSON mode, csv otherwise); csv columns: "+strings.Join(csvColumns, ","))
 	count := fs.Int("n", 0, "stop after n samples (0 = no limit)")
-	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; agents should always set -duration or -n)")
+	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; automation should always set -duration or -n)")
 	return func(ctx context.Context, g globals) error {
 		if *count < 0 || *duration < 0 {
 			return usageErr("log: -n and -duration must not be negative")
 		}
-		*interval = max(*interval, 20*time.Millisecond)
+		if err := checkInterval("log", *interval, 20*time.Millisecond); err != nil {
+			return err
+		}
 		f := *format
 		if f == "" {
 			f = map[bool]string{true: "jsonl", false: "csv"}[g.jsonMode()]
@@ -258,9 +324,7 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 		case "csv":
 			w := csv.NewWriter(os.Stdout)
 			defer w.Flush()
-			cols := []string{"time", "vbus_v", "ibus_a", "power_w", "vbus_avg_v", "ibus_avg_a",
-				"temp_c", "cc1_v", "cc2_v", "dp_v", "dm_v", "vdd_v"}
-			if err := w.Write(cols); err != nil {
+			if err := w.Write(csvColumns); err != nil {
 				return err
 			}
 			ff := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
@@ -269,8 +333,9 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 				if s.TempC != nil {
 					temp = ff(*s.TempC)
 				}
-				_ = w.Write([]string{s.Time.Format(time.RFC3339Nano), ff(s.VBusV), ff(s.IBusA), ff(s.PowerW),
-					ff(s.VBusAvgV), ff(s.IBusAvgA), temp, ff(s.CC1V), ff(s.CC2V), ff(s.DPV), ff(s.DMV), ff(s.VDDV)})
+				_ = w.Write([]string{s.Time, ff(s.VBusV), ff(s.IBusA), ff(s.PowerW), s.Direction,
+					ff(s.VBusAvgV), ff(s.IBusAvgA), ff(s.PowerAvgW), temp,
+					ff(s.CC1V), ff(s.CC2V), ff(s.DPV), ff(s.DMV), ff(s.VDDV)})
 				w.Flush()
 				return w.Error()
 			}
@@ -323,21 +388,33 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 
 // ---------------------------------------------------------------- pd
 
+// pdEnd is the final line of `pd` output in JSON mode.
+type pdEnd struct {
+	SchemaVersion int     `json:"schema_version"`
+	Kind          string  `json:"kind"` // "summary"
+	Time          string  `json:"time"`
+	DurationS     float64 `json:"duration_s"`
+	*pdSummary
+}
+
 func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
-	interval := fs.Duration("interval", 25*time.Millisecond, "polling interval (the meter buffers PD traffic between polls)")
-	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; agents should always set -duration or -n)")
-	count := fs.Int("n", 0, "stop after n records (0 = no limit; waits indefinitely without PD traffic, so combine with -duration)")
+	interval := fs.Duration("interval", 25*time.Millisecond, "polling interval, at least 10ms (the meter buffers PD traffic between polls)")
+	duration := fs.Duration("duration", 0, "stop after this long (0 = no limit; automation should always set -duration)")
+	count := fs.Int("n", 0, "stop after n records (0 = no limit; without PD traffic it waits, so combine with -duration)")
 	goodCRC := fs.Bool("goodcrc", false, "include GoodCRC acknowledgements")
 	return func(ctx context.Context, g globals) error {
 		if *count < 0 || *duration < 0 {
 			return usageErr("pd: -n and -duration must not be negative")
 		}
-		*interval = max(*interval, 10*time.Millisecond)
+		if err := checkInterval("pd", *interval, 10*time.Millisecond); err != nil {
+			return err
+		}
 		m, err := open(ctx, g)
 		if err != nil {
 			return err
 		}
 		defer m.close()
+		parent := ctx
 		if *duration > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, *duration)
@@ -347,10 +424,24 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 		if !jsonOut {
 			fmt.Fprintln(os.Stderr, "listening for USB-PD traffic (passive; Ctrl-C to stop)…")
 		}
+		start := time.Now()
 		tr := &pdTracker{showGoodCRC: *goodCRC}
 		tick := time.NewTicker(*interval)
 		defer tick.Stop()
 		n := 0
+		finish := func() error {
+			sum := tr.summary(nil)
+			sum.Records = nil // records were already streamed
+			if jsonOut {
+				return emit(pdEnd{SchemaVersion: schemaVersion, Kind: "summary", Time: utcTime(time.Now()),
+					DurationS: round(time.Since(start).Seconds(), 3), pdSummary: sum})
+			}
+			fmt.Fprintf(os.Stderr, "%d messages, %d events\n", sum.Messages, sum.Events)
+			if sum.Note != nil {
+				fmt.Fprintln(os.Stderr, *sum.Note)
+			}
+			return nil
+		}
 		for {
 			pd, err := m.ReadPD(ctx)
 			if err != nil {
@@ -376,7 +467,7 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 					return err
 				}
 				if n++; *count > 0 && n >= *count {
-					return nil
+					return finish()
 				}
 			}
 			select {
@@ -386,10 +477,10 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 			}
 			break
 		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return ctx.Err()
+		if errors.Is(parent.Err(), context.Canceled) {
+			return parent.Err()
 		}
-		return nil
+		return finish()
 	}
 }
 
@@ -400,27 +491,28 @@ type infoResult struct {
 	USB           km003c.USBDescription `json:"usb"`
 	Device        *deviceJSON           `json:"device"`
 	Settings      *settingsJSON         `json:"settings"`
-	Errors        []string              `json:"errors,omitempty"`
+	Errors        []string              `json:"errors"`
 }
 
 type deviceJSON struct {
-	Model           string `json:"model"`
-	FirmwareVersion string `json:"firmware_version"`
-	FirmwareDate    string `json:"firmware_date"`
-	HardwareVersion string `json:"hardware_version"`
-	HardwareDate    string `json:"hardware_date"`
-	Serial          string `json:"serial"`
-	UUID            string `json:"uuid,omitempty"`
+	Model           string  `json:"model"`
+	FirmwareVersion string  `json:"firmware_version"`
+	FirmwareDate    string  `json:"firmware_date"`
+	HardwareVersion string  `json:"hardware_version"`
+	HardwareDate    string  `json:"hardware_date"`
+	Serial          string  `json:"serial"`
+	UUID            *string `json:"uuid"`
+	TailLayout      string  `json:"adc_tail_layout"`
 }
 
 type settingsJSON struct {
 	DeviceName        string `json:"device_name"`
 	SampleRateSPS     int    `json:"sample_rate_sps"`
 	BrightnessPercent int    `json:"brightness_percent"`
-	Rotation          int    `json:"rotation"`
+	RotationCode      int    `json:"rotation_code"`
 	AutoRotate        bool   `json:"auto_rotate"`
-	Language          int    `json:"language"`
-	Theme             int    `json:"theme"`
+	LanguageCode      int    `json:"language_code"`
+	ThemeCode         int    `json:"theme_code"`
 	ChecksumOK        bool   `json:"checksum_ok"`
 }
 
@@ -431,14 +523,14 @@ func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
 			return err
 		}
 		defer m.close()
-		res := infoResult{SchemaVersion: schemaVersion, USB: m.usb}
+		res := infoResult{SchemaVersion: schemaVersion, USB: m.usb, Errors: []string{}}
 		if info, err := m.ReadInfo(ctx); err != nil {
 			res.Errors = append(res.Errors, "device: "+err.Error())
 		} else {
 			res.Device = &deviceJSON{
-				Model: info.Model, FirmwareVersion: info.FirmwareVersion, FirmwareDate: info.FirmwareDate,
-				HardwareVersion: info.HardwareVersion, HardwareDate: info.HardwareDate,
-				Serial: info.Serial, UUID: info.UUID,
+				Model: info.Model, FirmwareVersion: info.FirmwareVersion, FirmwareDate: isoDate(info.FirmwareDate),
+				HardwareVersion: info.HardwareVersion, HardwareDate: isoDate(info.HardwareDate),
+				Serial: info.Serial, UUID: strOrNil(info.UUID), TailLayout: m.Layout().String(),
 			}
 		}
 		if set, err := m.ReadSettings(ctx); err != nil {
@@ -446,8 +538,8 @@ func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
 		} else {
 			res.Settings = &settingsJSON{
 				DeviceName: set.DeviceName, SampleRateSPS: set.SampleRate.SamplesPerSecond(),
-				BrightnessPercent: set.Brightness, Rotation: set.Rotation, AutoRotate: set.AutoRotate,
-				Language: set.Language, Theme: set.Theme, ChecksumOK: set.CRCAOK && set.CRCBOK,
+				BrightnessPercent: set.Brightness, RotationCode: set.Rotation, AutoRotate: set.AutoRotate,
+				LanguageCode: set.Language, ThemeCode: set.Theme, ChecksumOK: set.CRCAOK && set.CRCBOK,
 			}
 		}
 		if ctx.Err() != nil {
@@ -487,20 +579,26 @@ func printInfoText(r infoResult) {
 		kv("Hardware/boot ver", d.HardwareVersion)
 		kv("Hardware date", d.HardwareDate)
 		kv("Serial", d.Serial)
-		kv("UUID", d.UUID)
+		kv("UUID", deref(d.UUID, ""))
 	}
 	if s := r.Settings; s != nil {
 		fmt.Println(st.bold("Settings"))
 		kv("Device name", s.DeviceName)
 		kv("Sample rate", fmt.Sprintf("%d SPS", s.SampleRateSPS))
 		kv("Brightness", fmt.Sprintf("%d %%", s.BrightnessPercent))
-		kv("Rotation", strconv.Itoa(s.Rotation))
+		kv("Rotation code", strconv.Itoa(s.RotationCode))
 		kv("Auto-rotate", strconv.FormatBool(s.AutoRotate))
 		kv("Checksum", map[bool]string{true: "ok", false: "mismatch"}[s.ChecksumOK])
 	}
 }
 
 // ---------------------------------------------------------------- devices
+
+type devicesResult struct {
+	SchemaVersion int                     `json:"schema_version"`
+	Count         int                     `json:"count"`
+	Devices       []km003c.USBDescription `json:"devices"`
+}
 
 func setupDevices(fs *flag.FlagSet) func(context.Context, globals) error {
 	return func(_ context.Context, g globals) error {
@@ -509,7 +607,7 @@ func setupDevices(fs *flag.FlagSet) func(context.Context, globals) error {
 			return err
 		}
 		if g.jsonMode() {
-			return emitIndented(map[string]any{"schema_version": schemaVersion, "count": len(devs), "devices": devs})
+			return emitIndented(devicesResult{SchemaVersion: schemaVersion, Count: len(devs), Devices: devs})
 		}
 		if len(devs) == 0 {
 			fmt.Println("no POWER-Z KM003C connected")

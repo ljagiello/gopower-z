@@ -29,6 +29,9 @@ type Device struct {
 	// layout selects how ADC tail bytes are decoded (see DetectLayout).
 	layout   TailLayout
 	firmware string
+	// infoSpacing separates the MemoryReads of ReadInfo (the verified probe
+	// spacing); tests shorten it.
+	infoSpacing time.Duration
 
 	// Timeout bounds each request/reply exchange (draining happens before
 	// the timeout starts).
@@ -44,18 +47,52 @@ var ErrStuck = errors.New("km003c: meter keeps sending unexpected data; unplug a
 // NewDevice wraps an open transport. Stale replies left on the IN endpoint by
 // a previous session are drained before the first request.
 func NewDevice(t Transport) *Device {
-	return &Device{t: t, Timeout: time.Second, dirty: true}
+	return &Device{t: t, Timeout: time.Second, dirty: true, infoSpacing: 300 * time.Millisecond}
 }
 
-// Close drains anything that may still be queued (so the next program to
-// open the meter does not stall it) and closes the transport.
+// Close ends the session and closes the transport. If CONNECT was sent, it
+// sends DISCONNECT: otherwise the meter's session timeout (5 s on 1.9.5)
+// later queues an unsolicited DISCONNECT that the next program to open the
+// meter would find waiting. It then drains anything still queued.
 func (d *Device) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.connected {
+		d.disconnect()
+	}
 	if d.dirty {
 		d.drain()
 	}
 	return d.t.Close()
+}
+
+// disconnect sends DISCONNECT and consumes the meter's answer. The meter
+// replies with its own 03 frame (carrying its own counter, not the request
+// id), or with REJECT if the session had already timed out. Its only effect
+// is clearing the session flags (connected, streaming, PD capture) - see
+// docs/firmware.html.
+func (d *Device) disconnect() {
+	ctx, cancel := context.WithTimeout(context.Background(), d.Timeout)
+	defer cancel()
+	if err := d.prepare(ctx); err != nil {
+		return
+	}
+	h := ControlHeader(TypeDisconnect, d.nextID(), 0)
+	if err := d.send(ctx, h[:]); err != nil {
+		return
+	}
+	d.connected = false
+	buf := make([]byte, 4096)
+	for {
+		frame, err := d.read(ctx, buf)
+		if err != nil {
+			d.dirty = true
+			return
+		}
+		if rh, err := ParseHeader(frame); err == nil && (rh.Type == TypeDisconnect || rh.Type == TypeReject) {
+			return
+		}
+	}
 }
 
 // idleDrainAfter is how long the link may be idle before the IN endpoint is
@@ -445,7 +482,7 @@ func (d *Device) ReadInfo(ctx context.Context) (info DeviceInfo, err error) {
 			select {
 			case <-ctx.Done():
 				return info, ctx.Err()
-			case <-time.After(300 * time.Millisecond):
+			case <-time.After(d.infoSpacing):
 			}
 		}
 		data, err := d.memoryRead(ctx, b.addr, 64)

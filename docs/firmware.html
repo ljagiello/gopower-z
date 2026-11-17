@@ -231,7 +231,14 @@ base 0x4000  (unused)     size 451748  CRC DD9AD21D  (written by the bootloader 
 <tr><th>Type</th><th>Name</th><th>1.9.5 behaviour</th></tr>
 <tr><td><code>0x01, 0x0A, 0x12, 0x13</code></td><td></td><td>ignored, no reply</td></tr>
 <tr><td><code>0x02</code></td><td>Connect</td><td>from unconnected: set connected, receive timeout 5,000 ms; while connected: clear flags <code>0xFFFC</code>, timeout 120,000 ms; reply Accept <code>0x05</code></td></tr>
-<tr><td><code>0x03</code></td><td>Disconnect</td><td><code>FUN_0001c374</code>: clear flags, timeout infinite, auth 0, sends a <code>0x03</code> frame</td></tr>
+<tr><td><code>0x03</code></td><td>Disconnect</td><td>Only accepted while connected; otherwise Reject <code>0x06</code>. It calls the same routine as the idle timeout, <code>FUN_0001c374</code>, which:
+<ul>
+  <li>clears the connected, graph and PD-capture flags (<code>0x20003CD6</code> bits 2&ndash;5);</li>
+  <li>sets the receive timeout to infinite;</li>
+  <li>resets auth to 0;</li>
+  <li>immediately sends <code>03 id 00 00</code> with the meter's own incremented counter (<code>0x20003D20</code>), not the host's id.</li>
+</ul>
+No timeout is left armed, so nothing more is queued. The host must read that reply, or it stays pending on EP <code>0x81</code>. 2.0.7 (<code>FUN_00053f84</code>) does the same but clears only flags <code>0x64</code>.</td></tr>
 <tr><td><code>0x04</code></td><td>Reset</td><td class="danger">NVIC_SystemReset (<code>FUN_00011de4</code>)</td></tr>
 <tr><td><code>0x09</code></td><td>JumpDfu</td><td class="danger"><code>0x12345678</code> → <code>0x200F0FF0</code> (retention SRAM), reset into the bootloader</td></tr>
 <tr><td><code>0x0C</code></td><td>GetData</td><td><code>FUN_00046494(src, attr)</code>, §7</td></tr>
@@ -449,6 +456,27 @@ line2(v, dp, dm):                                       // FUN_00021bd4
   <li>different VBUS windows.</li>
 </ul>
 <p>Use the classifier that matches the meter's firmware generation.</p>
+<h3 id="label-versions">Label variant by version</h3>
+<p>Method: normalise each image's decompiled label functions (strip addresses and variable numbering) and diff them against the 1.9.5 and 2.0.7 references, including the 2.0.x wrapper that picks between the protocol-code labels and the voltage classifier. The arguments come from each wrapper's call site.</p>
+<div class="tw"><table>
+<tr><th>Firmware (date)</th><th>Variant</th><th>Functions (line 1 / line 2 / wrapper)</th><th>Inputs</th><th>Difference from the reference</th></tr>
+<tr><td>1.7.9&ndash;1.9.9</td><td>1.9.5</td><td>one function (1.9.5: <code>0x1FB44</code>)</td><td>VBUS mV, IBUS mA (u16), D+/D&minus; 50-sample avg</td><td>none in the classifier; only the format strings of the proprietary branch differ</td></tr>
+<tr><td>2.0.0 (2025.2.20, Windows app)</td><td>1.9.5 constants</td><td><code>0x20728</code></td><td>same quantities, computed from another structure</td><td>not proven identical line by line</td></tr>
+<tr><td>2.0.1 (2026.4.9, Drive "V2.0.0")</td><td>2.0.7</td><td><code>0x21C50</code> / <code>0x2182C</code> / <code>0x21020</code></td><td>struct <code>+0x68</code>, <code>+0x28</code>, <code>+0x2A</code></td><td>none (0 diff lines in all three)</td></tr>
+<tr><td>2.0.1 (2026.4.21)</td><td>2.0.7</td><td><code>0x21DE4</code> / <code>0x21958</code> / <code>0x2114C</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.2 (2026.4.29)</td><td>2.0.7</td><td><code>0x21E48</code> / <code>0x219BC</code> / <code>0x211B0</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.3 (2026.5.20)</td><td>2.0.7</td><td><code>0x21D54</code> / <code>0x218C8</code> / <code>0x210BC</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.5 (2026.7.15)</td><td>2.0.7</td><td><code>0x21FF0</code> / <code>0x21B64</code> / <code>0x21358</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.6 (2026.8.9)</td><td>2.0.7</td><td><code>0x21FF8</code> / <code>0x21B6C</code> / <code>0x21360</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.7 (2026.9.29)</td><td>reference</td><td><code>0x22098</code> / <code>0x21BD4</code> / <code>0x213C8</code></td><td>struct <code>+0x68</code>, <code>+0x28</code>, <code>+0x2A</code></td><td>&mdash;</td></tr>
+</table></div>
+<p>The label variant changes at exactly the same version as the ADC payload tail, so choosing it by layout (<code>&lt;= 2.0.0</code> → 1.9.5 logic, <code>&gt;= 2.0.1</code> → 2.0.7 logic) is correct for every official build.</p>
+<div class="note">The 2.0.x classifier does <strong>not</strong> take instantaneous D+/D&minus;. Its wrapper is called with the ADC struct (2.0.7: from the dashboard at <code>0x4A780</code>, pointer from <code>FUN_00017dae</code>). It passes <code>+0x28</code>/<code>+0x2A</code>, the 50-sample D+/D&minus; averages that the ADC task fills, which are the same fields 1.9.x exports at payload <code>0x28</code>/<code>0x2A</code>. 2.0.x no longer exports them in the ADC payload, so a host has two approximations:
+<ul>
+  <li>payload <code>0x1E</code>/<code>0x20</code> divided by 10, a 0.1 mV value refreshed every 250 ADC iterations;</li>
+  <li>AdcQueue (<code>0x02</code>, readable without auth on 2.0.x) records taken while the rate index is 1. At rate 1 the four line voltages in each record are exactly struct <code>+0x24..+0x2A</code>, the 50-sample averages. Changing the rate to get there is a state change.</li>
+</ul>
+Values near a threshold may label differently from the screen.</div>
 <h3>PD label (1.9.5 <code>FUN_0002768c</code>; 2.0.7 <code>FUN_00025590</code>)</h3>
 <p>The label is the PD revision ("PD3.0", or "PD3.1" with "EPR"; 2.0.x adds "PD3.2") plus suffixes:</p>
 <ul>

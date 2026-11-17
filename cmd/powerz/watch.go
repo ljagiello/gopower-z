@@ -37,15 +37,15 @@ func (s *session) add(now time.Time, a km003c.ADC) {
 	} else {
 		dt := now.Sub(s.last).Hours()
 		if dt > 0 && dt < 1.0/3600*5 { // ignore gaps > 5 s
-			s.wh += a.Power() * dt
-			s.ah += a.IBus() * dt
+			s.wh += a.FlowPower() * dt
+			s.ah += a.FlowA() * dt
 		}
 	}
 	s.last = now
 	s.v.add(a.VBus())
-	s.i.add(a.IBus())
-	s.p.add(a.Power())
-	s.history = append(s.history, math.Abs(a.Power()))
+	s.i.add(a.FlowA())
+	s.p.add(a.FlowPower())
+	s.history = append(s.history, math.Abs(a.FlowPower()))
 	if len(s.history) > 512 {
 		s.history = s.history[len(s.history)-512:]
 	}
@@ -72,7 +72,10 @@ func setupWatch(fs *flag.FlagSet) func(context.Context, globals) error {
 	interval := fs.Duration("interval", 200*time.Millisecond, "refresh interval (min 50ms)")
 	noPD := fs.Bool("no-pd", false, "do not read the PD event stream")
 	return func(ctx context.Context, g globals) error {
-		return runWatch(ctx, g, max(*interval, 50*time.Millisecond), *noPD)
+		if err := checkInterval("watch", *interval, 50*time.Millisecond); err != nil {
+			return err
+		}
+		return runWatch(ctx, g, *interval, *noPD)
 	}
 }
 
@@ -200,8 +203,8 @@ func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo, infoErr
 			st.dim(fmt.Sprintf("meter-avg %s  min %s  max %s", f6(avgDev), f6(sv.min), f6(sv.max))))
 	}
 	big("VBUS", grouped(a.VBus()), "V", st.green, s.v, a.VBusAvg())
-	big("IBUS", grouped(a.IBus()), "A", st.pink, s.i, a.IBusAvg())
-	big("PWR", grouped(a.Power()), "W", st.blue, s.p, a.PowerAvg())
+	big("IBUS", grouped(a.FlowA()), "A", st.pink, s.i, a.FlowAvgA())
+	big("PWR", grouped(a.FlowPower()), "W", st.blue, s.p, a.FlowPowerAvg())
 	line("")
 
 	el := time.Duration(0)

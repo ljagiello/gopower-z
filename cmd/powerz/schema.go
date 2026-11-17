@@ -4,7 +4,240 @@ import (
 	"context"
 	"flag"
 	"sort"
+	"strings"
 )
+
+// fieldDoc documents one JSON field. Nested object fields use dotted names
+// ("inferred.cc.attached"); objects and arrays whose shape is defined
+// elsewhere carry a ref to an entry of "definitions".
+type fieldDoc struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"` // number, integer, string, boolean, object, array
+	Nullable    bool   `json:"nullable"`
+	Ref         string `json:"ref,omitempty"`
+	Description string `json:"description"`
+}
+
+func fd(name, typ string, nullable bool, desc string) fieldDoc {
+	return fieldDoc{Name: name, Type: typ, Nullable: nullable, Description: desc}
+}
+
+func fref(name, typ, ref string, nullable bool, desc string) fieldDoc {
+	return fieldDoc{Name: name, Type: typ, Nullable: nullable, Ref: ref, Description: desc}
+}
+
+const (
+	tNum  = "number"
+	tInt  = "integer"
+	tStr  = "string"
+	tBool = "boolean"
+	tObj  = "object"
+	tArr  = "array"
+)
+
+// definitions documents every JSON shape powerz prints. A contract test checks
+// real output against these lists in both directions.
+var definitions = map[string][]fieldDoc{
+	"snapshot": {
+		fd("schema_version", tInt, false, "output schema version; bumped when a field is renamed or removed"),
+		fd("time", tStr, false, "host time of the reading, UTC, ISO 8601 with milliseconds"),
+		fd("serial", tStr, false, "USB serial number of the meter"),
+		fd("firmware_version", tStr, true, "meter application firmware (selects firmware-dependent decoding); null if it could not be read"),
+		fd("vbus_v", tNum, false, "bus voltage, volts (resolution 1 µV)"),
+		fd("ibus_a", tNum, false, "bus current, amperes (resolution 1 µA); positive = flowing from the meter's female receptacle to its male plug (normal set-up: source on the receptacle), negative = reverse; same sign as the meter's screen"),
+		fd("power_w", tNum, false, "vbus_v * ibus_a, watts; positive = delivered receptacle -> plug"),
+		fd("direction", tStr, false, "receptacle_to_plug | plug_to_receptacle | none (|current| < 1 mA); the arrow on the meter's screen"),
+		fd("vbus_avg_v", tNum, false, "the meter's smoothed VBUS average, volts (updates about once per second)"),
+		fd("ibus_avg_a", tNum, false, "the meter's smoothed current average, amperes, same sign as ibus_a"),
+		fd("power_avg_w", tNum, false, "vbus_avg_v * ibus_avg_a, watts"),
+		fd("temp_c", tNum, true, "meter temperature, °C; null when the meter flags it invalid (e.g. at 1000 SPS)"),
+		fd("temp2_c", tNum, true, "second (external, reserved) temperature channel, °C; normally null"),
+		fd("cc1_v", tNum, false, "CC1 line voltage, volts"),
+		fd("cc2_v", tNum, false, "CC2 line voltage, volts"),
+		fd("dp_v", tNum, false, "D+ voltage, volts"),
+		fd("dm_v", tNum, false, "D- voltage, volts"),
+		fd("vdd_v", tNum, false, "the meter's internal supply voltage, volts"),
+		fd("cc2_avg_v", tNum, true, "the meter's CC2 average, volts (4 mV resolution); firmware <= 2.0.0 only"),
+		fd("dp_avg_v", tNum, true, "the meter's D+ 50-sample average, volts; firmware <= 2.0.0 only"),
+		fd("dm_avg_v", tNum, true, "the meter's D- 50-sample average, volts; firmware <= 2.0.0 only"),
+		fd("sample_rate_sps", tInt, true, "sample rate configured on the meter: 2, 10, 50 or 1000; null if unknown"),
+		fd("sink_battery_percent", tNum, true, "battery level of the sink learned by the meter from USB-PD traffic (firmware >= 2.0.1); null if unknown"),
+		fd("inferred", tObj, false, "values computed by powerz, not reported by the meter"),
+		fd("inferred.dashboard_label", tStr, true, "the meter's first D+/D- protocol label (DCP, DCP 1.5A, Apple 2.4A, QC2.0 9V, QC3.0 | QC3+, FCP | AFC, VOOC, ...), recomputed with the meter firmware's algorithm; a D+/D- voltage signature, not a confirmed protocol session; null where the screen shows [N/A]"),
+		fd("inferred.dashboard_label_2", tStr, true, "the meter's second D+/D- label (SFCP 9V, FCP | SCP | AFC, VOOC, ...); null where the screen shows [N/A]"),
+		fd("inferred.cc", tObj, false, "Type-C connection inferred from the CC voltages"),
+		fd("inferred.cc.attached", tStr, false, "cc1 | cc2 | both | none | open | unknown"),
+		fd("inferred.cc.advertisement", tStr, false, "source current advertisement: default_usb | 1.5A | 3.0A | none | unknown"),
+		fd("inferred.cc.advertised_current_a", tNum, true, "1.5 or 3.0; null for default USB current or no advertisement"),
+		fd("inferred.cc.text", tStr, false, "one-line human summary"),
+		fd("raw", tObj, false, "raw meter values for debugging"),
+		fd("raw.ibus_ua", tInt, false, "the meter's raw signed current, µA (negative = receptacle -> plug)"),
+		fd("raw.vbus_uncal_avg_uv", tInt, false, "uncalibrated VBUS average, µV"),
+		fd("raw.ibus_uncal_avg_ua", tInt, false, "uncalibrated current average, µA, raw sign"),
+		fd("raw.tail_layout", tStr, false, "how ADC bytes 0x24..0x2B were decoded: line-averages (firmware <= 2.0.0), status (>= 2.0.1) or unknown"),
+		fd("raw.tail_hex", tStr, false, "ADC payload bytes 0x24..0x2B, hex"),
+		fd("raw.accel_status", tInt, true, "accelerometer status/orientation byte (firmware >= 2.0.1)"),
+	},
+	"stat": {
+		fd("min", tNum, false, "smallest value (signed: for ibus_a/power_w the lowest flow toward the plug)"),
+		fd("mean", tNum, false, "arithmetic mean of the samples"),
+		fd("max", tNum, false, "largest value (for ibus_a/power_w in the normal direction: the peak draw)"),
+		fd("last", tNum, false, "final sample"),
+	},
+	"measure": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fd("serial", tStr, false, "USB serial number of the meter"),
+		fd("firmware_version", tStr, true, "meter application firmware; null if unknown"),
+		fd("start", tStr, false, "start of the window, UTC ISO 8601"),
+		fd("end", tStr, false, "end of the window, UTC ISO 8601"),
+		fd("duration_s", tNum, false, "wall-clock length of the window, seconds"),
+		fd("integrated_s", tNum, false, "time span covered by energy_wh / charge_mah (first sample to end), seconds"),
+		fd("interval_s", tNum, false, "requested sampling interval, seconds"),
+		fd("samples", tInt, false, "successful readings"),
+		fd("failed_samples", tInt, false, "failed readings (exit status 7 if > 0)"),
+		fd("last_error", tStr, true, "message of the last failed reading, or null"),
+		fd("direction", tStr, false, "dominant flow direction from the mean current: receptacle_to_plug | plug_to_receptacle | none"),
+		fd("stats", tObj, false, "statistics over the successful samples"),
+		fref("stats.vbus_v", tObj, "stat", true, "bus voltage, volts"),
+		fref("stats.ibus_a", tObj, "stat", true, "current, amperes, signed like ibus_a"),
+		fref("stats.power_w", tObj, "stat", true, "power, watts, signed like power_w"),
+		fref("stats.temp_c", tObj, "stat", true, "meter temperature, °C; null if never valid"),
+		fd("energy_wh", tNum, false, "energy over integrated_s, watt-hours; positive = delivered receptacle -> plug"),
+		fd("charge_mah", tNum, false, "charge over integrated_s, milliamp-hours; positive = delivered receptacle -> plug"),
+		fref("last", tObj, "snapshot", true, "the final reading (same shape as `read`)"),
+		fref("pd", tObj, "pd_summary", true, "USB-PD capture over the window; null with -pd=false"),
+	},
+	"pd_summary": {
+		fd("messages", tInt, false, "captured USB-PD messages (GoodCRC excluded)"),
+		fd("events", tInt, false, "captured connection events (attach, detach, hard reset, ...)"),
+		fref("source_capabilities", tArr, "pdo", false, "PDOs most recently advertised by the source ([] if none seen)"),
+		fref("last_request", tObj, "rdo", true, "last sink Request seen, or null"),
+		fref("contract", tObj, "rdo", true, "last Request acknowledged by PS_RDY (the active contract), or null"),
+		fd("note", tStr, true, "explanation when nothing was captured (no negotiation during the window is normal), otherwise null"),
+		fref("records", tArr, "pd_record", true, "every captured record in order (measure); null in the summary line of `pd`, whose records were streamed"),
+	},
+	"pd_end": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fd("kind", tStr, false, "always \"summary\": the last line of `pd` output"),
+		fd("time", tStr, false, "host time, UTC ISO 8601"),
+		fd("duration_s", tNum, false, "length of the capture, seconds"),
+		fd("messages", tInt, false, "as in pd_summary"),
+		fd("events", tInt, false, "as in pd_summary"),
+		fref("source_capabilities", tArr, "pdo", false, "as in pd_summary"),
+		fref("last_request", tObj, "rdo", true, "as in pd_summary"),
+		fref("contract", tObj, "rdo", true, "as in pd_summary"),
+		fd("note", tStr, true, "as in pd_summary"),
+		fref("records", tArr, "pd_record", true, "null (records were streamed as separate lines)"),
+	},
+	"pd_record": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fd("time", tStr, false, "host time the record was read, UTC ISO 8601"),
+		fd("meter_time_ms", tInt, false, "meter uptime when the record was captured, milliseconds"),
+		fd("kind", tStr, false, "message | event"),
+		fd("sop", tStr, true, "SOP | SOP' | SOP'' | SOP'_Dbg | SOP''_Dbg (messages)"),
+		fd("message", tStr, true, "USB-PD message name, e.g. Source_Capabilities, Request, Accept, PS_RDY; long_message_undecoded for unverified long records"),
+		fd("class", tStr, true, "control | data | extended"),
+		fd("power_role", tStr, true, "source | sink (SOP messages)"),
+		fd("data_role", tStr, true, "dfp | ufp (SOP messages)"),
+		fd("spec_revision", tStr, true, "1.0 | 2.0 | 3.x"),
+		fd("message_id", tInt, true, "3-bit message counter"),
+		fd("from_meter", tBool, false, "true if the meter itself sent the message"),
+		fd("objects_hex", tArr, false, "raw 32-bit data objects as hex strings ([] if none)"),
+		fref("source_capabilities", tArr, "pdo", true, "decoded PDOs (Source_Capabilities / EPR_Source_Capabilities), otherwise null"),
+		fref("request", tObj, "rdo", true, "decoded Request with the PDO it selects, otherwise null"),
+		fd("event", tStr, true, "attach | detach | bad message id | hard reset | cable reset | receive error | ... (events)"),
+		fd("cc", tInt, true, "CC line (1 or 2) of an attach/detach event"),
+		fd("param", tInt, true, "event parameter for other events"),
+		fd("raw_hex", tStr, false, "record bytes as captured, hex"),
+	},
+	"pdo": {
+		fd("index", tInt, false, "1-based object position (what a Request selects)"),
+		fd("type", tStr, false, "fixed | battery | variable | pps | epr_avs | spr_avs | unknown"),
+		fd("min_voltage_v", tNum, false, "minimum voltage, volts (= max for fixed)"),
+		fd("max_voltage_v", tNum, false, "maximum voltage, volts"),
+		fd("max_current_a", tNum, true, "maximum current, amperes (SPR AVS: at 15 V); null when the PDO specifies power"),
+		fd("max_current_20v_a", tNum, true, "SPR AVS maximum current at 20 V, amperes; otherwise null"),
+		fd("max_power_w", tNum, false, "maximum power, watts"),
+		fd("raw_hex", tStr, false, "raw PDO"),
+		fd("text", tStr, false, "one-line human summary"),
+	},
+	"rdo": {
+		fd("object_position", tInt, false, "1-based position of the selected PDO"),
+		fd("voltage_v", tNum, true, "requested voltage for PPS/AVS, volts; null for fixed"),
+		fd("operating_current_a", tNum, true, "requested operating current, amperes"),
+		fd("max_current_a", tNum, true, "maximum operating current (fixed/variable), amperes"),
+		fd("operating_power_w", tNum, true, "requested power (battery), watts"),
+		fd("capability_mismatch", tBool, false, "sink says the offered power is not enough"),
+		fd("epr", tBool, false, "EPR mode capable"),
+		fref("pdo", tObj, "pdo", true, "the source PDO it selects, if the capabilities were captured"),
+		fd("raw_hex", tStr, false, "raw RDO"),
+		fd("text", tStr, false, "one-line human summary"),
+	},
+	"info": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fref("usb", tObj, "usb", false, "USB descriptors"),
+		fd("device", tObj, true, "meter identity read from its memory; null if unavailable (exit status 7)"),
+		fd("device.model", tStr, false, "e.g. KM003C"),
+		fd("device.firmware_version", tStr, false, "application firmware, e.g. 1.9.5"),
+		fd("device.firmware_date", tStr, false, "firmware build date, YYYY-MM-DD"),
+		fd("device.hardware_version", tStr, false, "hardware/bootloader version, e.g. 2.2"),
+		fd("device.hardware_date", tStr, false, "hardware/bootloader date, YYYY-MM-DD"),
+		fd("device.serial", tStr, false, "factory serial number"),
+		fd("device.uuid", tStr, true, "factory unique id (32 hex characters), null if absent"),
+		fd("device.adc_tail_layout", tStr, false, "firmware-dependent ADC decoding in use: line-averages | status | unknown"),
+		fd("settings", tObj, true, "meter settings; null if unavailable (exit status 7)"),
+		fd("settings.device_name", tStr, false, "name shown on the meter"),
+		fd("settings.sample_rate_sps", tInt, false, "2, 10, 50 or 1000"),
+		fd("settings.brightness_percent", tInt, false, "screen brightness, %"),
+		fd("settings.rotation_code", tInt, false, "raw screen-rotation code (0-3)"),
+		fd("settings.auto_rotate", tBool, false, "screen auto-rotation enabled"),
+		fd("settings.language_code", tInt, false, "raw UI language code"),
+		fd("settings.theme_code", tInt, false, "raw UI theme code"),
+		fd("settings.checksum_ok", tBool, false, "both settings blocks passed their CRC-32"),
+		fd("errors", tArr, false, "parts that could not be read ([] if none; exit status 7 otherwise)"),
+	},
+	"usb": {
+		fd("manufacturer", tStr, false, "USB manufacturer string"),
+		fd("product", tStr, false, "USB product string"),
+		fd("serial", tStr, false, "USB serial number (use with -serial)"),
+		fd("bus", tInt, false, "USB bus number"),
+		fd("address", tInt, false, "USB device address"),
+	},
+	"devices": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fd("count", tInt, false, "number of meters found"),
+		fref("devices", tArr, "usb", false, "one entry per meter"),
+	},
+	"version": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fd("version", tStr, false, "powerz version"),
+	},
+	"error": {
+		fd("schema_version", tInt, false, "output schema version"),
+		fd("error", tObj, false, "the error (printed on stderr)"),
+		fd("error.code", tStr, false, "usage | not_found | busy | timeout | permission_denied | partial | interrupted | error"),
+		fd("error.exit_code", tInt, false, "the process exit status"),
+		fd("error.message", tStr, false, "human-readable message"),
+		fd("error.retryable", tBool, false, "true if retrying the same command can succeed"),
+		fd("error.hint", tStr, false, "what to do next"),
+	},
+}
+
+type output struct {
+	Format string `json:"format"` // json_object, json_lines, csv, text
+	Ref    string `json:"ref,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+type commandDoc struct {
+	Name    string    `json:"name"`
+	Summary string    `json:"summary"`
+	Output  output    `json:"output"`
+	Bounded bool      `json:"bounded"`
+	Flags   []flagDoc `json:"flags"`
+	Example string    `json:"example"`
+	Notes   []string  `json:"notes"`
+}
 
 type flagDoc struct {
 	Name        string `json:"name"`
@@ -13,144 +246,62 @@ type flagDoc struct {
 	Description string `json:"description"`
 }
 
-type commandDoc struct {
-	Name    string            `json:"name"`
-	Summary string            `json:"summary"`
-	Output  string            `json:"output"`
-	Bounded bool              `json:"bounded"` // terminates on its own
-	Flags   []flagDoc         `json:"flags"`
-	Fields  map[string]string `json:"fields,omitempty"`
-	Example string            `json:"example"`
-	Notes   []string          `json:"notes,omitempty"`
+var commonFlags = map[string]bool{"serial": true, "trace": true, "timeout": true, "wait": true, "json": true, "text": true}
+
+func flagType(f *flag.Flag) string {
+	if g, ok := f.Value.(flag.Getter); ok {
+		switch g.Get().(type) {
+		case bool:
+			return "bool"
+		case int:
+			return "int"
+		case interface{ Seconds() float64 }:
+			return "duration"
+		}
+	}
+	return "string"
 }
 
-var snapshotFields = map[string]string{
-	"schema_version":             "integer; bumped when a field is renamed or removed",
-	"time":                       "RFC 3339 host timestamp of the reading",
-	"serial":                     "USB serial number of the meter",
-	"firmware_version":           "meter application firmware version (selects how firmware-dependent fields are decoded); omitted if it could not be read",
-	"vbus_v":                     "bus voltage, volts (resolution 1 µV)",
-	"ibus_a":                     "bus current, amperes, signed (resolution 1 µA); negative = current flowing from the meter's female receptacle to its male plug (per the official app; not yet bench-verified)",
-	"power_w":                    "vbus_v * ibus_a, watts, signed like ibus_a",
-	"vbus_avg_v":                 "meter's smoothed VBUS average, volts (updates about once per second)",
-	"ibus_avg_a":                 "meter's smoothed IBUS average, amperes",
-	"power_avg_w":                "vbus_avg_v * ibus_avg_a, watts",
-	"temp_c":                     "meter temperature, °C; null when the meter reports it invalid",
-	"temp2_c":                    "second (external, reserved) temperature channel, °C; null when absent (normal)",
-	"cc1_v":                      "CC1 line voltage, volts",
-	"cc2_v":                      "CC2 line voltage, volts",
-	"dp_v":                       "D+ voltage, volts",
-	"dm_v":                       "D- voltage, volts",
-	"vdd_v":                      "meter's internal supply voltage, volts",
-	"cc2_avg_v":                  "meter's CC2 average, volts (4 mV resolution); firmware <= 2.0.0 only, otherwise null",
-	"dp_avg_v":                   "meter's D+ average, volts (1 mV resolution); firmware <= 2.0.0 only, otherwise null",
-	"dm_avg_v":                   "meter's D- average, volts (1 mV resolution); firmware <= 2.0.0 only, otherwise null",
-	"sample_rate_sps":            "the meter's configured sample rate (2, 10, 50 or 1000); null if unknown",
-	"sink_battery_percent":       "battery level of the sink, learned by the meter from USB-PD traffic (firmware 2.0.1+); null if unknown",
-	"inferred.dashboard_label":   "the meter's first D+/D- protocol label (e.g. DCP, Apple 2.4A, QC2.0 9V, FCP | AFC, [ N/A ]), recomputed with the algorithm of the meter's firmware generation (1.9.x/2.0.0 or 2.0.1+)",
-	"inferred.dashboard_label_2": "the meter's second D+/D- label (e.g. SFCP 9V, FCP | SCP | AFC, [ N/A ])",
-	"inferred.cc":                "powerz's interpretation of CC voltages (Type-C current advertisement); inference, not meter data",
-	"raw.vbus_uncal_avg_uv":      "uncalibrated VBUS average, µV",
-	"raw.ibus_uncal_avg_ua":      "uncalibrated IBUS average, µA",
-	"raw.tail_layout":            "how ADC bytes 0x24..0x2B were decoded: line-averages (firmware <= 2.0.0), status (2.0.1+) or unknown",
-	"raw.tail_hex":               "ADC payload bytes 0x24..0x2B verbatim",
-	"raw.accel_status":           "accelerometer status/orientation byte (status layout only)",
-}
-
-var measureFields = map[string]string{
-	"start, end":                      "RFC 3339 host timestamps",
-	"duration_s":                      "actual measurement duration, seconds",
-	"interval_s":                      "requested sampling interval, seconds",
-	"samples":                         "number of successful readings",
-	"errors":                          "number of failed readings (exit status 7 if > 0)",
-	"vbus_v, ibus_a, power_w, temp_c": "objects {min, mean, max, last} in the field's unit",
-	"energy_wh":                       "integral of power over time, watt-hours, signed",
-	"charge_mah":                      "integral of current over time, milliamp-hours, signed",
-	"last":                            "the final reading, same fields as `read`",
-	"pd.messages, pd.events":          "counts of captured USB-PD messages (GoodCRC excluded) and connection events",
-	"pd.source_capabilities":          "PDOs most recently advertised by the source: {index, type, min_voltage_v, max_voltage_v, max_current_a, max_power_w, raw_hex, text}",
-	"pd.last_request":                 "last sink Request: {object_position, voltage_v, operating_current_a, max_current_a, operating_power_w, capability_mismatch, epr, pdo, raw_hex, text}",
-	"pd.contract":                     "last request acknowledged by PS_RDY (the active contract), or null",
-	"pd.records":                      "every captured record (only with -pd-records), same shape as `pd` output",
-}
-
-var pdFields = map[string]string{
-	"meter_time_ms":       "meter uptime when the record was captured, milliseconds",
-	"kind":                "\"message\" or \"event\"",
-	"sop":                 "SOP, SOP', SOP'', SOP'_Dbg, SOP''_Dbg",
-	"message":             "USB-PD message name, e.g. Source_Capabilities, Request, Accept, PS_RDY",
-	"class":               "control, data or extended",
-	"power_role":          "source or sink (SOP messages)",
-	"data_role":           "dfp or ufp (SOP messages)",
-	"spec_revision":       "1.0, 2.0 or 3.x",
-	"message_id":          "3-bit message counter",
-	"from_meter":          "true if the meter itself sent the message",
-	"objects_hex":         "raw 32-bit data objects",
-	"source_capabilities": "decoded PDOs (Source_Capabilities only)",
-	"request":             "decoded RDO with the PDO it selects (Request only)",
-	"event":               "attach, detach, hard reset, cable reset, receive error, ... (events only)",
-	"cc":                  "CC line of an attach/detach event",
-	"raw_hex":             "record bytes as captured",
-}
-
-func flagsOf(fs *flag.FlagSet) []flagDoc {
-	common := map[string]bool{"serial": true, "trace": true, "timeout": true, "wait": true, "json": true, "text": true}
+func flagsOf(fs *flag.FlagSet, common bool) []flagDoc {
 	out := []flagDoc{}
 	fs.VisitAll(func(f *flag.Flag) {
-		if common[f.Name] {
+		if commonFlags[f.Name] != common {
 			return
 		}
-		typ := "string"
-		if _, ok := f.Value.(flag.Getter); ok {
-			switch f.Value.(flag.Getter).Get().(type) {
-			case bool:
-				typ = "bool"
-			case int:
-				typ = "int"
-			case interface{ Seconds() float64 }:
-				typ = "duration (e.g. 500ms, 10s, 2m)"
-			}
-		}
-		out = append(out, flagDoc{Name: "-" + f.Name, Type: typ, Default: f.DefValue, Description: f.Usage})
+		out = append(out, flagDoc{Name: "-" + f.Name, Type: flagType(f), Default: f.DefValue, Description: f.Usage})
 	})
 	return out
 }
 
 func buildSchema() map[string]any {
 	type spec struct {
-		output  string
+		out     output
 		bounded bool
-		fields  map[string]string
 		example string
 		notes   []string
 	}
 	specs := map[string]spec{
-		"read": {"one JSON object", true, snapshotFields, "powerz read -json", nil},
-		"measure": {"one JSON object", true, measureFields, "powerz measure -duration 10s -json", []string{
-			"Preferred command for agents: answers 'how much power/energy does the attached device draw' and 'what did the charger offer and negotiate'.",
-			"The meter samples at its own configured rate (see `info` settings.sample_rate_sps); polling faster only repeats values.",
+		"read": {output{"json_object", "snapshot", ""}, true, "powerz read -json", []string{}},
+		"measure": {output{"json_object", "measure", ""}, true, "powerz measure -duration 10s -json", []string{
+			"Preferred command for agents: how much power/energy the attached device draws, and what the charger offered and negotiated.",
+			"The meter samples at its configured rate (info: settings.sample_rate_sps); polling faster only repeats values.",
+			"USB-PD is only exchanged on attach or renegotiation: start measure, then connect the device, to capture it.",
 		}},
-		"log": {"JSON lines (one snapshot per line, same fields as `read`) or CSV", false, nil, "powerz log -duration 30s -interval 500ms -json", []string{
-			"Runs until -duration/-n or interrupt; always pass -duration or -n from automation.",
-		}},
-		"pd": {"JSON lines, one per captured PD message or event", false, pdFields, "powerz pd -duration 20s -json", []string{
-			"Passive capture: the meter only sniffs traffic between the charger and the device plugged through it; powerz never sends PD messages.",
-			"Reading PD drains the meter's PD buffer, so only one consumer sees each record.",
-			"Always pass -duration or -n from automation.",
-		}},
-		"info": {"one JSON object {usb, device, settings, errors}", true, map[string]string{
-			"usb":      "{manufacturer, product, serial, bus, address} from USB descriptors",
-			"device":   "{model, firmware_version, firmware_date, hardware_version, hardware_date, serial, uuid} or null",
-			"settings": "{device_name, sample_rate_sps, brightness_percent, rotation, auto_rotate, language, theme, checksum_ok} or null",
-			"errors":   "parts that could not be read (exit status 7)",
-		}, "powerz info -json", nil},
-		"devices": {"one JSON object {count, devices:[{manufacturer, product, serial, bus, address}]}", true, nil, "powerz devices -json", []string{
-			"Does not claim the meter, so it works while another program uses it.",
-		}},
-		"watch":   {"full-screen terminal UI", false, nil, "powerz watch", []string{"Interactive terminals only; agents should use measure/log/pd."}},
-		"schema":  {"this document", true, nil, "powerz schema", nil},
-		"version": {"one JSON object {version}", true, nil, "powerz version -json", nil},
-		"help":    {"usage text", true, nil, "powerz help", nil},
+		"log": {output{"json_lines", "snapshot", "csv columns: " + strings.Join(csvColumns, ",")}, false,
+			"powerz log -duration 30s -interval 500ms -json", []string{"Runs until -duration/-n or interrupt; always pass -duration or -n from automation."}},
+		"pd": {output{"json_lines", "pd_record", "one pd_record per line, then one pd_end summary line (kind=summary)"}, false,
+			"powerz pd -duration 20s -json", []string{
+				"Passive capture: the meter sniffs traffic between the charger and the device plugged through it; powerz never sends PD messages.",
+				"Reading drains the meter's PD buffer, so only one consumer sees each record.",
+				"An empty capture is normal when nothing negotiated during the window; the summary line's note says so.",
+				"Always pass -duration from automation (-n alone waits for traffic).",
+			}},
+		"info":    {output{"json_object", "info", ""}, true, "powerz info -json", []string{}},
+		"devices": {output{"json_object", "devices", ""}, true, "powerz devices -json", []string{"Does not claim the meter, so it works while another program uses it."}},
+		"watch":   {output{"text", "", "full-screen terminal UI"}, false, "powerz watch", []string{"Interactive terminals only; agents should use measure/log/pd."}},
+		"schema":  {output{"json_object", "", "this document"}, true, "powerz schema", []string{}},
+		"version": {output{"json_object", "version", ""}, true, "powerz version -json", []string{}},
+		"help":    {output{"text", "", "usage text"}, true, "powerz help", []string{}},
 	}
 	names := make([]string, 0, len(commands))
 	for n := range commands {
@@ -158,16 +309,20 @@ func buildSchema() map[string]any {
 	}
 	sort.Strings(names)
 	var cmds []commandDoc
+	var common []flagDoc
 	for _, n := range names {
 		c := commands[n]
 		fs := flag.NewFlagSet(n, flag.ContinueOnError)
 		var g globals
 		addCommon(fs, &g)
 		c.setup(fs)
+		if common == nil {
+			common = flagsOf(fs, true)
+		}
 		sp := specs[n]
 		cmds = append(cmds, commandDoc{
-			Name: n, Summary: c.summary, Output: sp.output, Bounded: sp.bounded,
-			Flags: flagsOf(fs), Fields: sp.fields, Example: sp.example, Notes: sp.notes,
+			Name: n, Summary: c.summary, Output: sp.out, Bounded: sp.bounded,
+			Flags: flagsOf(fs, false), Example: sp.example, Notes: sp.notes,
 		})
 	}
 	return map[string]any{
@@ -176,43 +331,44 @@ func buildSchema() map[string]any {
 		"version":        version,
 		"description":    "Read-only CLI for the ChargerLAB POWER-Z KM003C USB-C power meter (USB 5fc9:0063).",
 		"device": map[string]any{
-			"ranges":       "VBUS 0-50 V, IBUS 0-6 A (bidirectional), resolution 1 µV / 1 µA",
-			"connection":   "the meter's USB-C port marked HID connects to this computer; the device under test is plugged between the meter's male and female USB-C ports",
+			"ranges":       "VBUS 0-50 V, current 0-6 A in either direction, resolution 1 µV / 1 µA",
+			"connection":   "the meter's USB-C port marked HID goes to this computer; the source (charger) plugs into the meter's female receptacle and the device under test onto its male plug",
 			"sample_rates": "2, 10, 50 or 1000 samples/s, configured on the meter",
 		},
 		"output_contract": []string{
 			"stdout carries only data; diagnostics and errors go to stderr",
 			"JSON is the default whenever stdout is not a terminal; -json / -text override",
-			"field names end in their unit: _v volts, _a amperes, _w watts, _wh watt-hours, _mah milliamp-hours, _c °C, _s seconds, _ms milliseconds",
-			"errors are printed to stderr as {\"schema_version\":1,\"error\":{\"code\",\"message\",\"retryable\",\"hint\"}}",
-			"fields under `inferred` are powerz's interpretation, not values reported by the meter",
-			"only one powerz process may use a meter at a time (exclusive USB interface); concurrent calls fail with code `busy` unless -wait is given",
+			"every documented key is always present; unavailable values are null, empty lists are []",
+			"field names end in their unit: _v volts, _a amperes, _w watts, _wh watt-hours, _mah milliamp-hours, _c °C, _s seconds, _ms milliseconds, _uv microvolts, _ua microamperes, _sps samples per second, _percent percent",
+			"timestamps are UTC ISO 8601 with milliseconds (2026-01-02T03:04:05.678Z)",
+			"current and power are positive when flowing from the meter's female receptacle to its male plug (the normal set-up), matching the meter's screen; see direction",
+			"errors are one JSON object on stderr: {\"schema_version\":1,\"error\":{\"code\",\"exit_code\",\"message\",\"retryable\",\"hint\"}}",
+			"fields under inferred are computed by powerz, not reported by the meter",
+			"only one powerz process may use a meter at a time; concurrent calls fail with code busy unless -wait is given",
 		},
-		"common_flags": []flagDoc{
-			{"-json", "bool", "auto", "force JSON output"},
-			{"-text", "bool", "auto", "force human-readable output"},
-			{"-serial", "string", "", "select a meter by USB serial (see `devices`)"},
-			{"-timeout", "duration", "1s", "per-request timeout (minimum 100ms)"},
-			{"-wait", "duration", "0s", "if another process holds the meter, retry for up to this long instead of failing with busy"},
-			{"-trace", "bool", "false", "dump raw USB frames to stderr"},
-		},
-		"commands": cmds,
+		"common_flags": common,
+		"commands":     cmds,
+		"definitions":  definitions,
 		"exit_codes": []map[string]any{
-			{"code": exitOK, "name": "ok"},
-			{"code": exitError, "name": "error", "retryable": false, "meaning": "I/O or protocol failure"},
-			{"code": exitUsage, "name": "usage", "retryable": false, "meaning": "bad command, flag or argument"},
-			{"code": exitNotFound, "name": "not_found", "retryable": false, "meaning": "no meter connected (or none with -serial)"},
-			{"code": exitBusy, "name": "busy", "retryable": true, "meaning": "another program holds the meter"},
-			{"code": exitTimeout, "name": "timeout", "retryable": true, "meaning": "the meter did not answer in time"},
-			{"code": exitPermission, "name": "permission_denied", "retryable": false, "meaning": "OS denied USB access"},
-			{"code": exitPartial, "name": "partial", "retryable": true, "meaning": "output was printed but some requested data is missing"},
-			{"code": exitInterrupt, "name": "interrupted", "retryable": false, "meaning": "SIGINT/SIGTERM"},
+			{"exit_code": exitOK, "code": "ok", "retryable": false, "meaning": "success"},
+			{"exit_code": exitError, "code": "error", "retryable": false, "meaning": "I/O or protocol failure"},
+			{"exit_code": exitUsage, "code": "usage", "retryable": false, "meaning": "bad command, flag or argument"},
+			{"exit_code": exitNotFound, "code": "not_found", "retryable": false, "meaning": "no meter connected (or none with -serial)"},
+			{"exit_code": exitBusy, "code": "busy", "retryable": true, "meaning": "another program holds the meter; retry or use -wait"},
+			{"exit_code": exitTimeout, "code": "timeout", "retryable": true, "meaning": "the meter did not answer in time"},
+			{"exit_code": exitPermission, "code": "permission_denied", "retryable": false, "meaning": "the OS denied USB access"},
+			{"exit_code": exitPartial, "code": "partial", "retryable": true, "meaning": "output was printed but some requested data is missing"},
+			{"exit_code": exitInterrupt, "code": "interrupted", "retryable": false, "meaning": "SIGINT/SIGTERM"},
+		},
+		"verified": []string{
+			"on firmware 1.9.5 with a 0.44 A load: current direction, the D+/D- dashboard labels ([N/A] / VOOC) and VBUS/IBUS/CC/D+/D- against the meter's screen",
 		},
 		"caveats": []string{
-			"ibus_a sign: the official app and open-powerz state negative = current from the female receptacle to the male plug; not yet bench-verified with a known load.",
-			"The meter's D+/D- dashboard labels are recomputed exactly (inferred.dashboard_label*). Protocols the meter detects by sniffing (AFC/FCP/SCP/UFCS/VOOC) are not exposed over USB; USB-PD details come from `pd` and measure's pd section.",
+			"USB-PD decoding is tested against the USB-PD specification and synthetic messages; it has not yet been checked against a live negotiation.",
+			"Protocols the meter detects by sniffing (AFC/FCP/SCP/UFCS/VOOC sessions) are not exposed over USB; inferred.dashboard_label* is the meter's D+/D- voltage signature.",
+			"Linux support is built and unit-tested in CI but has not been exercised with a meter attached.",
 		},
-		"safety": "Every frame sent to the meter is checked against a read-only whitelist (GET_DATA for ADC/settings/PD, CONNECT, and MemoryRead of three fixed info blocks). powerz never writes settings, never triggers fast-charge protocols (cannot change VBUS), never authenticates and never touches firmware.",
+		"safety": "Every frame sent to the meter is checked against a read-only whitelist (GET_DATA for ADC/settings/PD, CONNECT/DISCONNECT, and MemoryRead of three fixed info blocks). powerz never writes settings, never triggers fast-charge protocols (cannot change VBUS), never authenticates and never touches firmware.",
 	}
 }
 

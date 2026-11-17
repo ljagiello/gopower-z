@@ -91,6 +91,40 @@ func TestCloseDrainsWhenDirty(t *testing.T) {
 	}
 }
 
+// After CONNECT, Close sends DISCONNECT and consumes the meter's answer, so
+// no unsolicited session-timeout frame is left for the next program.
+func TestCloseDisconnects(t *testing.T) {
+	fm := &fakeMeter{t: t, kind: Bulk}
+	d := NewDevice(fm)
+	d.infoSpacing = 0
+	if _, err := d.DetectLayout(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !fm.connected {
+		t.Fatal("expected a connected session")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fm.connected || len(fm.in) != 0 || fm.hung {
+		t.Fatalf("after Close: connected=%v queued=%d hung=%v", fm.connected, len(fm.in), fm.hung)
+	}
+	last := fm.written[len(fm.written)-1]
+	if last[0] != byte(TypeDisconnect) {
+		t.Fatalf("last frame % X, want DISCONNECT", last)
+	}
+	// Without CONNECT, Close sends nothing.
+	fm2 := &fakeMeter{t: t, kind: Bulk}
+	d2 := NewDevice(fm2)
+	if _, err := d2.ReadADC(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_ = d2.Close()
+	if n := len(fm2.written); n != 1 {
+		t.Fatalf("%d frames written, want only the ADC request", n)
+	}
+}
+
 // The guard only allows the exact documented requests.
 func TestGuardExactWhitelist(t *testing.T) {
 	for _, att := range []Attribute{0x009, 0x018, 0x019, 0x003} {

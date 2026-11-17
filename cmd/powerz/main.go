@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,7 +68,7 @@ type globals struct {
 
 // addCommon registers the flags every command accepts.
 func addCommon(fs *flag.FlagSet, g *globals) {
-	fs.StringVar(&g.serial, "serial", g.serial, "USB serial number of the meter to use (see `powerz devices`)")
+	fs.StringVar(&g.serial, "serial", g.serial, "USB serial number of the meter to use (list them with: powerz devices)")
 	fs.BoolVar(&g.trace, "trace", g.trace, "dump every raw USB frame (hex) to stderr")
 	fs.DurationVar(&g.timeout, "timeout", g.timeout, "per-request timeout (minimum 100ms)")
 	fs.DurationVar(&g.wait, "wait", g.wait, "if the meter is busy (used by another process), keep retrying for up to this long")
@@ -93,9 +95,10 @@ func colorOn() bool { return isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" }
 // cliError carries a stable error code for machine consumers.
 type cliError struct {
 	Code      string `json:"code"`
+	ExitCode  int    `json:"exit_code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
-	Hint      string `json:"hint,omitempty"`
+	Hint      string `json:"hint"`
 	exit      int
 }
 
@@ -104,6 +107,65 @@ func (e *cliError) Error() string { return e.Message }
 func usageErr(format string, a ...any) error {
 	return &cliError{Code: "usage", Message: fmt.Sprintf(format, a...), exit: exitUsage,
 		Hint: "run `powerz help` or `powerz schema` for the command reference"}
+}
+
+// withHint replaces the hint of a usage error.
+func withHint(err error, hint string) error {
+	if ce, ok := errors.AsType[*cliError](err); ok {
+		ce.Hint = hint
+	}
+	return err
+}
+
+// flagHint lists the flags a command accepts, plus format help for values.
+func flagHint(cmd string, fs *flag.FlagSet, perr error) string {
+	var names []string
+	fs.VisitAll(func(f *flag.Flag) { names = append(names, "-"+f.Name) })
+	h := "valid flags for " + cmd + ": " + strings.Join(names, " ")
+	if strings.Contains(perr.Error(), "invalid value") && strings.Contains(perr.Error(), "parse error") {
+		h = "durations look like 500ms, 10s or 2m; integers like 5. " + h
+	}
+	return h
+}
+
+// nearestCommand suggests the closest command name (edit distance <= 2).
+func nearestCommand(name string) string {
+	best, bestD := "", 3
+	for c := range commands {
+		if d := editDistance(name, c); d < bestD {
+			best, bestD = c, d
+		}
+	}
+	return best
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
+}
+
+func commandNames() string {
+	names := make([]string, 0, len(commands))
+	for c := range commands {
+		names = append(names, c)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // partialErr marks a command that printed its output but could not obtain
@@ -124,15 +186,17 @@ func classify(err error) *cliError {
 	}
 	switch {
 	case isPartial(err):
-		return &cliError{Code: "partial", Message: err.Error(), exit: exitPartial, Retryable: true}
+		return &cliError{Code: "partial", Message: err.Error(), exit: exitPartial, Retryable: true,
+			Hint: "the JSON on stdout is valid but incomplete; see its errors / failed_samples / last_error fields"}
 	case errors.Is(err, context.Canceled):
-		return &cliError{Code: "interrupted", Message: "interrupted", exit: exitInterrupt}
+		return &cliError{Code: "interrupted", Message: "interrupted", exit: exitInterrupt,
+			Hint: "the command was stopped by SIGINT/SIGTERM before it completed"}
 	case errors.Is(err, km003c.ErrNotFound):
 		return &cliError{Code: "not_found", Message: err.Error(), exit: exitNotFound,
 			Hint: "connect the KM003C's data port (the USB-C side marked HID) to this computer; `powerz devices` lists detected meters"}
 	case errors.Is(err, km003c.ErrBusy):
 		return &cliError{Code: "busy", Message: err.Error(), exit: exitBusy, Retryable: true,
-			Hint: "another program holds the meter (another powerz process, the ChargerLab app, or a browser WebUSB tab); powerz commands must not run concurrently against one meter - wait and retry"}
+			Hint: "another program holds the meter (another powerz process, the ChargerLab app, or a browser WebUSB tab); retry, or pass -wait 10s to queue behind it"}
 	case errors.Is(err, km003c.ErrPermission):
 		return &cliError{Code: "permission_denied", Message: err.Error(), exit: exitPermission,
 			Hint: "on Linux install a udev rule granting access to USB 5fc9:0063, or run with sufficient privileges"}
@@ -140,7 +204,8 @@ func classify(err error) *cliError {
 		return &cliError{Code: "timeout", Message: err.Error(), exit: exitTimeout, Retryable: true,
 			Hint: "retry; if it persists, unplug and reconnect the meter"}
 	}
-	return &cliError{Code: "error", Message: err.Error(), exit: exitError}
+	return &cliError{Code: "error", Message: err.Error(), exit: exitError,
+		Hint: "rerun with -trace to see the USB frames; if the meter misbehaves, unplug and reconnect it"}
 }
 
 func main() {
@@ -157,7 +222,7 @@ func run(args []string) int {
 			fmt.Print(usageText)
 			return exitOK
 		}
-		return report(g, usageErr("%v", err))
+		return report(g, withHint(usageErr("%v", err), flagHint("powerz", top, err)))
 	}
 
 	rest := top.Args()
@@ -182,7 +247,11 @@ func run(args []string) int {
 
 	c, ok := commands[cmd]
 	if !ok {
-		return report(g, usageErr("unknown command %q", cmd))
+		hint := "commands: " + commandNames()
+		if near := nearestCommand(cmd); near != "" {
+			hint = "did you mean `powerz " + near + "`? " + hint
+		}
+		return report(g, withHint(usageErr("unknown command %q", cmd), hint))
 	}
 	fs := flag.NewFlagSet("powerz "+cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -193,7 +262,7 @@ func run(args []string) int {
 			printCommandHelp(cmd, c, fs)
 			return exitOK
 		}
-		return report(g, usageErr("%s: %v", cmd, err))
+		return report(g, withHint(usageErr("%s: %v", cmd, err), flagHint(cmd, fs, err)))
 	}
 	if fs.NArg() > 0 {
 		return report(g, usageErr("%s: unexpected argument %q", cmd, fs.Arg(0)))
@@ -214,12 +283,9 @@ func run(args []string) int {
 // status.
 func report(g globals, err error) int {
 	ce := classify(err)
+	ce.ExitCode = ce.exit
 	if g.jsonMode() {
-		b, _ := json.Marshal(struct {
-			SchemaVersion int       `json:"schema_version"`
-			Error         *cliError `json:"error"`
-		}{schemaVersion, ce})
-		fmt.Fprintln(os.Stderr, string(b))
+		fmt.Fprintln(os.Stderr, string(errorJSON(ce)))
 	} else {
 		fmt.Fprintf(os.Stderr, "powerz: %s\n", ce.Message)
 		if ce.Hint != "" {
@@ -227,6 +293,15 @@ func report(g globals, err error) int {
 		}
 	}
 	return ce.exit
+}
+
+// errorJSON is the stderr form of an error.
+func errorJSON(ce *cliError) []byte {
+	b, _ := json.Marshal(struct {
+		SchemaVersion int       `json:"schema_version"`
+		Error         *cliError `json:"error"`
+	}{schemaVersion, ce})
+	return b
 }
 
 // emit writes one JSON value as a single line to stdout.
@@ -366,10 +441,15 @@ func setupHelp(fs *flag.FlagSet) func(context.Context, globals) error {
 	}
 }
 
+type versionResult struct {
+	SchemaVersion int    `json:"schema_version"`
+	Version       string `json:"version"`
+}
+
 func setupVersion(fs *flag.FlagSet) func(context.Context, globals) error {
 	return func(_ context.Context, g globals) error {
 		if g.jsonMode() {
-			return emit(map[string]any{"schema_version": schemaVersion, "version": version})
+			return emit(versionResult{SchemaVersion: schemaVersion, Version: version})
 		}
 		fmt.Println("powerz", version)
 		return nil

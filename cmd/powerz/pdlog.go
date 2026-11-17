@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ljagiello/gopower-z/km003c"
 	"github.com/ljagiello/gopower-z/usbpd"
@@ -10,16 +12,23 @@ import (
 
 // pdo is the JSON form of a source power data object.
 type pdo struct {
-	Index       int     `json:"index"`
-	Type        string  `json:"type"` // fixed, battery, variable, pps, epr_avs, spr_avs, unknown
-	MinVoltageV float64 `json:"min_voltage_v"`
-	MaxVoltageV float64 `json:"max_voltage_v"`
-	MaxCurrentA float64 `json:"max_current_a,omitempty"` // SPR AVS: at 15 V
+	Index       int      `json:"index"`
+	Type        string   `json:"type"` // fixed, battery, variable, pps, epr_avs, spr_avs, unknown
+	MinVoltageV float64  `json:"min_voltage_v"`
+	MaxVoltageV float64  `json:"max_voltage_v"`
+	MaxCurrentA *float64 `json:"max_current_a"` // SPR AVS: at 15 V; null when specified as power
 	// MaxCurrent20VA is the SPR AVS maximum current at 20 V.
-	MaxCurrent20VA float64 `json:"max_current_20v_a,omitempty"`
-	MaxPowerW      float64 `json:"max_power_w,omitempty"`
-	RawHex         string  `json:"raw_hex"`
-	Text           string  `json:"text"`
+	MaxCurrent20VA *float64 `json:"max_current_20v_a"`
+	MaxPowerW      float64  `json:"max_power_w"`
+	RawHex         string   `json:"raw_hex"`
+	Text           string   `json:"text"`
+}
+
+func nzPtr(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return new(v)
 }
 
 func toPDO(i int, p usbpd.PDO) pdo {
@@ -32,7 +41,7 @@ func toPDO(i int, p usbpd.PDO) pdo {
 	}
 	out := pdo{
 		Index: i, Type: t, MinVoltageV: round(p.MinVolts, 3), MaxVoltageV: round(p.MaxVolts, 3),
-		MaxCurrentA: round(p.MaxAmps, 3), MaxCurrent20VA: round(p.MaxAmps2, 3), MaxPowerW: round(p.MaxWatts, 3),
+		MaxCurrentA: nzPtr(round(p.MaxAmps, 3)), MaxCurrent20VA: nzPtr(round(p.MaxAmps2, 3)), MaxPowerW: round(p.MaxWatts, 3),
 		RawHex: fmt.Sprintf("%08X", p.Raw), Text: p.String(),
 	}
 	if out.MaxPowerW == 0 && p.MaxAmps > 0 {
@@ -43,21 +52,22 @@ func toPDO(i int, p usbpd.PDO) pdo {
 
 // rdo is the JSON form of a sink request.
 type rdo struct {
-	ObjectPosition     int     `json:"object_position"`
-	VoltageV           float64 `json:"voltage_v,omitempty"` // PPS / AVS requests
-	OperatingCurrentA  float64 `json:"operating_current_a,omitempty"`
-	MaxCurrentA        float64 `json:"max_current_a,omitempty"`
-	OperatingPowerW    float64 `json:"operating_power_w,omitempty"`
-	CapabilityMismatch bool    `json:"capability_mismatch"`
-	EPR                bool    `json:"epr"`
-	PDO                *pdo    `json:"pdo,omitempty"` // the source PDO it selects, if seen
-	RawHex             string  `json:"raw_hex"`
-	Text               string  `json:"text"`
+	ObjectPosition     int      `json:"object_position"`
+	VoltageV           *float64 `json:"voltage_v"` // PPS / AVS requests
+	OperatingCurrentA  *float64 `json:"operating_current_a"`
+	MaxCurrentA        *float64 `json:"max_current_a"`
+	OperatingPowerW    *float64 `json:"operating_power_w"`
+	CapabilityMismatch bool     `json:"capability_mismatch"`
+	EPR                bool     `json:"epr"`
+	PDO                *pdo     `json:"pdo"` // the source PDO it selects, if seen
+	RawHex             string   `json:"raw_hex"`
+	Text               string   `json:"text"`
 }
 
 // pdRecord is the JSON form of one captured PD message or event.
 type pdRecord struct {
 	SchemaVersion int    `json:"schema_version"`
+	Time          string `json:"time"` // host time the record was read
 	MeterTimeMS   uint32 `json:"meter_time_ms"`
 	Kind          string `json:"kind"` // "message" or "event"
 	// message fields
@@ -79,6 +89,51 @@ type pdRecord struct {
 	RawHex string `json:"raw_hex"`
 }
 
+// MarshalJSON emits every key for every record (null where a field does not
+// apply to the record's kind) so consumers see one fixed shape.
+func (r pdRecord) MarshalJSON() ([]byte, error) {
+	type record struct {
+		SchemaVersion int      `json:"schema_version"`
+		Time          string   `json:"time"`
+		MeterTimeMS   uint32   `json:"meter_time_ms"`
+		Kind          string   `json:"kind"`
+		SOP           *string  `json:"sop"`
+		Message       *string  `json:"message"`
+		Class         *string  `json:"class"`
+		PowerRole     *string  `json:"power_role"`
+		DataRole      *string  `json:"data_role"`
+		SpecRevision  *string  `json:"spec_revision"`
+		MessageID     *int     `json:"message_id"`
+		FromMeter     bool     `json:"from_meter"`
+		ObjectsHex    []string `json:"objects_hex"`
+		SourceCaps    []pdo    `json:"source_capabilities"`
+		Request       *rdo     `json:"request"`
+		Event         *string  `json:"event"`
+		CC            *int     `json:"cc"`
+		Param         *int     `json:"param"`
+		RawHex        string   `json:"raw_hex"`
+	}
+	o := record{
+		SchemaVersion: r.SchemaVersion, Time: r.Time, MeterTimeMS: r.MeterTimeMS, Kind: r.Kind,
+		SOP: strOrNil(r.SOP), Message: strOrNil(r.Message), Class: strOrNil(r.Class),
+		PowerRole: strOrNil(r.PowerRole), DataRole: strOrNil(r.DataRole), SpecRevision: strOrNil(r.SpecRevision),
+		MessageID: r.MessageID, FromMeter: r.FromMeter, ObjectsHex: r.ObjectsHex, SourceCaps: r.SourceCaps,
+		Request: r.Request, RawHex: r.RawHex,
+	}
+	if o.ObjectsHex == nil {
+		o.ObjectsHex = []string{}
+	}
+	if r.Kind == "event" {
+		o.Event = strOrNil(r.Event)
+		if r.CC != 0 {
+			o.CC = new(r.CC)
+		} else {
+			o.Param = new(r.Param)
+		}
+	}
+	return json.Marshal(o)
+}
+
 // pdTracker decodes PD records, remembering the most recent source
 // capabilities so requests can be resolved to the PDO they select.
 type pdTracker struct {
@@ -92,7 +147,7 @@ type pdTracker struct {
 }
 
 func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
-	out := pdRecord{SchemaVersion: schemaVersion, MeterTimeMS: r.TimestampMS, RawHex: hexdump(r.Raw)}
+	out := pdRecord{SchemaVersion: schemaVersion, Time: utcTime(time.Now()), MeterTimeMS: r.TimestampMS, RawHex: hexdump(r.Raw)}
 	if !r.IsMessage {
 		t.events++
 		out.Kind = "event"
@@ -195,9 +250,9 @@ func (t *pdTracker) decodeRequest(v uint32) *rdo {
 	}
 	r := usbpd.DecodeRDO(v, ref)
 	out := &rdo{
-		ObjectPosition: r.Position, VoltageV: round(r.Volts, 3),
-		OperatingCurrentA: round(r.OpAmps, 3), MaxCurrentA: round(r.MaxAmps, 3),
-		OperatingPowerW: round(r.OpWatts, 3), CapabilityMismatch: r.CapMismatch, EPR: r.EPRMode,
+		ObjectPosition: r.Position, VoltageV: nzPtr(round(r.Volts, 3)),
+		OperatingCurrentA: nzPtr(round(r.OpAmps, 3)), MaxCurrentA: nzPtr(round(r.MaxAmps, 3)),
+		OperatingPowerW: nzPtr(round(r.OpWatts, 3)), CapabilityMismatch: r.CapMismatch, EPR: r.EPRMode,
 		RawHex: fmt.Sprintf("%08X", v), Text: r.String(),
 	}
 	if ref != nil {
@@ -208,23 +263,39 @@ func (t *pdTracker) decodeRequest(v uint32) *rdo {
 	return out
 }
 
-// pdSummary is included in `measure` output.
+// pdSummary describes a PD capture window (measure's "pd" object and the
+// final line of `pd`).
 type pdSummary struct {
 	Messages           int        `json:"messages"`
 	Events             int        `json:"events"`
 	SourceCapabilities []pdo      `json:"source_capabilities"`
 	LastRequest        *rdo       `json:"last_request"`
 	Contract           *rdo       `json:"contract"` // last request acknowledged with PS_RDY
-	Records            []pdRecord `json:"records,omitempty"`
+	Note               *string    `json:"note"`
+	Records            []pdRecord `json:"records"`
 }
 
+// noPDNote explains an empty capture so it is not mistaken for a failure.
+const noPDNote = "no USB-PD traffic was captured in this window; this is normal when no negotiation happened " +
+	"(PD is only exchanged on attach or renegotiation, and non-PD devices never negotiate); " +
+	"a contract negotiated before the capture started is not visible - reconnect the device during the capture to observe it"
+
 func (t *pdTracker) summary(records []pdRecord) *pdSummary {
+	if records == nil {
+		records = []pdRecord{}
+	}
 	s := &pdSummary{
 		Messages: t.messages, Events: t.events, SourceCapabilities: []pdo{},
 		LastRequest: t.lastReq, Contract: t.contract, Records: records,
 	}
 	for i, p := range t.srcCaps {
+		if p.Kind == usbpd.PDOUnknown && p.Raw == 0 {
+			continue // padding slot in EPR capabilities
+		}
 		s.SourceCapabilities = append(s.SourceCapabilities, toPDO(i+1, p))
+	}
+	if t.messages == 0 {
+		s.Note = new(noPDNote)
 	}
 	return s
 }

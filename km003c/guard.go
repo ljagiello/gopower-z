@@ -88,14 +88,14 @@ func CheckRequest(frame []byte, k TransportKind) error {
 		}
 		return nil
 
-	case TypeConnect:
+	case TypeConnect, TypeDisconnect:
 		if k != Bulk {
-			// On CDC (firmware 2.0.x) this byte starts a push stream; over
-			// HID it is ignored.
-			return fmt.Errorf("km003c: CONNECT is only allowed on bulk")
+			// On CDC (firmware 2.0.x) these bytes start/stop a push
+			// stream; over HID they are ignored.
+			return fmt.Errorf("km003c: %v is only allowed on bulk", h.Type)
 		}
 		if len(frame) != 4 || h.Word != 0 {
-			return fmt.Errorf("km003c: malformed CONNECT")
+			return fmt.Errorf("km003c: malformed %v", h.Type)
 		}
 		return nil
 

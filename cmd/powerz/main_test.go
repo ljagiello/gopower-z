@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,8 +33,8 @@ func TestClassify(t *testing.T) {
 	}
 	for _, c := range cases {
 		ce := classify(c.err)
-		if ce.Code != c.code || ce.exit != c.exit || ce.Retryable != c.retryable {
-			t.Errorf("classify(%v) = %+v, want %s/%d/%v", c.err, ce, c.code, c.exit, c.retryable)
+		if ce.Code != c.code || ce.exit != c.exit || ce.Retryable != c.retryable || ce.Hint == "" {
+			t.Errorf("classify(%v) = %+v, want %s/%d/%v with a hint", c.err, ce, c.code, c.exit, c.retryable)
 		}
 	}
 }
@@ -45,7 +45,12 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"read", "-bogus"},
 		{"read", "extra-arg"},
 		{"measure", "-duration", "0s"},
-		{"-json", "log", "-format", "xml"},
+		{"measure", "-interval", "5ms"},
+		{"log", "-format", "xml"},
+		{"log", "-n", "-1"},
+		{"pd", "-interval", "0s"},
+		{"read", "-timeout", "50ms"},
+		{"measure", "-duration", "banana"},
 	} {
 		if got := run(append([]string{"-json"}, args...)); got != exitUsage {
 			t.Errorf("run(%v) = %d, want %d", args, got, exitUsage)
@@ -53,43 +58,28 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 	}
 }
 
-// Every command must be documented in the schema, with flags as a list and
-// all exit codes present.
-func TestSchemaComplete(t *testing.T) {
-	b, err := json.Marshal(buildSchema())
-	if err != nil {
-		t.Fatal(err)
+func TestUsageHints(t *testing.T) {
+	if got := nearestCommand("mesure"); got != "measure" {
+		t.Errorf("nearestCommand(mesure) = %q", got)
 	}
-	var s struct {
-		SchemaVersion int `json:"schema_version"`
-		Commands      []struct {
-			Name    string            `json:"name"`
-			Flags   []json.RawMessage `json:"flags"`
-			Example string            `json:"example"`
-			Output  string            `json:"output"`
-		} `json:"commands"`
-		ExitCodes []map[string]any `json:"exit_codes"`
+	if got := nearestCommand("zzzzzzzz"); got != "" {
+		t.Errorf("nearestCommand(zzzzzzzz) = %q", got)
 	}
-	if err := json.Unmarshal(b, &s); err != nil {
-		t.Fatal(err)
-	}
-	if s.SchemaVersion != schemaVersion {
-		t.Errorf("schema_version %d", s.SchemaVersion)
-	}
-	seen := map[string]bool{}
-	for _, c := range s.Commands {
-		seen[c.Name] = true
-		if c.Flags == nil || c.Example == "" || c.Output == "" {
-			t.Errorf("command %s incompletely documented", c.Name)
-		}
-	}
-	for name := range commands {
-		if !seen[name] {
-			t.Errorf("command %s missing from schema", name)
-		}
-	}
-	if len(s.ExitCodes) != 9 {
-		t.Errorf("exit codes: %d", len(s.ExitCodes))
+}
+
+// Flag help must not contain backquotes: Go's flag package turns
+// `quoted` text into the argument name shown by -h.
+func TestFlagUsageHasNoBackquotes(t *testing.T) {
+	for name, c := range commands {
+		fs := flag.NewFlagSet(name, flag.ContinueOnError)
+		var g globals
+		addCommon(fs, &g)
+		c.setup(fs)
+		fs.VisitAll(func(f *flag.Flag) {
+			if strings.Contains(f.Usage, "`") {
+				t.Errorf("%s -%s usage contains a backquote: %q", name, f.Name, f.Usage)
+			}
+		})
 	}
 }
 
@@ -110,43 +100,44 @@ func loadADC(t *testing.T) km003c.ADC {
 	return a
 }
 
-// The JSON field names are a contract; renaming one requires bumping
-// schemaVersion.
-func TestSnapshotFieldNames(t *testing.T) {
+func TestSnapshotValues(t *testing.T) {
 	a := loadADC(t)
 	a.ApplyTail(km003c.TailLayoutFor("1.9.5"))
-	s := toSnapshot(a, time.Unix(0, 0).UTC(), "050002", "1.9.5")
-	b, _ := json.Marshal(s)
-	var m map[string]any
-	_ = json.Unmarshal(b, &m)
-	want := []string{"schema_version", "time", "serial", "firmware_version", "vbus_v", "ibus_a", "power_w",
-		"vbus_avg_v", "ibus_avg_a", "power_avg_w", "temp_c", "temp2_c", "cc1_v", "cc2_v", "dp_v", "dm_v",
-		"vdd_v", "cc2_avg_v", "dp_avg_v", "dm_avg_v", "sample_rate_sps", "sink_battery_percent",
-		"inferred", "raw"}
-	for _, k := range want {
-		if _, ok := m[k]; !ok {
-			t.Errorf("missing field %q", k)
-		}
-	}
-	if len(m) != len(want) {
-		t.Errorf("unexpected fields: %v", m)
-	}
-	for k := range snapshotFields {
-		if strings.Contains(k, ".") {
-			continue
-		}
-		if _, ok := m[k]; !ok {
-			t.Errorf("schema documents %q but snapshot lacks it", k)
-		}
-	}
+	s := toSnapshot(a, time.Unix(0, 0), "050002", "1.9.5")
 	if s.VBusV < 0.004 || s.VBusV > 0.007 || s.TempC == nil || s.Temp2C != nil {
 		t.Errorf("values: %+v", s)
 	}
 	if s.SampleRateSPS == nil || *s.SampleRateSPS != 50 || s.CC2AvgV == nil || s.Raw.TailLayout != "line-averages" {
 		t.Errorf("firmware-dependent fields: %+v", s)
 	}
-	if s.Inferred.DashboardLabel != "[ N/A ]" { // VBUS ~5 mV, as on the meter's screen
-		t.Errorf("dashboard label %q", s.Inferred.DashboardLabel)
+	if s.Inferred.DashboardLabel != nil { // "[ N/A ]" on screen -> null
+		t.Errorf("dashboard label %q, want null", *s.Inferred.DashboardLabel)
+	}
+	if s.Time != "1970-01-01T00:00:00.000Z" {
+		t.Errorf("time %q, want UTC with milliseconds", s.Time)
+	}
+	if s.Direction != "none" || s.Inferred.CC.Attached != "none" {
+		t.Errorf("idle direction/cc: %s %+v", s.Direction, s.Inferred.CC)
+	}
+}
+
+func TestIntegrator(t *testing.T) {
+	var in integrator
+	t0 := time.Unix(0, 0)
+	for i := range 10 { // 2 W for 10 samples, 100 ms apart
+		in.add(t0.Add(time.Duration(i)*100*time.Millisecond), 2, 0.4)
+	}
+	wh, ah, s := in.finish(t0.Add(time.Second))
+	if s != 1 || wh != 2.0/3600 || ah != 0.4/3600 {
+		t.Errorf("integrated %v s, %v Wh, %v Ah; want 1 s, %v Wh", s, wh, ah, 2.0/3600)
+	}
+}
+
+func TestISODate(t *testing.T) {
+	for in, want := range map[string]string{"2025.1.7": "2025-01-07", "2024.9.23": "2024-09-23", "bogus": "bogus"} {
+		if got := isoDate(in); got != want {
+			t.Errorf("isoDate(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -164,14 +155,15 @@ func TestPDTrackerResolvesRequest(t *testing.T) {
 	req.Message.Header = 0x1082 // data, 1 object, SNK, rev 3.x, Request
 	req.Message.Objects = []uint32{2<<28 | 300<<10 | 300}
 	rec, _ = tr.process(req)
-	if rec.Request == nil || rec.Request.PDO == nil || rec.Request.PDO.MaxVoltageV != 9 || rec.Request.OperatingCurrentA != 3 {
+	if rec.Request == nil || rec.Request.PDO == nil || rec.Request.PDO.MaxVoltageV != 9 ||
+		rec.Request.OperatingCurrentA == nil || *rec.Request.OperatingCurrentA != 3 {
 		t.Fatalf("request %+v", rec.Request)
 	}
 	ready := km003c.PDRecord{IsMessage: true, Raw: []byte{0}}
 	ready.Message.Header = 0x01A6 // PS_RDY from source
 	tr.process(ready)
 	sum := tr.summary(nil)
-	if sum.Contract == nil || sum.Contract.ObjectPosition != 2 || len(sum.SourceCapabilities) != 2 {
+	if sum.Contract == nil || sum.Contract.ObjectPosition != 2 || len(sum.SourceCapabilities) != 2 || sum.Note != nil {
 		t.Fatalf("summary %+v", sum)
 	}
 	// A long (undecoded) message record is reported as a message, renders as
@@ -189,5 +181,9 @@ func TestPDTrackerResolvesRequest(t *testing.T) {
 	good.Message.Header = 0x0041
 	if _, ok := tr.process(good); ok {
 		t.Error("GoodCRC not filtered")
+	}
+	// An empty capture explains itself.
+	if n := (&pdTracker{}).summary(nil); n.Note == nil || n.Records == nil {
+		t.Errorf("empty summary %+v", n)
 	}
 }

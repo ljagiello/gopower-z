@@ -29,6 +29,7 @@ type fakeMeter struct {
 	truncateNext bool
 	// corruptConfirm makes the next MemoryRead confirmation claim 8 KiB.
 	corruptConfirm bool
+	connected      bool
 }
 
 func (f *fakeMeter) Kind() TransportKind { return f.kind }
@@ -69,6 +70,16 @@ func (f *fakeMeter) Write(_ context.Context, p []byte) error {
 	switch h.Type {
 	case TypeConnect:
 		f.in = append(f.in, reply("bulk_W5_1_resp"))
+		f.connected = true
+	case TypeDisconnect:
+		// The meter answers with its own DISCONNECT under its own counter,
+		// or REJECT when not connected (docs/firmware.html).
+		if f.connected {
+			f.in = append(f.in, []byte{0x03, 0x77, 0x00, 0x00})
+		} else {
+			f.in = append(f.in, []byte{0x06, h.ID, 0x00, 0x00})
+		}
+		f.connected = false
 	case TypeGetData:
 		switch Attribute(h.Word >> 1) {
 		case AttADC:

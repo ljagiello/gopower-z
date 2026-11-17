@@ -13,7 +13,7 @@ const adcCoreSize = 36
 // Raw integer fields keep the device units; methods convert to SI.
 type ADC struct {
 	VBusUV    int32  // VBUS, µV
-	IBusUA    int32  // IBUS, µA, signed (sign gives the direction of power flow)
+	IBusUA    int32  // IBUS, µA, raw meter sign: negative = receptacle → plug (see FlowA)
 	VBusAvgUV int32  // smoothed VBUS average, µV
 	IBusAvgUA int32  // smoothed IBUS average, µA
 	VBusRawUV int32  // uncalibrated VBUS average
@@ -189,6 +189,54 @@ func (a ADC) IBusAvg() float64 { return float64(a.IBusAvgUA) / 1e6 }
 
 // PowerAvg returns VBusAvg × IBusAvg in watts.
 func (a ADC) PowerAvg() float64 { return a.VBusAvg() * a.IBusAvg() }
+
+// Direction is the direction of power flow through the meter.
+type Direction string
+
+const (
+	// FlowToPlug: current flows from the meter's female receptacle to its
+	// male plug - the normal set-up with the source on the receptacle. The
+	// meter's screen shows this as a positive current with an arrow pointing
+	// to the plug.
+	FlowToPlug Direction = "receptacle_to_plug"
+	// FlowToReceptacle: current flows from the male plug to the receptacle.
+	FlowToReceptacle Direction = "plug_to_receptacle"
+	// FlowNone: |IBUS| is below FlowThresholdUA.
+	FlowNone Direction = "none"
+)
+
+// FlowThresholdUA is the current below which no direction is reported; the
+// idle noise floor is about ±0.1 mA.
+const FlowThresholdUA = 1000
+
+// The meter's raw IBUS is negative when current flows from the receptacle to
+// the plug. Verified on firmware 1.9.5 with a 0.44 A load (raw -0.442 A,
+// screen +0.433 A with the arrow toward the plug); the official app and
+// open-powerz document the same convention.
+
+// FlowA returns the bus current in amperes, positive when it flows from the
+// receptacle to the plug (the sign the meter's screen uses).
+func (a ADC) FlowA() float64 { return -a.IBus() }
+
+// FlowAvgA is FlowA for the meter's smoothed average.
+func (a ADC) FlowAvgA() float64 { return -a.IBusAvg() }
+
+// FlowPower returns VBUS × FlowA in watts.
+func (a ADC) FlowPower() float64 { return a.VBus() * a.FlowA() }
+
+// FlowPowerAvg returns VBusAvg × FlowAvgA in watts.
+func (a ADC) FlowPowerAvg() float64 { return a.VBusAvg() * a.FlowAvgA() }
+
+// Direction returns the direction of the instantaneous current.
+func (a ADC) Direction() Direction {
+	switch {
+	case a.IBusUA <= -FlowThresholdUA:
+		return FlowToPlug
+	case a.IBusUA >= FlowThresholdUA:
+		return FlowToReceptacle
+	}
+	return FlowNone
+}
 
 // TempValid reports whether the temperature reading is valid.
 func (a ADC) TempValid() bool { return a.TempRaw != -32768 }

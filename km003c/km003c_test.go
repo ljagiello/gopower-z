@@ -108,7 +108,10 @@ func TestGuard(t *testing.T) {
 	bad("0c010400", Bulk) // ADC queue (consumes, needs auth)
 	bad("02010000", CDC)  // CONNECT on CDC starts a stream
 	bad("02010000", HID)
-	for _, typ := range []byte{0x01, 0x03, 0x04, 0x08, 0x09, 0x0A, 0x0E, 0x0F, 0x10, 0x11, 0x40, 0x42, 0x48, 0x4A, 0x4B, 0x4C, 0x4D} {
+	ok("03050000", Bulk)  // DISCONNECT ends the session
+	bad("03050000", CDC)  // stops a stream on CDC
+	bad("03050100", Bulk) // malformed
+	for _, typ := range []byte{0x01, 0x04, 0x08, 0x09, 0x0A, 0x0E, 0x0F, 0x10, 0x11, 0x40, 0x42, 0x48, 0x4A, 0x4B, 0x4C, 0x4D} {
 		bad(hex.EncodeToString([]byte{typ, 1, 0, 0}), Bulk)
 	}
 	bad("8c000200", Bulk) // extend bit
