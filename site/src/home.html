@@ -58,7 +58,7 @@ go install github.com/ljagiello/gopower-z/cmd/powerz@latest</code></pre>
   <p class="block-intro">On a terminal, plain <code>powerz</code> opens a live dashboard. Piped, it prints one JSON reading. Every command below has a fixed output shape.</p>
   <dl class="cmds">
     <div><dt><code>powerz read</code></dt><dd>One snapshot: VBUS, IBUS, power, temperature, CC and D+/D− lines.</dd></div>
-    <div><dt><code>powerz measure --duration 10s</code></dt><dd>Min, mean, max and percentiles of V, A and W, the shape over time in bins, plus Wh, mAh and the USB-PD contract.</dd></div>
+    <div><dt><code>powerz measure --duration 10s</code></dt><dd>Min, mean, max and percentiles of V, A and W, the shape over time in bins, when the current changed, plus Wh, mAh and the USB-PD contract.</dd></div>
     <div><dt><code>powerz log --format csv</code></dt><dd>A stream of snapshots as JSON lines or CSV.</dd></div>
     <div><dt><code>powerz pd --duration 30s</code></dt><dd>Decoded USB Power Delivery messages, then a summary line.</dd></div>
     <div><dt><code>powerz info</code></dt><dd>Model, firmware and hardware versions, serial, settings.</dd></div>

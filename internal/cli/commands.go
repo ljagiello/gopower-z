@@ -393,6 +393,19 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 		}
 		_, _ = fmt.Fprintf(w, "  IBUS per %gs  %s\n", round(r.BinS*float64(group), 6), sparkline(cols, sparkWidth))
 	}
+	// Levels only add something when the current changed.
+	if len(r.Levels) > 1 {
+		const maxShown = 10
+		_, _ = fmt.Fprintf(w, "  %d levels (typical current)\n", len(r.Levels))
+		for k, l := range r.Levels {
+			if k == maxShown {
+				_, _ = fmt.Fprintf(w, "    ... %d more (all in the JSON output)\n", len(r.Levels)-maxShown)
+				break
+			}
+			_, _ = fmt.Fprintf(w, "    %8.1f .. %-8.1f s  %s mA\n", l.StartS, l.EndS,
+				strconv.FormatFloat(nz(l.IBusA.P50*1000, 0.0005), 'f', 3, 64))
+		}
+	}
 	if r.PD != nil {
 		_, _ = fmt.Fprintf(w, "  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)
 		for _, p := range r.PD.SourceCapabilities {

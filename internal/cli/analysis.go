@@ -10,8 +10,9 @@ import (
 )
 
 // This file turns the readings of a measure window into the summary that
-// measure prints: per-field statistics and time bins. It never talks to the
-// meter, so it can be tested on synthetic series.
+// measure prints: per-field statistics, time bins and levels (levels.go). It
+// never talks to the meter, so it can be tested on synthetic series and on
+// recorded captures.
 
 // sample is one successful reading as the analysis sees it.
 type sample struct {
@@ -61,9 +62,10 @@ type binJSON struct {
 // analysis is the part of measure's output computed from the samples; it is
 // embedded in measureResult, so its fields appear in place in the JSON.
 type analysis struct {
-	Stats measureStats `json:"stats"`
-	BinS  float64      `json:"bin_s"`
-	Bins  []binJSON    `json:"bins"`
+	Stats  measureStats `json:"stats"`
+	BinS   float64      `json:"bin_s"`
+	Bins   []binJSON    `json:"bins"`
+	Levels []levelJSON  `json:"levels"`
 }
 
 const (
@@ -91,7 +93,7 @@ func autoBin(window, interval time.Duration) time.Duration {
 }
 
 // analyze summarises the samples (in time order) of a window of the given
-// length in seconds, with bins of binS seconds. Bins is never nil.
+// length in seconds, with bins of binS seconds. Bins and Levels are never nil.
 func analyze(ss []sample, window, binS float64) analysis {
 	var temps []float64
 	for _, s := range ss {
@@ -99,7 +101,7 @@ func analyze(ss []sample, window, binS float64) analysis {
 			temps = append(temps, s.Temp)
 		}
 	}
-	a := analysis{BinS: round(binS, 6), Bins: []binJSON{}}
+	a := analysis{BinS: round(binS, 6), Bins: []binJSON{}, Levels: levels(ss, window)}
 	a.Stats = measureStats{
 		VBusV:  describe(values(ss, func(s sample) float64 { return s.V }), 6),
 		IBusA:  describe(values(ss, func(s sample) float64 { return s.I }), 6),

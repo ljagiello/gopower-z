@@ -232,7 +232,7 @@ var commands map[string]command
 func init() {
 	commands = map[string]command{
 		"read":    {"print one measurement snapshot", setupRead},
-		"measure": {"sample for a fixed duration and print one summary (min/mean/max, stdev, percentiles, time bins, energy, charge, PD)", setupMeasure},
+		"measure": {"sample for a fixed duration and print one summary (min/mean/max, stdev, percentiles, time bins, level changes, energy, charge, PD)", setupMeasure},
 		"log":     {"stream measurements as JSON lines or CSV", setupLog},
 		"pd":      {"stream decoded USB Power Delivery messages captured passively by the meter", setupPD},
 		"info":    {"device model, firmware, serial and settings", setupInfo},

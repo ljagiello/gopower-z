@@ -95,7 +95,7 @@ powerz
 # one snapshot
 powerz read
 
-# min/mean/max, percentiles and time bins, energy, charge, USB-PD capture
+# min/mean/max, percentiles, time bins, level changes, energy, charge, USB-PD capture
 powerz measure --duration 10s
 
 # model, firmware, serial, settings
@@ -213,8 +213,24 @@ powerz schema</code></pre>
   <li><strong>Size:</strong> measure keeps every reading until the window ends (about 64 bytes each), so a window holds at most 1 000 000 readings (just under 28 hours at 100 ms, up to about 200 MB of memory at that limit); longer runs are a usage error that points to <code>log</code>.</li>
   <li><strong>Output size:</strong> the automatic width gives up to 120 bins, about 25 KB of JSON (twice that pretty-printed on a terminal). <code>--bin</code> equal to <code>--duration</code> gives a single bin when only the totals matter.</li>
 </ul>
-<p>Detected level changes (a list of steps and ramps with their times) are planned for a later release.</p>
-<p>Text mode (<code>--text</code>) prints current in mA, each mean with its spread, and, when there is more than one bin, a sparkline of the whole window (empty bins as gaps).</p>
+
+<h3 id="levels">Level changes: <code>levels</code></h3>
+<p><code>levels</code> splits the window where the typical current changes and stays changed: one level when nothing changed, two when a charger switched on partway, three when a device paused and resumed. Each level has its <code>start_s</code> and <code>end_s</code> (seconds from the start of the window), its <code>samples</code>, the min, mean and max of <code>vbus_v</code> and <code>power_w</code>, and the full statistics of <code>ibus_a</code>; its <code>p50</code> is the typical current that defines the level. Real output from a 40 s window on an ESP32 board that pulses to about 130 mA every 4 s, parked in its bootloader at 16 s (the pulse stops and the current drops to 61 mA until the chip reboots itself 7 s later):</p>
+<pre><code>"levels": [
+  {"start_s": 0, "end_s": 16.002, "samples": 160, "vbus_v": {…},
+   "ibus_a": {"min": 0.053819, "mean": 0.074328, "max": 0.13879, …, "p50": 0.065228, "p95": 0.129772}, "power_w": {…}},
+  {"start_s": 16.002, "end_s": 23.002, "samples": 70, "vbus_v": {…},
+   "ibus_a": {"min": 0.060908, "mean": 0.061529, "max": 0.062452, …, "p50": 0.061541, "p95": 0.062138}, "power_w": {…}},
+  {"start_s": 23.002, "end_s": 40, "samples": 170, "vbus_v": {…},
+   "ibus_a": {"min": 0.061925, "mean": 0.075783, "max": 0.140339, …, "p50": 0.066397, "p95": 0.133623}, "power_w": {…}}
+]</code></pre>
+<ul>
+  <li><strong>What counts as a level:</strong> the median current moves by at least 5% (and 2 mA) and holds for at least 5 s. Bursts, spikes and reboot surges shorter than that stay inside the level around them, at the edges of the window too, so a load that pulses every few seconds is one level (above, the pulses raise each level's <code>mean</code> and <code>p95</code>, not its <code>p50</code>).</li>
+  <li><strong>Gradual changes</strong> show as several levels in a row moving the same way; a ramp has no single change time, and a change that passes through intermediate values for a few seconds shows at one end of that transition. Times are accurate to about 1 s (window/1000 on windows over 1000 s).</li>
+  <li><strong>Typical, not average:</strong> a level is defined by its median current. Pulses that start or stop without moving the median (a radio waking more often, say) stay inside one level and show in its <code>mean</code> and <code>p95</code>.</li>
+  <li><strong>Method:</strong> ED-PELT (Haynes, Fearnhead &amp; Eckley, 2017; the <code>pgregory.net/changepoint</code> library) on 1 s averages of the current (window/1000 on long windows), followed by the two rules above. It was tuned on real captures, which are in the repository with the tests: no level change in 1320 windows of a pulsing load, and every real change found.</li>
+</ul>
+<p>Text mode (<code>--text</code>) prints current in mA, each mean with its spread, and, when there is more than one bin, a sparkline of the whole window (empty bins as gaps); when the current changed, it lists the levels with their typical current.</p>
 
 <h3><code>powerz info</code></h3>
 <pre><code>{

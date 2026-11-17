@@ -124,6 +124,14 @@ var definitions = map[string][]fieldDoc{
 		fref("ibus_a", tObj, "range", true, "current in the bin, amperes, signed like ibus_a"),
 		fref("power_w", tObj, "range", true, "power in the bin, watts, signed like power_w"),
 	},
+	"level": {
+		fd("start_s", tNum, false, "start of the level, seconds from the start of the window (0 for the first level)"),
+		fd("end_s", tNum, false, "end of the level, seconds: the next level's start, or the end of the window"),
+		fd("samples", tInt, false, "successful readings in the level"),
+		fref("vbus_v", tObj, "range", false, "bus voltage in the level, volts"),
+		fref("ibus_a", tObj, "stat", false, "current in the level, amperes, signed like ibus_a; p50 is the typical value that defines the level"),
+		fref("power_w", tObj, "range", false, "power in the level, watts, signed like power_w"),
+	},
 	"range": {
 		fd("min", tNum, false, "smallest value"),
 		fd("mean", tNum, false, "mean"),
@@ -153,6 +161,7 @@ var definitions = map[string][]fieldDoc{
 		fref("stats.dm_v", tObj, "stat", true, "D- voltage, volts"),
 		fd("bin_s", tNum, false, fmt.Sprintf("width of the time bins, seconds: --bin (at least --interval, at most %d bins over --duration; equal to --duration for one bin), or automatic, chosen when the window ends from the time actually measured (at least 5 polling intervals per bin, at most %d bins); a bin holds fewer samples, or none, when reads are slow or fail", maxBins, maxAutoBins)),
 		fref("bins", tArr, "bin", false, "the window cut into bins of bin_s seconds, in time order (the last one may be shorter): the shape over time that min/mean/max hide. Empty bins have samples 0"),
+		fref("levels", tArr, "level", false, fmt.Sprintf("the window split where the typical (median) current changes and stays changed, in time order: one level when nothing changed, [] with no samples. A new level starts where the median current moves by at least %g%% (and %g mA) and holds for at least %g s; bursts, spikes and reboots shorter than that stay inside a level, so a load that pulses every few seconds is one level. A gradual change shows as several levels in a row moving the same way; a change through intermediate values shows at one end of the transition. Times are accurate to about 1 s (window/%d on windows over %d s). Found with ED-PELT (Haynes, Fearnhead & Eckley 2017) on averages of at most %d points", levelRel*100, levelAbsA*1000, levelMinS, levelPoints, levelPoints, levelPoints)),
 		fd("energy_wh", tNum, false, "energy over integrated_s, watt-hours; positive = delivered receptacle -> plug"),
 		fd("charge_mah", tNum, false, "charge over integrated_s, milliamp-hours; positive = delivered receptacle -> plug"),
 		fref("last", tObj, "snapshot", true, "the final reading (same shape as `read`)"),
