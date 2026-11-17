@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KM003C Firmware Analysis</title>
+<meta name="description" content="Static analysis of all 21 official ChargerLAB POWER-Z KM003C application images (1.7.9 to 2.0.7), focused on 1.9.5: .mencrypt container, AES-128-ECB decryption, USB command dispatch per interface, the ADC payload tail, IBUS sign, fast-charge protocol labels, MemoryRead validation and state-changing commands.">
+<style>
+:root {
+  --bg: #ffffff; --fg: #1d2127; --muted: #5a6370; --border: #d9dde3;
+  --surface: #f5f7f9; --accent: #1f5fbf; --code-bg: #eef1f4;
+  --ok: #1d6b3a; --ok-bg: #e3f3e8;
+  --warn-bg: #fff6e0; --warn-border: #e6c26a; --danger: #b3261e; --danger-bg: #fdecea;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+    --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+    --ok: #8fd8a8; --ok-bg: #1d3426;
+    --warn-bg: #2f2814; --warn-border: #7a6526; --danger: #ff8a80; --danger-bg: #3a1d1b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+  --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+  --ok: #8fd8a8; --ok-bg: #1d3426;
+  --warn-bg: #2f2814; --warn-border: #7a6526; --danger: #ff8a80; --danger-bg: #3a1d1b;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; }
+h2 { font-size: 1.25rem; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+h2, h3 { scroll-margin-top: 12px; }
+p, ul, ol { margin: 0 0 12px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; overflow-x: auto; margin: 8px 0 16px; line-height: 1.4; }
+pre code { background: none; padding: 0; overflow-wrap: normal; white-space: pre; font-size: 0.85rem; }
+.meta { color: var(--muted); margin-bottom: 16px; }
+nav.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 16px; margin: 16px 0 8px; }
+nav.toc ul { margin: 0; padding-left: 0; list-style: none; columns: 2; column-gap: 28px; }
+nav.toc li { break-inside: avoid; }
+@media (max-width: 600px) { nav.toc ul { columns: 1; } }
+.note { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0; }
+.good { background: var(--ok-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0; }
+.bad { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0; }
+.tw { overflow-x: auto; margin: 8px 0 16px; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.danger { color: var(--danger); font-weight: 600; }
+.docs-nav { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.92rem; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<main>
+<div class="docs-nav">
+  <a href="index.html">Docs home</a>
+  <a href="cli.html">CLI reference</a>
+  <a href="protocol.html">USB protocol</a>
+  <a href="hardware.html">Hardware</a>
+  <a href="official-software-re.html">Official software RE</a>
+  <a href="firmware.html">Firmware</a>
+</div>
+<h1>KM003C firmware analysis</h1>
+<p class="meta">This page covers static analysis of every KM003C application image on ChargerLAB's official Google Drive: 21 packages, 1.7.9 through 2.0.7. Version 1.9.5, the version the user's meter reports, was analysed in depth. 1.9.7, 1.9.9 and the whole 2.0.x line were analysed for the questions that differ between versions. The 2.0.0 build that ships with the Windows app 3.0.0 was also checked. Nothing was sent to a meter and nothing was flashed. All addresses are runtime flash addresses, with the image loaded at <code>0x00004000</code>. Function names are Ghidra's <code>FUN_xxxxxxxx</code> unless noted.</p>
+
+<nav class="toc"><ul>
+  <li><a href="#summary">1. Findings for the CLI</a></li>
+  <li><a href="#container">2. .mencrypt container</a></li>
+  <li><a href="#crypto">3. Decryption</a></li>
+  <li><a href="#versions">4. All official images</a></li>
+  <li><a href="#meter">5. The meter's 1.9.5 vs the Drive 1.9.5</a></li>
+  <li><a href="#dispatch">6. USB command dispatch per interface</a></li>
+  <li><a href="#getdata">7. GetData attributes</a></li>
+  <li><a href="#adc">8. ADC payload and the 0x24&ndash;0x2B tail</a></li>
+  <li><a href="#ibus">9. IBUS sign</a></li>
+  <li><a href="#proto">10. Fast-charge protocol labels</a></li>
+  <li><a href="#memread">11. MemoryRead (0x44) validation</a></li>
+  <li><a href="#danger">12. State-changing commands</a></li>
+  <li><a href="#addrs">13. Address index</a></li>
+  <li><a href="#open">14. Not established</a></li>
+  <li><a href="#repro">15. Reproduction</a></li>
+</ul></nav>
+
+<h2 id="summary">1. Findings for the CLI</h2>
+<ul>
+  <li><strong>Decryption:</strong> the method is from <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/FIRMWARE.md">okhsunrog/km003c-rs FIRMWARE.md @ c063388</a>, and I verified it independently.
+    <ul>
+      <li>The container is a Qt <code>QDataStream</code>: ten <code>QString</code>s, then one <code>QByteArray</code> of ciphertext.</li>
+      <li>The cipher is AES-128-ECB with key 0, <code>Lh2yfB7n6X7d9a5Z</code>.</li>
+      <li>All 21 Drive packages decrypt to a valid Cortex-M image (base <code>0x4000</code>, reset vector <code>0x4295</code>) whose CRC-32 matches the header.</li>
+      <li>Seven packages carry stale bytes after the ciphertext; ignore them.</li>
+    </ul></li>
+  <li><strong>The meter's firmware is not byte-identical to the Drive 1.9.5.</strong> The meter's app info block (captured MemoryRead of <code>0x4420</code>) says 1.9.5, 2025.1.7, 451,748 bytes, stored CRC <code>DD9AD21D</code>. The Drive 1.9.5 is 2025.1.6, also 451,748 bytes, CRC <code>3F85AC89</code>. Patching only the date string does not reproduce the meter's CRC. Every finding below comes from the Drive 1.9.5 and agrees with the captured 1.9.5 frames.</li>
+  <li><strong>ADC tail by version:</strong> the old layout is used by every image from 1.7.9 through 1.9.9 and by the Windows-app 2.0.0 (2025.2.20). The new layout starts at 2.0.1 (2026.4.9) and continues through 2.0.7. Select it with <code>version &lt;= 2.0.0</code> → old (§8 table). On the old layout (1.9.5):
+    <ul>
+      <li><code>0x24</code> is an <code>i16</code> second-temperature slot. Its only writer stores <code>0x8000</code>, meaning "invalid".</li>
+      <li><code>0x26</code> is the CC2 50-sample average in mV, with the low 2 bits overwritten by the <strong>sample-rate index</strong>. Your <code>0x1A</code> = rate 2 = 50 SPS, CC2 24&ndash;27 mV.</li>
+      <li><code>0x28</code> and <code>0x2A</code> are the D+ and D&minus; 50-sample averages in mV.</li>
+    </ul>
+    On the new layout (2.0.1&ndash;2.0.7):
+    <ul>
+      <li><code>0x24</code> is unchanged (<code>0x8000</code>).</li>
+      <li><code>0x26</code> is the rate only.</li>
+      <li><code>0x27</code> is the accelerometer status and orientation.</li>
+      <li><code>0x28</code> is the PD-reported battery charge in per-mille, or 0.</li>
+      <li><code>0x2A</code> is <code>0xFF</code>.</li>
+    </ul>
+    Rate index: 0 = 2 SPS, 1 = 10, 2 = 50, 3 = 1000 SPS.</li>
+  <li><strong>IBUS sign (1.9.5 and 2.0.7):</strong> the firmware passes the INA229 <code>CURRENT</code> register sign through unchanged. It calibrates positive and negative currents with separate gain tables. It does not decide which physical direction is positive; that takes a bench test.</li>
+  <li><strong>Protocol shown on screen:</strong> no GetData attribute carries it.
+    <ul>
+      <li>The 1.9.5 dashboard label is a function of (VBUS mV, IBUS mA, D+ mV, D&minus; mV). D+ and D&minus; are exactly payload <code>0x28</code>/<code>0x2A</code> on 1.9.x. The function is reproduced in §10 so the CLI can compute it.</li>
+      <li>PD details (PD3.0/3.1, PPS/QC4, AVS, Apple/OPPO/Xiaomi VIDs) come from PD messages, which the CLI receives through attribute <code>0x10</code>.</li>
+      <li>The passively detected proprietary protocol state lives only in RAM.</li>
+    </ul></li>
+  <li><strong>Unauthenticated GetData:</strong> on 1.9.5 it is masked with <code>0x19</code>, which leaves ADC <code>0x01</code>, settings <code>0x08</code> and PD <code>0x10</code>. AdcQueue, the PD and QC traces and the log list need auth level 1. On 1.9.x that only means echoing the MCU UID under key 3, and it has no other side effect. From 2.0.1 the mask is <code>0x7F</code>.</li>
+  <li><strong>MemoryRead (0x44) needs Connect but no auth.</strong> I checked the dispatcher on 1.9.5, 1.9.9 and 2.0.7; the gate itself is identical in every image from 1.9.5 to 2.0.7. It requires magic <code>0xFFFFFFFF</code>, size &lt; <code>0x3D0901</code> and address &lt; <code>0x983D0901</code>, with no whitelist. The reply is AES-ECB(key 0) in 2,544-byte chunks. On 2.0.5 a reply that ends in a short chunk sends that last chunk unencrypted while the header flag says plaintext (FIRMWARE.md).</li>
+  <li><strong>Dangerous commands:</strong>
+    <ul>
+      <li>vendor bulk interface: <code>0x04</code> reset, <code>0x09</code> DFU, <code>0x48</code> settings batch (no auth: persistent settings, reboot, factory reset), <code>0x4A</code> NOR write and erase (auth &ge; 1), <code>0x4D</code> calibration (auth 2);</li>
+      <li>CDC virtual serial port: <code>0x0A</code> settings batch with no auth;</li>
+      <li>CDC text "protocol trigger" mode (<code>pdm open</code>, <code>entry pd</code>, <code>qc 20V</code>, <code>pd req=</code>, ...): makes the attached charger raise VBUS.</li>
+    </ul>
+    The HID interface answers only GetData.</li>
+  <li><strong>Session on 1.9.5:</strong> the first Connect sets a 5 s receive timeout. A second Connect while connected raises it to 120 s. On timeout the firmware resets auth and sends an unsolicited <code>0x03</code>. GetData works without Connect.</li>
+</ul>
+
+<h2 id="container">2. .mencrypt container</h2>
+<p>The container is Qt <code>QDataStream</code>, all integers big-endian. A <code>QString</code> is a <code>u32</code> byte length (<code>0xFFFFFFFF</code> = null; never used) followed by UTF-16BE. A <code>QByteArray</code> is a <code>u32</code> length followed by bytes. Layout of <code>KM003C_V2.0.7.mencrypt</code>; other versions differ only in string lengths:</p>
+<div class="tw"><table>
+<tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>2.0.7 value</th></tr>
+<tr><td><code>0x000</code></td><td>4</td><td>u32 BE</td><td>string count</td><td><code>10</code></td></tr>
+<tr><td><code>0x004</code></td><td>4+26</td><td>QString</td><td>[0] magic</td><td>"Firmware file"</td></tr>
+<tr><td><code>0x022</code></td><td>4+20</td><td>QString</td><td>[1] vendor</td><td>"ChargerLab"</td></tr>
+<tr><td><code>0x03A</code></td><td>4+8</td><td>QString</td><td>[2] format version</td><td>"V1.0"</td></tr>
+<tr><td><code>0x046</code></td><td>4+12</td><td>QString</td><td>[3] model</td><td>"KM003C"</td></tr>
+<tr><td><code>0x056</code></td><td>4+10</td><td>QString</td><td>[4] firmware version</td><td>"2.0.7"</td></tr>
+<tr><td><code>0x064</code></td><td>4+18</td><td>QString</td><td>[5] build date</td><td>"2026.9.29"</td></tr>
+<tr><td><code>0x07A</code></td><td>4+16</td><td>QString</td><td>[6] CRC-32 of plaintext, hex</td><td>"A175E4A0"</td></tr>
+<tr><td><code>0x08E</code></td><td>4+12</td><td>QString</td><td>[7] plaintext size, decimal</td><td>"456896"</td></tr>
+<tr><td><code>0x09E</code></td><td>4+216</td><td>QString</td><td>[8] release notes, Chinese</td><td></td></tr>
+<tr><td><code>0x17A</code></td><td>4+586</td><td>QString</td><td>[9] release notes, English</td><td></td></tr>
+<tr><td><code>0x3C8</code></td><td>4</td><td>u32 BE</td><td>QByteArray length</td><td><code>0x0006F8D0</code> = 456,912</td></tr>
+<tr><td><code>0x3CC</code></td><td>456,912</td><td>bytes</td><td>AES-128-ECB ciphertext</td><td>ends at EOF</td></tr>
+<tr><td>after</td><td>0&ndash;1,746</td><td>bytes</td><td>stale trailer (some packages)</td><td>none</td></tr>
+</table></div>
+<p><strong>Trailers.</strong> Drive packages 1.8.5 (226 B), 1.8.8 (258), 1.9.3 (2), 1.9.9 (4), "2.0.0" (1,746), 2.0.1 (452) and 2.0.3 (168) have bytes after the QByteArray. In 1.8.5, 1.8.8 and 2.0.1 these bytes contain <code>ccf2649e…f1f1</code>, the encrypted all-<code>0xFF</code> block, and other ciphertext. They look like the tail of a previously written, longer file that the packaging tool overwrote without truncating. Parse exactly the QByteArray length and ignore the rest. FIRMWARE.md reaches the same rule ("exclude outer file trailers").</p>
+
+<h2 id="crypto">3. Decryption</h2>
+<pre><code>key   = "Lh2yfB7n6X7d9a5Z"        (protocol key 0, also the MemoryRead key)
+plain = AES-128-ECB-Decrypt(key, QByteArray)[:int(QString[7])]
+check = crc32(plain with bytes 0x428..0x42F set to 0xFF) == int(QString[6], 16)   # zlib CRC-32
+image = flash 0x00004000; padding after 'size' is 0xFF (a full extra block when size % 16 == 0)</code></pre>
+<ul>
+  <li><strong>Source:</strong> <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/FIRMWARE.md">km003c-rs FIRMWARE.md</a> (§ Package validation). It also documents the bytes the bootloader rewrites at <code>0x428..0x42F</code> and the <code>0x4000</code> base. The bootloader size limit <code>0x6FFFE</code> was not re-checked here.</li>
+  <li><strong>Independent evidence of ECB before trying a key:</strong> identical 16-byte ciphertext blocks repeat within each file, for example <code>2752eb11…aece</code> 28 times in 2.0.7. Blocks are shared across versions and models; KM002C 2.0.0 and MI2 2.0.0 are identical in 25,299 of 25,302 blocks. The same key also decrypts KM002C, KM002C Lite and MI2.</li>
+  <li><strong>Verification:</strong> all 21 Drive packages and the four Windows-app 3.0.0 packages decrypt to <code>SP</code> in SRAM, <code>Reset_Handler = 0x00004295</code>, the app info block at <code>0x4420</code> (<code>0x00004000</code>, "KM003C", version, date) matching the header, and a matching CRC-32. The MemoryRead handler addresses that FIRMWARE.md lists for 1.9.9, 2.0.5, 2.0.6 and 2.0.7 (<code>0x46CAC</code>, <code>0x45514</code>, <code>0x45524</code>, <code>0x455BC</code>) are exactly where Ghidra finds them in my images, which confirms the base.</li>
+  <li><strong>Host side:</strong> per FIRMWARE.md, the updater sends the original ciphertext and the bootloader decrypts it. CRC-32 is not a signature, so the CLI must never contain an update path.</li>
+</ul>
+
+<h2 id="versions">4. All official images</h2>
+<p>"Tail" is the ADC payload layout from §8. "L0 mask" is the GetData attribute mask applied at auth level 0. "MR flag" is the MemoryRead confirmation byte 2. All 22 images were analysed.</p>
+<div class="tw"><table>
+<tr><th>Package</th><th>Embedded ver / date</th><th>Size</th><th>CRC (✓)</th><th>Trailer</th><th>SP</th><th>Tail</th><th>L0 mask</th><th>GetData / MemoryRead</th><th>MR flag</th></tr>
+<tr><td>1.7.9</td><td>1.7.9 / 2023.7.14</td><td>426,928</td><td><code>65C433B5</code> ✓</td><td>0</td><td><code>0x20008500</code></td><td>old</td><td><code>0x19</code></td><td><code>0x42F14</code> / <code>0x43388</code></td><td>1</td></tr>
+<tr><td>1.8.0</td><td>1.8.0 / 2023.8.4</td><td>440,832</td><td><code>B513EA7F</code> ✓</td><td>0</td><td><code>0x200087F8</code></td><td>old</td><td><code>0x19</code></td><td><code>0x44560</code> / <code>0x449D4</code></td><td>1</td></tr>
+<tr><td>1.8.4</td><td>1.8.4 / 2023.9.25</td><td>441,480</td><td><code>C7BF2374</code> ✓</td><td>0</td><td><code>0x20008648</code></td><td>old</td><td><code>0x19</code></td><td><code>0x445F4</code> / <code>0x44A68</code></td><td>1</td></tr>
+<tr><td>1.8.5</td><td>1.8.5 / 2023.12.6</td><td>441,552</td><td><code>1FAF5B0B</code> ✓</td><td>226</td><td><code>0x20008648</code></td><td>old</td><td><code>0x19</code></td><td><code>0x4468C</code> / <code>0x44B00</code></td><td>1</td></tr>
+<tr><td>1.8.6</td><td>1.8.6 / 2024.1.15</td><td>444,456</td><td><code>45E63082</code> ✓</td><td>0</td><td><code>0x20008690</code></td><td>old</td><td><code>0x19</code></td><td><code>0x44B20</code> / <code>0x44F94</code></td><td>1</td></tr>
+<tr><td>1.8.7</td><td>1.8.7 / 2024.2.18</td><td>444,448</td><td><code>685B68A5</code> ✓</td><td>0</td><td><code>0x20008690</code></td><td>old</td><td><code>0x19</code></td><td><code>0x44B10</code> / <code>0x44F84</code></td><td>1</td></tr>
+<tr><td>1.8.8</td><td>1.8.8 / 2024.7.2</td><td>447,816</td><td><code>87B21A94</code> ✓</td><td>258</td><td><code>0x20008698</code></td><td>old</td><td><code>0x19</code></td><td><code>0x456C0</code> / <code>0x45B34</code></td><td>1</td></tr>
+<tr><td>1.8.9</td><td>1.8.9 / 2024.7.18</td><td>448,000</td><td><code>A0B15145</code> ✓</td><td>0</td><td><code>0x200086A0</code></td><td>old</td><td><code>0x19</code></td><td><code>0x456F8</code> / <code>0x45B6C</code></td><td>1</td></tr>
+<tr><td>1.9.0</td><td>1.9.0 / 2024.9.13</td><td>450,396</td><td><code>B1769B86</code> ✓</td><td>0</td><td><code>0x200067C0</code></td><td>old</td><td><code>0x19</code></td><td><code>0x46074</code> / <code>0x464B4</code></td><td>1</td></tr>
+<tr><td>1.9.2</td><td>1.9.2 / 2024.10.25</td><td>450,916</td><td><code>DEC1AF5E</code> ✓</td><td>0</td><td><code>0x200067C0</code></td><td>old</td><td><code>0x19</code></td><td><code>0x462A4</code> / <code>0x466E4</code></td><td>1</td></tr>
+<tr><td>1.9.3</td><td>1.9.3 / 2024.11.12</td><td>451,524</td><td><code>0CFDB021</code> ✓</td><td>2</td><td><code>0x200067A8</code></td><td>old</td><td><code>0x19</code></td><td><code>0x463C4</code> / <code>0x46804</code></td><td>1</td></tr>
+<tr><td><strong>1.9.5</strong></td><td>1.9.5 / 2025.1.6</td><td>451,748</td><td><code>3F85AC89</code> ✓</td><td>0</td><td><code>0x200067A8</code></td><td>old</td><td><code>0x19</code></td><td><code>0x46494</code> / <code>0x468D4</code></td><td>1</td></tr>
+<tr><td>1.9.7</td><td>1.9.7 / 2025.8.7</td><td>452,460</td><td><code>4A453F41</code> ✓</td><td>0</td><td><code>0x200067A8</code></td><td>old</td><td><code>0x19</code></td><td><code>0x46654</code> / <code>0x46A94</code></td><td>1</td></tr>
+<tr><td>1.9.9</td><td>1.9.9 / 2025.9.22</td><td>453,612</td><td><code>E7A75D5B</code> ✓</td><td>4</td><td><code>0x200067B0</code></td><td>old</td><td><code>0x19</code></td><td><code>0x4686C</code> / <code>0x46CAC</code></td><td>1</td></tr>
+<tr><td>Win app 2.0.0</td><td>2.0.0 / 2025.2.20</td><td>439,396</td><td><code>64118EC3</code> ✓</td><td>0</td><td><code>0x200068C8</code></td><td>old</td><td><code>0x19</code></td><td><code>0x435D8</code> / <code>0x439E4</code></td><td>1</td></tr>
+<tr><td>Drive "2.0.0"</td><td><strong>2.0.1</strong> / 2026.4.9</td><td>454,396</td><td><code>34049BEC</code> ✓</td><td>1,746</td><td><code>0x20008658</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x44760</code> / <code>0x44BB0</code></td><td>1</td></tr>
+<tr><td>2.0.1</td><td>2.0.1 / 2026.4.21</td><td>454,896</td><td><code>AD739165</code> ✓</td><td>452</td><td><code>0x1FFFCA80</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x44970</code> / <code>0x44DC0</code></td><td>1</td></tr>
+<tr><td>2.0.2</td><td>2.0.2 / 2026.4.29</td><td>455,020</td><td><code>C28A54B1</code> ✓</td><td>0</td><td><code>0x1FFFCA80</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x449D8</code> / <code>0x44E28</code></td><td>1</td></tr>
+<tr><td>2.0.3</td><td>2.0.3 / 2026.5.20</td><td>454,864</td><td><code>62891FA8</code> ✓</td><td>168</td><td><code>0x1FFFC9F0</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x44B74</code> / <code>0x44FC4</code></td><td>1</td></tr>
+<tr><td>2.0.5</td><td>2.0.5 / 2026.7.15</td><td>456,424</td><td><code>01ED2B08</code> ✓</td><td>0</td><td><code>0x1FFFD260</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x450C4</code> / <code>0x45514</code></td><td><strong>0</strong></td></tr>
+<tr><td>2.0.6</td><td>2.0.6 / 2026.8.9</td><td>456,480</td><td><code>18F401E1</code> ✓</td><td>0</td><td><code>0x1FFFD260</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x450D4</code> / <code>0x45524</code></td><td>1</td></tr>
+<tr><td>2.0.7</td><td>2.0.7 / 2026.9.29</td><td>456,896</td><td><code>A175E4A0</code> ✓</td><td>0</td><td><code>0x1FFFD260</code></td><td>new</td><td><code>0x7F</code></td><td><code>0x4516C</code> / <code>0x455BC</code></td><td>1</td></tr>
+</table></div>
+<p>The Drive file named <code>KM003C_V2.0.0.mencrypt</code> declares version 2.0.1 (2026.4.9) in both its header and the embedded app info. It is not the 2.0.0 (2025.2.20) that ships with the Windows app. The Drive 1.9.9 and 2.0.7 packages are byte-identical to the copies in km003c-protocol-research and the 2.0.7 package from the official update catalog. Package SHA-256 prefixes, in order: <code>f8974b15</code>, <code>a9ddb5f2</code>, <code>48b9a98c</code>, <code>b36be632</code>, <code>6043bbab</code>, <code>d1cf2ecb</code>, <code>20de23e9</code>, <code>9a0da5a9</code>, <code>ec87e015</code>, <code>b0fd6412</code>, <code>ea6d1781</code>, <code>a8cb82cd</code> (1.9.5), <code>71c81457</code>, <code>cdbdd032</code>, <code>e1e67c5c</code>, <code>b0953bf1</code>, <code>7f229082</code>, <code>9f73eba2</code>, <code>b3f6705b</code>, <code>33e7034c</code>, <code>7a081af8</code>.</p>
+
+<h2 id="meter">5. The meter's 1.9.5 vs the Drive 1.9.5</h2>
+<p>The repository fixture <code>hardware/km003c/testdata/fw1.9.5/bulk_W6_2_plain.hex</code> is a MemoryRead of <code>0x4420</code> captured from the user's meter. It decodes to:</p>
+<pre><code>00 40 00 00  ff ff ff ff  a4 e4 06 00  1d d2 9a dd  "KM003C"  "1.9.5"  "2025.1.7"  "1"
+base 0x4000  (unused)     size 451748  CRC DD9AD21D  (written by the bootloader after flashing)</code></pre>
+<p>The Drive 1.9.5 has the same size, but its date is 2025.1.6 and its CRC is <code>3F85AC89</code>. Writing "2025.1.7" into the Drive image and recomputing gives <code>5097DFBD</code>, not <code>DD9AD21D</code>, so the meter runs a different build of the same size. The bootloader block at <code>0x0420</code> on the meter reads "KM003C", "2.2", "2024.9.23" (<code>bulk_W6_1_plain.hex</code>). Nothing visible in the captures contradicts the Drive 1.9.5 analysis:</p>
+<ul>
+  <li>ADC tail <code>00 80 1a 00 56 00 5a 00</code>;</li>
+  <li>PD preamble <code>u32 tick, u16 vbus_mV, i16 ibus_mA, u16 cc1, u16 cc2</code>;</li>
+  <li>a 180-byte settings block;</li>
+  <li>MemoryRead confirmation byte 2 = <code>0x01</code>;</li>
+  <li>GetData answered on bulk, HID and CDC alike.</li>
+</ul>
+<p>A read-only MemoryRead of the meter's application flash (<code>0x4000..0x72CA4</code>, about 450 KB) compared against the decrypted Drive 1.9.5 (plaintext sha256 <code>22281fde…443d</code>) would settle it. That is a decision for whoever owns the meter.</p>
+
+<h2 id="dispatch">6. USB command dispatch per interface (1.9.5)</h2>
+<p>The 1.9.5 USB task is at <code>0x0001EDD4</code>. It waits for an event, with the session timeout as the wait time, and serves three inputs. The table shows what each interface accepts:</p>
+<div class="tw"><table>
+<tr><th>Interface</th><th>RX buffer</th><th>Handler</th><th>Accepted</th></tr>
+<tr><td>IF0 vendor bulk, EP <code>0x01</code>/<code>0x81</code> (gopower-z)</td><td><code>0x20010000</code></td><td><code>FUN_00052514</code></td><td>full command set below</td></tr>
+<tr><td>CDC virtual serial port, OUT EP 2</td><td><code>0x20010A00</code> (256 B)</td><td>inline in the task</td><td><code>0x0C</code> GetData (with bit 7: encrypted sub-read limited to XIP, OTP <code>0x3000C00+&lt;0x3BF</code> and flash &lt; <code>0x7D000</code>, size &lt; <code>0xFF0</code>); <code>0x0A</code> <span class="danger">settings batch, no auth</span>; anything else goes to the text parser <code>FUN_00042df2</code> (§12)</td></tr>
+<tr><td>HID (IF3), OUT EP 5, 64-byte reports</td><td><code>0x20011600</code></td><td>inline</td><td><code>0x0C</code> GetData only</td></tr>
+</table></div>
+<p>The OUT endpoint-to-buffer mapping comes from the receive-complete callback <code>FUN_00051ee8</code>: EP 1 → bulk, EP 2 → CDC, EP 5 → HID. In 1.9.5 the CDC branch has no binary <code>0x02</code> handler, so such a frame reaches the text parser and is ignored there. 2.0.x added CDC <code>0x02</code>/<code>0x03</code> start/stop streaming. The repository's <code>guard.go</code> says CDC <code>0x02</code> starts a push stream; that matches 2.0.x, not this 1.9.5 code path.</p>
+<p>The bulk dispatcher, <code>FUN_00052514</code> in 1.9.5, is identical to <code>FUN_00052af0</code> in 1.9.9. If the connected bit (<code>0x20003CD6</code> bit 2) is clear, it sets auth to 0 and accepts only <code>0x0C</code> and <code>0x02</code>; everything else gets Reject <code>0x06</code>.</p>
+<div class="tw"><table>
+<tr><th>Type</th><th>Name</th><th>1.9.5 behaviour</th></tr>
+<tr><td><code>0x01, 0x0A, 0x12, 0x13</code></td><td></td><td>ignored, no reply</td></tr>
+<tr><td><code>0x02</code></td><td>Connect</td><td>from unconnected: set connected, receive timeout 5,000 ms; while connected: clear flags <code>0xFFFC</code>, timeout 120,000 ms; reply Accept <code>0x05</code></td></tr>
+<tr><td><code>0x03</code></td><td>Disconnect</td><td>Only accepted while connected; otherwise Reject <code>0x06</code>. It calls the same routine as the idle timeout, <code>FUN_0001c374</code>, which:
+<ul>
+  <li>clears the connected, graph and PD-capture flags (<code>0x20003CD6</code> bits 2&ndash;5);</li>
+  <li>sets the receive timeout to infinite;</li>
+  <li>resets auth to 0;</li>
+  <li>immediately sends <code>03 id 00 00</code> with the meter's own incremented counter (<code>0x20003D20</code>), not the host's id.</li>
+</ul>
+No timeout is left armed, so nothing more is queued. The host must read that reply, or it stays pending on EP <code>0x81</code>. 2.0.7 (<code>FUN_00053f84</code>) does the same but clears only flags <code>0x64</code>.</td></tr>
+<tr><td><code>0x04</code></td><td>Reset</td><td class="danger">NVIC_SystemReset (<code>FUN_00011de4</code>)</td></tr>
+<tr><td><code>0x09</code></td><td>JumpDfu</td><td class="danger"><code>0x12345678</code> → <code>0x200F0FF0</code> (retention SRAM), reset into the bootloader</td></tr>
+<tr><td><code>0x0C</code></td><td>GetData</td><td><code>FUN_00046494(src, attr)</code>, §7</td></tr>
+<tr><td><code>0x0D</code></td><td>GetFile</td><td><code>FUN_00046872</code>: attribute bit 0 gives the log catalog, otherwise an empty <code>0x41</code></td></tr>
+<tr><td><code>0x0E</code> / <code>0x0F</code></td><td>Start/StopGraph</td><td>sets the live rate (the rate setter <code>FUN_00018138</code> resets the averages)</td></tr>
+<tr><td><code>0x10</code> / <code>0x11</code></td><td>PdEnable/Disable</td><td>No auth check. PdEnable is rejected (<code>0x06</code>) if the PD flag (<code>0x20003CD6</code> bit 4) is already set, or if attr is 0. Otherwise it sets that flag (<code>FUN_0005243a</code>), which mainly drives a status-bar icon, and then:
+<ul>
+  <li>attr 1: <strong>empties the PD record FIFO</strong>. <code>FUN_00005fe0</code> zeroes its read and write indices with one 32-bit store.</li>
+  <li>attr &ge; 2: re-arms the D+/D&minus; protocol engine (<code>FUN_0004de48</code>).</li>
+</ul>
+The flag is RAM-only. PdDisable clears it, and so do Disconnect, the idle timeout, and a Connect sent while already connected.
+<p>Recording does <em>not</em> depend on PdEnable. The PD task <code>0x0001E794</code> queues every good-CRC received message (<code>FUN_0000f23c</code>) and every attach, detach and receive-status event (<code>FUN_0000f36c</code>) unconditionally. They go into a 252-byte ring at PD object <code>0x20004044+0x55E</code>, which drops the oldest records when full (<code>FUN_00005f74</code>).</p></td></tr>
+<tr><td><code>0x40</code></td><td>Head</td><td>reply <code>0x01000040</code>, <code>0x1000</code> (APP mode)</td></tr>
+<tr><td><code>0x44</code></td><td>MemoryRead</td><td>§11; connected, no auth</td></tr>
+<tr><td><code>0x48</code></td><td>SettingsBatch</td><td class="danger"><code>FUN_00046a1c</code>, no auth at dispatch (per-op gates in §12)</td></tr>
+<tr><td><code>0x4A</code></td><td>FlashWrite</td><td class="danger">auth &ge; 1; external NOR <code>0x300000&ndash;0x37FFFF</code>, &le; 256 B, erases on a 64 KiB-aligned address (<code>FUN_0000d18c</code>, <code>FUN_0000d364</code>)</td></tr>
+<tr><td><code>0x4B</code></td><td>NOR read</td><td>MemoryRead of <code>0x98000000 + addr</code></td></tr>
+<tr><td><code>0x4C</code></td><td>Auth</td><td>decrypts 32 B with <code>Fa0b4tA25f4R038a</code>. Bytes 8&ndash;19 equal to the UID (<code>0x40010450</code>) give level 1; equal to the first 12 bytes of the OTP calibration record they give level 2. Replies <code>0x4C</code>, attribute <code>0x201|level&lt;&lt;1</code>, encrypted with <code>FX0b4tA25f4R038a</code>. On 1.9.x nothing else changes; 2.0.7 also stores a wall-clock offset from bytes 0&ndash;7.</td></tr>
+<tr><td><code>0x4D</code></td><td>SettingsBatch</td><td class="danger">same handler, only at auth 2</td></tr>
+</table></div>
+<p>For types &ge; <code>0x40</code>, header bit 16 means the payload is AES-ECB(key 0). Requests without bit 16 are accepted as plaintext.</p>
+<p><strong>2.0.7 differences.</strong> One task, <code>0x0001F894</code>, handles all three inputs. The CDC path gained Start/Stop streaming (<code>0x02</code>/<code>0x03</code>), reset/DFU, an authenticated memory or NOR read (<code>0x0D</code>), device info (<code>0x14</code>), an alternative auth (<code>0x15</code>) and NOR write (<code>0x16</code>), with a CRC-8 (poly <code>0x29</code>) in header byte 3 for some commands. The bulk session deadline is 5 s after the last command, checked when the 10 s receive wait expires.</p>
+
+<h2 id="getdata">7. GetData attributes</h2>
+<div class="tw"><table>
+<tr><th>Attr</th><th>Content (1.9.5; same layout in 2.0.7)</th><th>Level 0 on 1.9.5</th><th>Level 0 on &ge; 2.0.1</th></tr>
+<tr><td><code>0x001</code></td><td>ADC, 44 B (§8)</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>0x002</code></td><td>AdcQueue, 20 B each: <code>u32 uptime_ms, i32 vbus_uV, i32 ibus_uA, u16 cc1, cc2, d+, d&minus;</code></td><td>no</td><td>yes</td></tr>
+<tr><td><code>0x008</code></td><td>settings-A (96 B) + settings-B (84 B) = 180 B</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>0x010</code></td><td><code>u32 uptime_ms, u16 vbus_mV, i16 ibus_mA, u16 cc1_mV, u16 cc2_mV</code> + PD event records</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>0x020</code></td><td>two PD trace queues (<code>u8 len</code> + &le; 200 B each)</td><td>no</td><td>yes</td></tr>
+<tr><td><code>0x040</code></td><td><code>u32 uptime_ms, u16 vbus_mV, i16 ibus_mA, u16 d+_mV, u16 d&minus;_mV</code> + D+/D&minus; protocol-engine events</td><td>no</td><td>yes</td></tr>
+<tr><td><code>0x080</code></td><td><code>u32 uptime_ms, u32</code> byte at <code>0x40054062</code> (clock trim)</td><td>no</td><td>no</td></tr>
+<tr><td><code>0x200</code></td><td>offline-log catalog, N&times;48 B</td><td>no</td><td>no</td></tr>
+<tr><td><code>0x800</code></td><td>bare header <code>0x00000800</code></td><td>no</td><td>no</td></tr>
+</table></div>
+<p>Masked attributes are dropped silently. Your capture of attribute <code>0x11</code> returned the PD preamble <code>tick 0x1EA9A8, vbus 6 mV, ibus 0 mA, cc1 70 mV, cc2 25 mV</code>, which matches this layout.</p>
+
+<h2 id="adc">8. ADC payload and the 0x24&ndash;0x2B tail</h2>
+<p>The payload is a <code>memcpy</code> of the first 44 bytes of the ADC state struct, followed by overrides. The struct is at <code>0x20002560</code> on 1.9.5, 1.9.7 and 1.9.9 (accessor <code>FUN_000180ac</code> on 1.9.5) and at <code>0x1FFFACF0</code> on 2.0.7. Struct fields come from the 1.9.5 ADC task <code>0x0001D934</code> and the measurement function <code>FUN_00017e20</code>:</p>
+<div class="tw"><table>
+<tr><th>Offset</th><th>Type</th><th>Meaning</th></tr>
+<tr><td><code>0x00 / 0x04</code></td><td>i32</td><td>VBUS µV (calibrated, clamped &ge; 0) / IBUS µA (calibrated, signed)</td></tr>
+<tr><td><code>0x08 / 0x0C</code></td><td>i32</td><td>1-second averages (window = SPS samples), calibrated</td></tr>
+<tr><td><code>0x10 / 0x14</code></td><td>i32</td><td>1-second averages, uncalibrated ("ori")</td></tr>
+<tr><td><code>0x18</code></td><td>i16</td><td>INA229 die temperature, 1/128 °C; <code>0x8000</code> right after a rate change</td></tr>
+<tr><td><code>0x1A&ndash;0x20</code></td><td>u16&times;4</td><td>CC1, CC2, D+, D&minus; in 0.1 mV (refreshed every 250 ADC iterations)</td></tr>
+<tr><td><code>0x22</code></td><td>u16</td><td>internal VDD</td></tr>
+<tr><td><code>0x24&ndash;0x2A</code></td><td>u16&times;4</td><td>CC1, CC2, D+, D&minus; in mV, 50-sample averages</td></tr>
+<tr><td><code>0x2E&ndash;0x35</code>, <code>0x38&ndash;0x3F</code></td><td>u16&times;4</td><td>CC1, CC2, D+, D&minus; instantaneous mV (two copies)</td></tr>
+<tr><td><code>0x4C</code></td><td>i16</td><td>second-temperature slot; the only writer (rate setter) stores <code>0x8000</code>; Ghidra xrefs and a MOVW/MOVT scan found no other</td></tr>
+<tr><td><code>0x4E</code></td><td>u8 (1.9.x) / u16 (2.x)</td><td>bits 0&ndash;1 rate index; 2 new sample; 3 ADC done; 4&ndash;6 average ready; 2.0.1+ bits 7&ndash;10 accelerometer I²C status, 11&ndash;14 orientation</td></tr>
+<tr><td><code>0x66 / 0x68</code> (1.9.5); <code>0x68 / 0x6A</code> (2.0.7)</td><td>u16 / i16</td><td>VBUS mV (INA229 raw&times;100/512) / IBUS mA; used by PD preambles and the dashboard</td></tr>
+</table></div>
+<h3>Old tail: 1.9.5, 1.9.7, 1.9.9, Windows-app 2.0.0</h3>
+<pre><code>/* 1.9.5 FUN_00046494 */
+memcpy(p, adc, 0x2c);
+*(u16*)(p+0x18) = adc[0x18];
+*(u16*)(p+0x24) = adc[0x4c];                       /* 0x8000 */
+p[0x26] = (adc[0x4e] &amp; 3) | (p[0x26] &amp; 0xFC);    /* rate index into the CC2 average's low bits */</code></pre>
+<div class="tw"><table>
+<tr><th>Payload</th><th>Meaning</th><th>Your capture <code>00 80 1a 00 56 00 5a 00</code></th></tr>
+<tr><td><code>0x24</code> i16</td><td>second temperature; <code>0x8000</code> = invalid or absent</td><td><code>0x8000</code></td></tr>
+<tr><td><code>0x26</code> bits 0&ndash;1</td><td>sample-rate index</td><td>2 = 50 SPS</td></tr>
+<tr><td><code>0x26</code> u16 &amp; <code>0xFFFC</code></td><td>CC2 50-sample average, mV, low 2 bits lost</td><td>24 (true 24&ndash;27)</td></tr>
+<tr><td><code>0x28</code> u16</td><td>D+ 50-sample average, mV</td><td>86</td></tr>
+<tr><td><code>0x2A</code> u16</td><td>D&minus; 50-sample average, mV</td><td>90</td></tr>
+</table></div>
+<h3>New tail: every build from 2.0.1 (2026.4.9) through 2.0.7</h3>
+<pre><code>/* 2.0.7 FUN_0004516c; identical in Drive "2.0.0" (=2.0.1), 2.0.1, 2.0.2, 2.0.3, 2.0.5, 2.0.6 */
+memcpy(p, adc, 0x2c);  p.u16[0x18] = adc[0x18];  p.u16[0x24] = adc[0x4c];     /* 0x8000 */
+p.u16[0x28] = (pd[0x29]==0x79 &amp;&amp; full!=0 &amp;&amp; full!=0xFFFF &amp;&amp; present&lt;=full) ? present*1000/full : 0;
+              /* pd = PD object; full = +0x460 (Battery_Capabilities last-full capacity),
+                 present = +0x462 (Battery_Status present capacity) */
+p[0x26] = adc[0x4e] &amp; 3;                  /* rate only */
+p[0x27] = (adc[0x4e] &gt;&gt; 7) &amp; 0xFF;       /* lo: SC7A20 I2C status (0 = ok), hi: orientation 0-3 or 0xF = flat */
+p[0x2a] = 0xFF;                            /* p[0x2b] = stale high byte of the D- average */</code></pre>
+<div class="note">Read with the old layout, a 2.0.1+ meter shows an absurd CC2 average. The 61.441 V reported after a test flash to 2.0.7 is <code>0xF001</code>: rate 1 (the boot default), accelerometer OK, orientation <code>0xF</code> (flat). Pick the layout by firmware version: &le; 2.0.0 old, &ge; 2.0.1 new (see the version table below). The rate, <code>p[0x26] &amp; 3</code>, is valid in both. On 2.0.1+ read D+/D&minus; from <code>0x1E</code>/<code>0x20</code> (0.1 mV).</div>
+<p>Rate index: the per-rate SPS table (<code>{2, 10, 50, 1000}</code>; 1.9.9 <code>0x55DF8</code>, 2.0.7 <code>0x558E6</code>) matches the UI strings "2SPS", "10SPS", "50SPS" and "1KSPS". AdcQueue line voltages come from struct offset <code>0x1A + 10&times;rate</code>:</p>
+<ul>
+  <li>rate 0: 0.1 mV, averaged;</li>
+  <li>rate 1: mV, 50-sample average;</li>
+  <li>rates 2 and 3: instantaneous mV.</li>
+</ul>
+<p>That is why the queue units change with rate.</p>
+
+<h3 id="tail-versions">Layout by version</h3>
+<p>Each of the 22 images was checked the same way. I located the GetData builder (extended header <code>0x8001</code>/<code>0xB00</code>, 44-byte copy) and read its tail overrides, found every writer of ADC struct <code>+0x4C</code>, and read the SPS table the rate setter indexes. 1.7.9&ndash;1.8.9 copy the 44 bytes as eleven words rather than calling <code>memcpy</code>; the overrides are the same.</p>
+<div class="tw"><table>
+<tr><th>Firmware (date)</th><th>Tail layout</th><th>GetData</th><th><code>0x24</code></th><th><code>0x26</code></th><th>Level-0 mask</th><th>Dashboard label</th></tr>
+<tr><td>1.7.9 (2023.7.14)</td><td>old</td><td><code>0x42F14</code></td><td>adc+0x4C = <code>0x8000</code></td><td>CC2 avg, rate in bits 0&ndash;1</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.0 (2023.8.4)</td><td>old</td><td><code>0x44560</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.4 (2023.9.25)</td><td>old</td><td><code>0x445F4</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.5 (2023.12.6)</td><td>old</td><td><code>0x4468C</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.6 (2024.1.15)</td><td>old</td><td><code>0x44B20</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.7 (2024.2.18)</td><td>old</td><td><code>0x44B10</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.8 (2024.7.2)</td><td>old</td><td><code>0x456C0</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.8.9 (2024.7.18)</td><td>old</td><td><code>0x456F8</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.9.0 (2024.9.13)</td><td>old</td><td><code>0x46074</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.9.2 (2024.10.25)</td><td>old</td><td><code>0x462A4</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.9.3 (2024.11.12)</td><td>old</td><td><code>0x463C4</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td><strong>1.9.5 (2025.1.6)</strong></td><td><strong>old</strong></td><td><code>0x46494</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td><strong>reference</strong></td></tr>
+<tr><td>1.9.7 (2025.8.7)</td><td>old</td><td><code>0x46654</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>1.9.9 (2025.9.22)</td><td>old</td><td><code>0x4686C</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 logic</td></tr>
+<tr><td>2.0.0 (2025.2.20, Windows app)</td><td>old</td><td><code>0x435D8</code></td><td>same</td><td>same</td><td><code>0x19</code></td><td>1.9.5 strings and thresholds, inputs computed differently (see §10)</td></tr>
+<tr><td>2.0.1 (2026.4.9, Drive file "V2.0.0")</td><td><strong>new</strong></td><td><code>0x44760</code></td><td>adc+0x4C = <code>0x8000</code></td><td>rate only; <code>0x27</code> accelerometer</td><td><code>0x7F</code></td><td>2.0.7 logic</td></tr>
+<tr><td>2.0.1 (2026.4.21)</td><td>new</td><td><code>0x44970</code></td><td>same</td><td>same</td><td><code>0x7F</code></td><td>2.0.7 logic</td></tr>
+<tr><td>2.0.2 (2026.4.29)</td><td>new</td><td><code>0x449D8</code></td><td>same</td><td>same</td><td><code>0x7F</code></td><td>2.0.7 logic</td></tr>
+<tr><td>2.0.3 (2026.5.20)</td><td>new</td><td><code>0x44B74</code></td><td>same</td><td>same</td><td><code>0x7F</code></td><td>2.0.7 logic</td></tr>
+<tr><td>2.0.5 (2026.7.15)</td><td>new</td><td><code>0x450C4</code></td><td>same</td><td>same</td><td><code>0x7F</code></td><td>2.0.7 logic</td></tr>
+<tr><td>2.0.6 (2026.8.9)</td><td>new</td><td><code>0x450D4</code></td><td>same</td><td>same</td><td><code>0x7F</code></td><td>2.0.7 logic</td></tr>
+<tr><td>2.0.7 (2026.9.29)</td><td>new</td><td><code>0x4516C</code></td><td>same</td><td>same</td><td><code>0x7F</code></td><td>reference</td></tr>
+</table></div>
+<p><strong>The switch happened between 2.0.0 (2025.2.20) and 2.0.1 (2026.4.9).</strong> No official build exists between those two dates. Version strings are the reliable selector: <code>&lt;= 2.0.0</code> uses the old layout and <code>&gt;= 2.0.1</code> the new one. Both 2.0.1 builds use the new layout.</p>
+<ul>
+  <li><strong><code>0x24</code> in both layouts:</strong> the payload copies ADC struct <code>+0x4C</code>. In all 22 images the only writer of that field is the rate setter, which stores <code>0x8000</code>. The field is never filled with a measurement, so on a KM003C it always reads <code>0x8000</code>. The official app treats the i16 at <code>0x24</code> as a second temperature and <code>0x8000</code> as invalid, so "i16 second temperature, <code>0x8000</code> = invalid" is the right decoding for both layouts.</li>
+  <li><strong>Rate in the old layout:</strong> the firmware writes <code>(adc[0x4E] &amp; 3) | (p[0x26] &amp; 0xFC)</code> into byte <code>0x26</code>, the low byte of the little-endian u16 at <code>0x26</code>. The rate is therefore bits 0&ndash;1 of that u16, and the CC2 average is <code>u16 &amp; 0xFFFC</code>. In the new layout byte <code>0x26</code> holds the rate alone.</li>
+  <li><strong>SPS mapping:</strong> every image carries the same per-rate table <code>{2, 10, 50, 1000}</code>, indexed by that rate value, and the strings "2SPS", "10SPS", "50SPS" and "1KSPS". The mapping 0 = 2, 1 = 10, 2 = 50, 3 = 1000 SPS holds in all versions.</li>
+</ul>
+
+<h2 id="ibus">9. IBUS sign</h2>
+<ul>
+  <li><strong>INA229 read</strong> (1.9.5 <code>FUN_00006e6e</code>, 2.0.7 <code>FUN_00006d78</code>): reads register 7 (<code>CURRENT</code>, 20-bit two's complement) and sign-extends it. It switches <code>ADCRANGE</code> near full scale and rescales by 4. It returns the value <strong>without negation</strong>.</li>
+  <li><strong>Calibration</strong> (1.9.5 <code>FUN_00017e20</code>, 2.0.7 <code>FUN_00017b1c</code>): <code>ibus_uA = gain[k]&times;(raw &minus; offset)/1e6</code>, sign kept. <code>k</code> picks one of 10 gains: five positive ranges with breakpoints at 2.1, 4.1, 6.1 and 8.2 A, and the mirrored negative ranges. Settings op <code>0x0D</code> writes the negative gains.</li>
+  <li><strong>UI</strong>: prints the signed value (<code>"%5.3fV %6.3fA %0.1fW"</code>). There is no direction text or arrow logic.</li>
+</ul>
+<p>So the meter measures both directions symmetrically and the firmware defines no physical convention. Which way is positive depends on how the shunt is wired. The official "new ADC" PDF (negative = receptacle → plug) and the km003c-rs comments (positive = female → male, which is the same thing stated the other way) conflict on paper. A bench test with a known load direction settles it. Until then the CLI should report the raw sign.</p>
+
+<h2 id="proto">10. Fast-charge protocol labels</h2>
+<p>No GetData attribute carries the dashboard's protocol text or the engine's detected-protocol state. The engine object is at <code>0x200056B0</code> on 1.9.5 (<code>FUN_0004f8c6</code>) and <code>0x1FFFC140</code> on 2.0.7. Reading it needs a version-specific RAM MemoryRead, which is not recommended. What the CLI can do instead:</p>
+<h3>Dashboard voltage label, 1.9.5 (<code>FUN_0001fb44</code>, called at <code>0x0004b476</code> with the ADC struct)</h3>
+<p>Inputs:</p>
+<ul>
+  <li><code>v</code> = VBUS mV (struct <code>0x66</code>; use payload <code>vbus_uV/1000</code>);</li>
+  <li><code>i</code> = IBUS mA <em>as u16</em> (struct <code>0x68</code>; negative currents compare as large);</li>
+  <li><code>dp</code>, <code>dm</code> = D+/D&minus; 50-sample averages in mV (payload <code>0x28</code>/<code>0x2A</code>).</li>
+</ul>
+<p>This is a branch-by-branch translation:</p>
+<pre><code>line1(v, i, dp, dm):
+  if v &lt; 3300                                   -&gt; "[ N/A ]"
+  if dp &gt; 2800:
+    if dm &gt; 2800:
+      if v &gt;= 19001                             -&gt; "QC2.0 20V"
+      if v &gt; 7000 &amp;&amp; i &gt; 1000                   -&gt; "VFCP | UFCS"
+      return v &lt; 5500 ? "DCP 1.5A" : "[ N/A ]"
+    if 451 &lt;= dm &lt;= 1099: return v &gt; 8500 ? "QC2.0 9V" : "VOOC"
+    return v &gt; 8500 ? "SVOOC" : "[ N/A ]"
+  if 2501 &lt;= dp &lt;= 2800: return (v &lt; 5500 &amp;&amp; 2501 &lt;= dm &lt;= 2899) ? "Apple 2.4A" : "[ N/A ]"
+  if 1101 &lt;= dp &lt;= 1300: return (v &lt; 5500 &amp;&amp; 1101 &lt;= dm &lt;= 1299) ? "Samsung 2.0A" : "[ N/A ]"
+  if 501 &lt;= dp &lt;= 1000:
+    if dm &gt; 2800                                -&gt; "QC3.0 | QC3+"
+    if 501 &lt;= dm &lt;= 699:
+      if 10501 &lt;= v &lt;= 12499                    -&gt; "QC2.0 12V"
+      return 4501 &lt;= v &lt;= 5499 ? "DCP 1.5A" : "[ N/A ]"
+    if dm &lt; 200:
+      if i &gt;= 2001                              -&gt; "QC2.0 | SCP"
+      if 8501 &lt;= v &lt;= 12499                     -&gt; "FCP | AFC"
+      return 4501 &lt;= v &lt;= 5499 ? "QC2.0 5V" : "[ N/A ]"
+  return "[ N/A ]"
+
+line2(v, i, dp, dm):
+  if v &lt; 3300                                   -&gt; "[ N/A ]"
+  if 8501 &lt;= v &lt;= 9999  &amp;&amp; 1100&lt;=dp&lt;=1699 &amp;&amp; 1100&lt;=dm&lt;=1699  -&gt; "SFCP 9V"
+  if 10000 &lt;= v &lt;= 12499 &amp;&amp; 2100&lt;=dp&lt;=2699 &amp;&amp; 2100&lt;=dm&lt;=2699 -&gt; "SFCP 12V"
+  if v &gt;= 12500 &amp;&amp; dp &lt; 700                     -&gt; "FCP | SCP"
+  if i &lt;= 2000:
+    alt = "[ N/A ]"
+    if |dp - dm| &lt; 100:
+      if 4501 &lt;= v &lt;= 5499: alt = "DCP 1.5A"
+      elif v &lt; 19500 &amp;&amp; dp &gt; 3000: alt = "QC2.0 20V Err"
+    return (501 &lt;= dp &lt;= 699 &amp;&amp; dm &lt; 300) ? "FCP | SCP | AFC" : alt
+  if dp &gt; 2900: return v &gt;= 7001 ? "SVOOC" : (v &lt; 5500 ? "VOOC" : "[ N/A ]")
+  return "[ N/A ]"</code></pre>
+<p>The function first checks whether the engine reports an identified proprietary session (engine <code>+0xD == 0x13</code>). If so, it shows VOOC/SVOOC, <code>VFCP %d.%dW</code> or <code>UFCS %d.%dW</code> from engine state instead of the labels above.</p>
+<p><strong>Same logic in other versions.</strong> I normalised the decompiled function in every image by stripping addresses and variable numbers, then diffed it against 1.9.5.</p>
+<ul>
+  <li><strong>1.8.8, 1.8.9, 1.9.0 and 1.9.2</strong> are identical to 1.9.5.</li>
+  <li><strong>1.7.9&ndash;1.8.7, 1.9.3, 1.9.7 and 1.9.9</strong> differ only in how Ghidra renders constants, or in the format string of the proprietary (UFCS/PPS/SVID) branch. The voltage classifier, its thresholds and its input fields are the same.</li>
+  <li><strong>The Windows-app 2.0.0</strong> has the same strings and threshold constants. It computes VBUS and D+/D&minus; from another structure (µV/1000), so it was not compared line by line.</li>
+</ul>
+
+<h3>Dashboard voltage label, 2.0.1&ndash;2.0.7 (<code>FUN_00022098</code> line 1, <code>FUN_00021bd4</code> line 2, called from <code>FUN_000213c8</code>)</h3>
+<p>Inputs:</p>
+<ul>
+  <li><code>v</code> = VBUS mV (struct <code>0x68</code>; use payload <code>vbus_uV/1000</code>);</li>
+  <li><code>dp</code>, <code>dm</code> = D+/D&minus; 50-sample averages in mV (struct <code>0x28</code>/<code>0x2A</code>).</li>
+</ul>
+<p>The 2.0.x payload no longer exports <code>dp</code>/<code>dm</code>. The closest exported values are payload <code>0x1E</code>/<code>0x20</code> divided by 10: 0.1 mV values refreshed every 250 ADC iterations. There is no current input. Both functions normalise to identical text in all seven 2.0.1&ndash;2.0.7 images.</p>
+<pre><code>line1(v, dp, dm):                                       // FUN_00022098
+  if v &lt; 3300                                   -&gt; "[ N/A ]"
+  if dm &gt; 2800 &amp;&amp; 501 &lt;= dp &lt;= 699             -&gt; "QC3.0 | QC3+"
+  if v &lt; 5500:
+    if dp &lt; 110 &amp;&amp; dm &lt; 100                     -&gt; "DCP"
+    if dp &gt; 2500 &amp;&amp; 2501 &lt;= dm &lt;= 2899          -&gt; "Apple 2.4A"
+    if dm &lt; 100 &amp;&amp; 501 &lt;= dp &lt;= 699             -&gt; "QC2.0 5V"
+    return |dp - dm| &lt; 100 ? "DCP" : "[ N/A ]"
+  if 8501 &lt;= v &lt;= 9499:
+    if dp &gt; 2800 &amp;&amp; 451 &lt;= dm &lt;= 1099           -&gt; "QC2.0 9V"
+    if 1101 &lt;= dp &lt;= 1299 &amp;&amp; 1101 &lt;= dm &lt;= 1299 -&gt; "Samsung 2.0A"
+    if dm &lt; 100 &amp;&amp; 501 &lt;= dp &lt;= 699             -&gt; "FCP | AFC"
+    if 501 &lt;= dp &lt;= 699 &amp;&amp; 501 &lt;= dm &lt;= 699     -&gt; "QC2.0 12V Error"
+    return (dp &gt; 2800 &amp;&amp; dm &gt; 2800) ? "QC2.0 20V Error" : "[ N/A ]"
+  if 11001 &lt;= v &lt;= 12999:
+    if 501 &lt;= dp &lt;= 699 &amp;&amp; 501 &lt;= dm &lt;= 699     -&gt; "QC2.0 12V"
+    return (501 &lt;= dp &lt;= 699 &amp;&amp; dm &lt; 100) ? "FCP | AFC" : "[ N/A ]"
+  if 18501 &lt;= v &lt;= 20999 &amp;&amp; dp &gt; 2800 &amp;&amp; dm &gt; 2800 -&gt; "QC2.0 20V"
+  return "[ N/A ]"
+
+line2(v, dp, dm):                                       // FUN_00021bd4
+  if v &lt; 3300                                   -&gt; "[ N/A ]"
+  if 8501 &lt;= v &lt;= 9999  &amp;&amp; 1100&lt;=dp&lt;=1699 &amp;&amp; 1100&lt;=dm&lt;=1699  -&gt; "SFCP 9V"
+  if 10000 &lt;= v &lt;= 12499 &amp;&amp; 2100&lt;=dp&lt;=2699 &amp;&amp; 2100&lt;=dm&lt;=2699 -&gt; "SFCP 12V"
+  if v &gt;= 12500 &amp;&amp; dp &lt; 700                     -&gt; "FCP | SCP"
+  return (dm &lt; 300 &amp;&amp; 501 &lt;= dp &lt;= 699) ? "FCP | SCP | AFC" : "[ N/A ]"</code></pre>
+<p>In 2.0.x the dashboard uses these labels only while the engine's protocol code (<code>+0x234</code>) is not one of the values below. Otherwise it shows <code>AFC %dV</code> (2), <code>FCP %dV</code> (3), <code>Huawei SCP</code> (4), <code>UFCS %d.%dW</code> (5), <code>VFCP %d.%dW</code> (6), <code>TFCP %d.%dW</code> (8) or VOOC/SVOOC (10), all taken from RAM state that is not on USB.</p>
+<p>Differences from 1.9.5:</p>
+<ul>
+  <li>no current input, so no "QC2.0 | SCP" and no "VFCP | UFCS";</li>
+  <li>the new labels "DCP", "QC2.0 12V Error" and "QC2.0 20V Error";</li>
+  <li>no "DCP 1.5A", "QC2.0 20V Err" or voltage-based VOOC/SVOOC;</li>
+  <li>different VBUS windows.</li>
+</ul>
+<p>Use the classifier that matches the meter's firmware generation.</p>
+<h3 id="label-versions">Label variant by version</h3>
+<p>Method: normalise each image's decompiled label functions (strip addresses and variable numbering) and diff them against the 1.9.5 and 2.0.7 references, including the 2.0.x wrapper that picks between the protocol-code labels and the voltage classifier. The arguments come from each wrapper's call site.</p>
+<div class="tw"><table>
+<tr><th>Firmware (date)</th><th>Variant</th><th>Functions (line 1 / line 2 / wrapper)</th><th>Inputs</th><th>Difference from the reference</th></tr>
+<tr><td>1.7.9&ndash;1.9.9</td><td>1.9.5</td><td>one function (1.9.5: <code>0x1FB44</code>)</td><td>VBUS mV, IBUS mA (u16), D+/D&minus; 50-sample avg</td><td>none in the classifier; only the format strings of the proprietary branch differ</td></tr>
+<tr><td>2.0.0 (2025.2.20, Windows app)</td><td>1.9.5 constants</td><td><code>0x20728</code></td><td>same quantities, computed from another structure</td><td>not proven identical line by line</td></tr>
+<tr><td>2.0.1 (2026.4.9, Drive "V2.0.0")</td><td>2.0.7</td><td><code>0x21C50</code> / <code>0x2182C</code> / <code>0x21020</code></td><td>struct <code>+0x68</code>, <code>+0x28</code>, <code>+0x2A</code></td><td>none (0 diff lines in all three)</td></tr>
+<tr><td>2.0.1 (2026.4.21)</td><td>2.0.7</td><td><code>0x21DE4</code> / <code>0x21958</code> / <code>0x2114C</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.2 (2026.4.29)</td><td>2.0.7</td><td><code>0x21E48</code> / <code>0x219BC</code> / <code>0x211B0</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.3 (2026.5.20)</td><td>2.0.7</td><td><code>0x21D54</code> / <code>0x218C8</code> / <code>0x210BC</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.5 (2026.7.15)</td><td>2.0.7</td><td><code>0x21FF0</code> / <code>0x21B64</code> / <code>0x21358</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.6 (2026.8.9)</td><td>2.0.7</td><td><code>0x21FF8</code> / <code>0x21B6C</code> / <code>0x21360</code></td><td>same</td><td>none</td></tr>
+<tr><td>2.0.7 (2026.9.29)</td><td>reference</td><td><code>0x22098</code> / <code>0x21BD4</code> / <code>0x213C8</code></td><td>struct <code>+0x68</code>, <code>+0x28</code>, <code>+0x2A</code></td><td>&mdash;</td></tr>
+</table></div>
+<p>The label variant changes at exactly the same version as the ADC payload tail, so choosing it by layout (<code>&lt;= 2.0.0</code> → 1.9.5 logic, <code>&gt;= 2.0.1</code> → 2.0.7 logic) is correct for every official build.</p>
+<div class="note">The 2.0.x classifier does <strong>not</strong> take instantaneous D+/D&minus;. Its wrapper is called with the ADC struct (2.0.7: from the dashboard at <code>0x4A780</code>, pointer from <code>FUN_00017dae</code>). It passes <code>+0x28</code>/<code>+0x2A</code>, the 50-sample D+/D&minus; averages that the ADC task fills, which are the same fields 1.9.x exports at payload <code>0x28</code>/<code>0x2A</code>. 2.0.x no longer exports them in the ADC payload, so a host has two approximations:
+<ul>
+  <li>payload <code>0x1E</code>/<code>0x20</code> divided by 10, a 0.1 mV value refreshed every 250 ADC iterations;</li>
+  <li>AdcQueue (<code>0x02</code>, readable without auth on 2.0.x) records taken while the rate index is 1. At rate 1 the four line voltages in each record are exactly struct <code>+0x24..+0x2A</code>, the 50-sample averages. Changing the rate to get there is a state change.</li>
+</ul>
+Values near a threshold may label differently from the screen.</div>
+<h3>PD label (1.9.5 <code>FUN_0002768c</code>; 2.0.7 <code>FUN_00025590</code>)</h3>
+<p>The label is the PD revision ("PD3.0", or "PD3.1" with "EPR"; 2.0.x adds "PD3.2") plus suffixes:</p>
+<ul>
+  <li><code>PPS,QC4</code> or <code>PPS,QC4+</code> (2.0.x adds <code>PPS,QC5</code>) when an APDO is present, or <code>AVS</code> when the APDO type bits say so;</li>
+  <li><code>Apple</code> when a VID stored in the PD object is <code>0x05AC</code>;</li>
+  <li><code>SVOOC,%dW</code> for <code>0x22D9</code> (OPPO) and <code>XIAOMI,%dW</code> for <code>0x2717</code>.</li>
+</ul>
+<p>All of these come from PD traffic, which the CLI sees with PdEnable(1) and attribute <code>0x10</code>. I did not trace which message fills the VID field; Discover Identity or Source_Capabilities_Extended are the candidates.</p>
+
+<h2 id="memread">11. MemoryRead (0x44) validation</h2>
+<pre><code>/* 1.9.5: dispatcher case 0x44 + FUN_000468d4.  Identical logic in every analysed version. */
+req = (hdr bit16) ? AES-ECB-Decrypt(key0, payload) : payload      // {u32 addr, u32 size, u32 magic, u32 tag}
+if (addr - 0x03000C00) &lt; 0x180:                                   // OTP calibration window
+    p = first 64-byte record from 0x03000C00 whose first word is 0xFFFFFFFF (max 0x03000D80)
+    if p &gt; 0x03000D40: addr = 0x03000D80
+if magic == 0xFFFFFFFF &amp;&amp; size &lt; 0x3D0901 &amp;&amp; addr &lt; 0x983D0901:
+    send {0xC4, id, 0x01, 0x01} + {addr, size, 0xFFFFFFFF, tag}     // 20 bytes; byte 2 bit 0 = encrypted
+    for each 0x9F0-byte chunk (last rounded up to 16): send AES-ECB-Encrypt(key0, mem)   // raw, no header
+else: send Reject {0x06, id}</code></pre>
+<ul>
+  <li>The only requirement is the connected state; there is no auth check. There is no lower bound and no whitelist: flash, bootloader, OTP, SRAM, <strong>peripheral registers</strong> and the XIP window are all readable. Reading FIFO or clear-on-read registers changes peripheral state.</li>
+  <li>The copy loop (<code>FUN_00005090</code> on 1.9.5) dereferences the address directly, so an unmapped address raises a bus fault. km003c-protocol-research saw a NOT_READABLE (<code>0x27</code>) reply for one such address on 1.9.9, and the repository's guard notes report crashes. Either way, whitelist.</li>
+  <li>Large sizes, up to about 3.8 MB, keep the USB task busy.</li>
+  <li>The tail is padded to 16 bytes.</li>
+  <li><code>0x4B</code> applies the same check to <code>0x98000000 + addr</code>.</li>
+  <li>2.0.5 sets the confirmation flag to 0 and sends its final short chunk unencrypted. FIRMWARE.md documents this; its library limits requests to 2,528 bytes to avoid it. The version table in §4 confirms the flag per image.</li>
+</ul>
+<div class="good">CLI policy: allow only flash <code>0x0000&ndash;0x7FFFF</code>, OTP <code>0x03000C00&ndash;0x03000FFF</code>, SRAM and the 12-byte UID at <code>0x40010450</code>. Keep each request &le; 2,528 bytes and never touch other peripheral space. Useful fixed reads: <code>0x0420</code> (bootloader info) and <code>0x4420</code> (app model, version, date, installed size and CRC).</div>
+
+<h2 id="danger">12. State-changing commands</h2>
+<div class="bad">A read-only CLI must never send these:
+  <ul>
+    <li><code>0x04</code> and <code>0x09</code>;</li>
+    <li><code>0x48</code> and <code>0x4D</code> (every op changes state);</li>
+    <li><code>0x4A</code>;</li>
+    <li>level-2 auth;</li>
+    <li>CDC <code>0x0A</code>;</li>
+    <li>any CDC text line.</li>
+  </ul>
+  Reboots also interrupt offline logging. Level-1 auth on 1.9.x is side-effect-free. Start/StopGraph (<code>0x0E</code>/<code>0x0F</code>) changes the live sample rate, which also shows on screen, but is not persisted.</div>
+<h3>Settings-batch operations (1.9.5 <code>FUN_00046a1c</code>; identical in 2.0.7 <code>FUN_00045704</code>)</h3>
+<p>Format: <code>[op:15 | next:1 | rsv:6 | size:10]</code> + payload, chained while <code>next</code> is set. The handler is reachable from bulk <code>0x48</code> (no auth), bulk <code>0x4D</code> (auth 2) and CDC <code>0x0A</code> (no auth).</p>
+<div class="tw"><table>
+<tr><th>Op</th><th>Gate</th><th>Effect</th></tr>
+<tr><td><code>0x01</code></td><td>none</td><td>settings-A bit 0 (language)</td></tr>
+<tr><td><code>0x02</code></td><td>none</td><td>clear settings-A bit 2 (calibration-required flag)</td></tr>
+<tr><td><code>0x03</code></td><td>none</td><td>settings-A bits 3&ndash;9 (brightness)</td></tr>
+<tr><td><code>0x04</code>, <code>0x05</code></td><td>none</td><td>settings-A bits 10&ndash;11, 12&ndash;13</td></tr>
+<tr><td><code>0x06</code>, <code>0x1C</code></td><td>none</td><td>settings-A bits 14&ndash;15, applied</td></tr>
+<tr><td><code>0x07</code></td><td>none</td><td>settings-A word 1 bits 0&ndash;2</td></tr>
+<tr><td><code>0x08</code></td><td>none</td><td class="danger">save, reinitialise, <strong>reset MCU</strong></td></tr>
+<tr><td><code>0x09</code></td><td>none</td><td class="danger"><strong>factory reset</strong> of both settings blocks, then op 8</td></tr>
+<tr><td><code>0x0A</code></td><td>auth 2</td><td class="danger">write the 5 VBUS calibration offsets; may re-zero the current offset</td></tr>
+<tr><td><code>0x0B</code>, <code>0x0C</code></td><td>auth 2</td><td class="danger">write positive-current gains</td></tr>
+<tr><td><code>0x0D</code></td><td>auth 2</td><td class="danger">write negative-current gains; brightness forced to 50</td></tr>
+<tr><td><code>0x0E</code></td><td>auth &ge; 1</td><td class="danger">unlock PWC.FPRC and write a signed byte to CMU register <code>0x40054062</code> (clock trim; exact name unconfirmed)</td></tr>
+<tr><td><code>0x0F</code></td><td>auth 2</td><td class="danger">write the current zero offset (settings-A <code>0x58</code>)</td></tr>
+<tr><td><code>0x14</code>&ndash;<code>0x17</code></td><td>none</td><td>settings-B: screen orientation, default sample rate (applied at once), bits 4&ndash;5, main page; persisted to NOR</td></tr>
+<tr><td><code>0x28</code></td><td>none</td><td>append 48-byte offline-log catalog entries</td></tr>
+<tr><td><code>0x7FFF</code></td><td>none</td><td>persist settings-A</td></tr>
+</table></div>
+<p>The OTP calibration record that level-2 auth compares against is itself readable through <code>0x44</code>. Level 2, and with it calibration writes, is therefore reachable by any host.</p>
+<h3>CDC text mode: "Protocol Trigger by Virtual Serial Port"</h3>
+<p>On the CDC port, any frame that is not a <code>0x0C</code> or <code>0x0A</code> header goes to the text parser (1.9.5 <code>FUN_00042df2</code>, 2.0.7 <code>FUN_00040718</code>). ChargerLAB's own document, "KM003C/002C Protocol Trigger by Virtual Serial Port (Instructions)", published on their Google Drive next to the firmware, lists the commands:</p>
+<ul>
+  <li>session: <code>pdm open</code> / <code>pdm close</code>, <code>pdm set type=,em=</code> (eMarker simulation up to 50 V 5 A EPR), <code>reset</code>;</li>
+  <li>protocol entry: <code>entry pd|ufcs|qc|fcp|scp|afc|vfcp|sfcp</code>;</li>
+  <li>fixed voltages: <code>qc 5V|9V|12V|20V</code>, <code>fcp|afc|sfcp ?V</code>;</li>
+  <li>stepped QC3: <code>qc3 volt=3600..20000</code>, <code>qc3 inc= / dec=</code>;</li>
+  <li>variable voltage and current: <code>scp volt=,cur=</code>, <code>vfcp volt=,cur=</code>, <code>ufcs req=,volt=,cur=</code>, <code>pd req=,volt=,cur=</code>;</li>
+  <li>raw PD: <code>pd pdo</code>, <code>pd cmd=</code>, <code>pd data=</code> (raw PD messages).</li>
+</ul>
+<p>The firmware parser also knows <code>debug</code>, <code>list</code>, <code>ver</code>, <code>info</code>, <code>hrst</code> (hard reset), <code>drp</code>, <code>tfcp</code>, <code>apple</code> and <code>bc</code>.</p>
+<p class="danger">These commands make the meter act as a decoy sink and negotiate higher voltages, up to 20 V, or 48&ndash;50 V with EPR, onto whatever is connected on the output side.</p>
+
+<h2 id="addrs">13. Address index</h2>
+<div class="tw"><table>
+<tr><th>What</th><th>1.9.5 (Drive, 2025.1.6)</th><th>2.0.7</th></tr>
+<tr><td>USB task (bulk, CDC and HID inputs)</td><td><code>0x0001EDD4</code></td><td><code>0x0001F894</code></td></tr>
+<tr><td>Bulk dispatcher</td><td><code>0x00052514</code></td><td>inline in task</td></tr>
+<tr><td>GetData / MemoryRead / SettingsBatch</td><td><code>0x00046494</code> / <code>0x000468D4</code> / <code>0x00046A1C</code></td><td><code>0x0004516C</code> / <code>0x000455BC</code> / <code>0x00045704</code></td></tr>
+<tr><td>ADC struct / accessor</td><td><code>0x20002560</code> / <code>0x000180AC</code></td><td><code>0x1FFFACF0</code> / <code>0x00017DAE</code></td></tr>
+<tr><td>ADC task / measurement / rate setter</td><td><code>0x0001D934</code> / <code>0x00017E20</code> / <code>0x00018138</code></td><td><code>0x0001DE5C</code> / <code>0x00017B1C</code> / <code>0x00017E34</code></td></tr>
+<tr><td>INA229 CURRENT read</td><td><code>0x00006E6E</code></td><td><code>0x00006D78</code></td></tr>
+<tr><td>AES-ECB decrypt / encrypt (HW AES <code>0x40008000</code>)</td><td><code>0x00004FB0</code> / <code>0x00005090</code></td><td><code>0x00004F9C</code> / <code>0x00005074</code></td></tr>
+<tr><td>Auth level byte / session flags</td><td><code>0x20004041</code> / <code>0x20003CD6</code></td><td><code>0x1FFFB485</code> / <code>0x1FFFB1A2</code></td></tr>
+<tr><td>Disconnect + timeout</td><td><code>0x0001C374</code></td><td><code>0x00053F84</code></td></tr>
+<tr><td>NVIC_SystemReset</td><td><code>0x00011DE4</code></td><td><code>0x000119D8</code></td></tr>
+<tr><td>Dashboard voltage label / PD label</td><td><code>0x0001FB44</code> / <code>0x0002768C</code></td><td><code>0x000213C8</code> (<code>0x22098</code>, <code>0x21BD4</code>) / <code>0x00025590</code></td></tr>
+<tr><td>D+/D&minus; protocol engine object</td><td><code>0x200056B0</code></td><td><code>0x1FFFC140</code></td></tr>
+<tr><td>CDC text parser</td><td><code>0x00042DF2</code></td><td><code>0x00040718</code></td></tr>
+<tr><td>NOR program / erase (QSPI <code>0x9C000000</code>)</td><td><code>0x0000D364</code> / <code>0x0000D18C</code></td><td><code>0x0000CE84</code> / <code>0x0000CCAA</code></td></tr>
+</table></div>
+
+<h2 id="open">14. Not established</h2>
+<ul>
+  <li>Whether the meter's 1.9.5 (2025.1.7, CRC <code>DD9AD21D</code>) differs in code from the Drive 1.9.5 (2025.1.6). §5 describes a read-only way to check.</li>
+  <li>Which physical direction a positive IBUS means (§9).</li>
+  <li>The name of PD state <code>0x79</code> that gates the 2.0.1+ battery field, and the CMU register name at <code>0x40054062</code>.</li>
+  <li>The Windows-app 2.0.0 dashboard classifier has the same constants as 1.9.5, but its inputs are computed differently, so it was not proven equivalent line by line.</li>
+  <li>The CDC/HID interface numbering beyond what the captures show; the USB descriptors are in compressed init data.</li>
+</ul>
+
+<h2 id="repro">15. Reproduction</h2>
+<p>No firmware, decrypted or encrypted, is stored in this repository. The inputs are the official <code>.mencrypt</code> packages from ChargerLAB's Google Drive and the four packages bundled with the Windows app 3.0.0, identified below by SHA-256.</p>
+<ol>
+  <li><strong>Decrypt.</strong> A short Python decryption script (pycryptodome) parses the QDataStream header, AES-128-ECB-decrypts the QByteArray with key 0 and truncates to the declared size. It checks the CRC-32 with <code>0x428..0x42F</code> set to <code>0xFF</code>, the vector table and the app info block at <code>0x4420</code>. It then prints the table in §4.</li>
+  <li><strong>Analyse.</strong> Ghidra 12.2 headless with <code>-processor ARM:LE:32:Cortex -loader BinaryLoader -loader-baseAddr 0x4000</code>. A pre-script adds the HC32F460 memory map (SRAMH, SRAM, retention SRAM, OTP, peripherals, QSPI XIP and registers) and seeds functions from the 160-entry vector table. A post-script decompiles every function. The never-returning RTOS tasks have no prologue, so I created them by hand at the addresses in §13. ECB was fingerprinted by counting repeated and shared 16-byte ciphertext blocks.</li>
+  <li><strong>Per-version ADC check.</strong> In each decompiled image, find the GetData builder: the function that copies <code>0x2C</code> bytes with extended header <code>0x8001</code>/<code>0xB00</code>. Record the level-0 mask and the tail overrides, find every writer of ADC struct <code>+0x4C</code>, and read the per-rate SPS table that the rate setter indexes.</li>
+</ol>
+<div class="tw"><table>
+<tr><th>Package</th><th>Package SHA-256</th><th>Plaintext SHA-256</th></tr>
+<tr><td>1.7.9</td><td><code>f8974b15601e2a6c58e9daddf9136ee9f903db723f2bca190d4249f659a65fc2</code></td><td><code>fab69c2f14a137d578996a6ddb36243dd9dd855ffb74a575d452b5ff58d22d3c</code></td></tr>
+<tr><td>1.8.0</td><td><code>a9ddb5f20307562182acde6797e819cf5fbdc578e0851a19712b14e445b6661d</code></td><td><code>8ab421d5f3cd4657633ebb088fddf1c14060dd5ce6086f5f1a9ddc8d25434687</code></td></tr>
+<tr><td>1.8.4</td><td><code>48b9a98c9cec03331e964ad707737ad8f5d69adbcc8c4103fd93782265e21ef3</code></td><td><code>78cf2e21ad4f15bb8957d9f43094d45f9cae8c95612d3aa8533c3ccfa1b5f142</code></td></tr>
+<tr><td>1.8.5</td><td><code>b36be632b21baddb63379ec24d76be7d7cbfeabd20ca046f1a0686de7a0740d7</code></td><td><code>a897ece9eb00a8090944be2b905fe8f1460d83dc60d440630b6d61e87ae5c9f8</code></td></tr>
+<tr><td>1.8.6</td><td><code>6043bbab97dccb93738a77b80cace13d4a7253cde320aceb241c6b2979a6a275</code></td><td><code>9f2fa172b18ba5bf55efe9dce02d9d24ca969288eb39912416e50e5fbe1535ae</code></td></tr>
+<tr><td>1.8.7</td><td><code>d1cf2ecb63469338d5b577ac9a3fc9d38b00dcdf883f44b3454f8637cb21f093</code></td><td><code>224af714526d0a3a4bd44d8e52fb45af79e7b494391362ee1fc6f21876e8c40a</code></td></tr>
+<tr><td>1.8.8</td><td><code>20de23e9032bf2b33a611b0bc23122f39f7236662a487ab15c9cc4b962a0bbc3</code></td><td><code>89b07ebaf1b0fefed9e7b8057edf4bdfc8b484026c5207bb499bac20ed7baf80</code></td></tr>
+<tr><td>1.8.9</td><td><code>9a0da5a9565ac7de1b24948bd52cae39cba50f113af21a348e4a70962c961665</code></td><td><code>64ad5c4728b7ed56d1e8b16fe10528ad4ee9ef684f77e475f0a61c540fb0bcc1</code></td></tr>
+<tr><td>1.9.0</td><td><code>ec87e015e1198ebc531570a224a6ad902c61f0bd2b66bad7cd9dfc12dc08c361</code></td><td><code>e9f3b166fc029ecbd80afa064f740970264107b5078d14c2927ad55e62e39315</code></td></tr>
+<tr><td>1.9.2</td><td><code>b0fd64123147638742b5cbdfb0304c41521ff74371b4eb214223fc1191961f25</code></td><td><code>fdf6f0470bb97b2b1ed886869896e250fbff43699c28946f9f9a450073ead6f5</code></td></tr>
+<tr><td>1.9.3</td><td><code>ea6d1781beb748740e3904c0b3b5735803b29e5c0c39e26a10c1922f20559c39</code></td><td><code>4a4810d3f5e6303396fe6a14a644139d41f019215f30d263cc07b6f474b147d7</code></td></tr>
+<tr><td>1.9.5</td><td><code>a8cb82cd1980fbdab8df54b2d1dfc8a6bbc4a9092815a5d2d2210b3407262946</code></td><td><code>22281fde35c4622e1f5e5bd7a1fd496de8f72517c43befb7cf701f02d343443d</code></td></tr>
+<tr><td>1.9.7</td><td><code>71c814571f0d3384ea294bb3f6e83d0b863b6b152e5ec553e8f581728069c9db</code></td><td><code>933e7ca6f50db208dc2a8a9951a125655607c7dc2bd24334082601c47b5a65b7</code></td></tr>
+<tr><td>1.9.9</td><td><code>cdbdd032c49f074510dcb8f746daf227e77ca4c40e63df7161f18a879f4aecdc</code></td><td><code>0787c2284d95db50adccdd887dbe137fe0d8e68b056d099d5f848729a6c9358b</code></td></tr>
+<tr><td>Windows-app 2.0.0</td><td><code>57cd634713090fb2993c44e0edb09d53405e18d24d1234ff5e3fd635cfc326fc</code></td><td><code>2b00081aa5f5c2ca3107de26420a4a62375c7bb5fefe19cafc3628cf03f6f2d1</code></td></tr>
+<tr><td>Drive "2.0.0" (2.0.1, 2026.4.9)</td><td><code>e1e67c5c60ec3e0449561ac36005c03215e22f30d1ddeeb3351f814217b65efe</code></td><td><code>91a6f2ff3ac88a9d5dd6ec388452a5165aa954b9669f36705bad26e9be1b1b5a</code></td></tr>
+<tr><td>2.0.1</td><td><code>b0953bf12accfe1b3aff2d1034b21180218fc17a69ac1f84c63aee001c192907</code></td><td><code>af41f168720bc8675c7193d7ad9e4a2acb99b05cf0de6decacd611c4b892910f</code></td></tr>
+<tr><td>2.0.2</td><td><code>7f229082db7ec763ef083af06684ff73be986862e21063593dddc939bb73e634</code></td><td><code>fc7758010a8bf57a73b9f21f58fac62eb17314cf84203ecf026d07d2fd792e7e</code></td></tr>
+<tr><td>2.0.3</td><td><code>9f73eba25b74aa6c6d5ac1baf71117900a85c5a2faa543b8b67a942f5b162cd0</code></td><td><code>866683d04a5761c6d2c184ba9abfa34ef044cd78023ed41f58ccd7658930abdb</code></td></tr>
+<tr><td>2.0.5</td><td><code>b3f6705b14bb959576905b2f4c72a79556c8e1944b2232b60eb6c5900f38bd7b</code></td><td><code>627b60ea653771e431c532c161ab3bb95a3f0f549daeeba98fe60635ad3cb141</code></td></tr>
+<tr><td>2.0.6</td><td><code>33e7034cb15c221e6d772389b42b01f37eab55334d04282e4763bb34868a2444</code></td><td><code>2e2a959aad8cfbda85b88d9f4f1b036bf28bc9d4e0daaa4d3864e51656590aec</code></td></tr>
+<tr><td>2.0.7</td><td><code>7a081af887fa8873d9e0cfc9cee9654187ab392f882efed16c1904a184ce8454</code></td><td><code>1440925005e848ff4d7b17fabb4a015a972b2b4dd519ed7c7a7352f8b236d1bf</code></td></tr>
+</table></div>
+</main>
+</body>
+</html>

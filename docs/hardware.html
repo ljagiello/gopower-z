@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KM003C Hardware Notes</title>
+<meta name="description" content="Desk research on the ChargerLAB POWER-Z KM003C USB-C power meter: specs, components, sample rates, PD features, software and USB interfaces, with sources.">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1d2127;
+  --muted: #5a6370;
+  --border: #d9dde3;
+  --surface: #f5f7f9;
+  --accent: #1f5fbf;
+  --code-bg: #eef1f4;
+  --tag-o: #1d6b3a;  --tag-o-bg: #e3f3e8;
+  --tag-3p: #6a4a00; --tag-3p-bg: #fbf0d3;
+  --tag-c: #2b4f8f;  --tag-c-bg: #e3ebf8;
+  --tag-i: #7a2e5c;  --tag-i-bg: #f6e4ef;
+  --warn-bg: #fff6e0;
+  --warn-border: #e6c26a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b;
+    --fg: #e4e7eb;
+    --muted: #9aa4b1;
+    --border: #2e343c;
+    --surface: #1b1f25;
+    --accent: #79a8f0;
+    --code-bg: #232931;
+    --tag-o: #8fd8a8;  --tag-o-bg: #1d3426;
+    --tag-3p: #f0cf7a; --tag-3p-bg: #3a2f12;
+    --tag-c: #9dbcf2;  --tag-c-bg: #1f2b42;
+    --tag-i: #eaa6cf;  --tag-i-bg: #3a1f30;
+    --warn-bg: #2f2814;
+    --warn-border: #7a6526;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b;
+  --fg: #e4e7eb;
+  --muted: #9aa4b1;
+  --border: #2e343c;
+  --surface: #1b1f25;
+  --accent: #79a8f0;
+  --code-bg: #232931;
+  --tag-o: #8fd8a8;  --tag-o-bg: #1d3426;
+  --tag-3p: #f0cf7a; --tag-3p-bg: #3a2f12;
+  --tag-c: #9dbcf2;  --tag-c-bg: #1f2b42;
+  --tag-i: #eaa6cf;  --tag-i-bg: #3a1f30;
+  --warn-bg: #2f2814;
+  --warn-border: #7a6526;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; }
+h2 { font-size: 1.25rem; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+p, ul, ol { margin: 0 0 12px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+.meta { color: var(--muted); margin-bottom: 16px; }
+nav.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin: 16px 0 8px; }
+nav.toc ol { margin: 0; }
+.legend { display: grid; gap: 6px; margin: 12px 0; }
+.note { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.table-wrap { width: 100%; overflow-x: auto; margin: 8px 0 16px; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { background: var(--surface); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 500; }
+.tag { display: inline-block; font-size: 0.75rem; font-weight: 600; line-height: 1.4; padding: 0 5px; border-radius: 4px; white-space: nowrap; }
+.tag.o { color: var(--tag-o); background: var(--tag-o-bg); }
+.tag.p { color: var(--tag-3p); background: var(--tag-3p-bg); }
+.tag.c { color: var(--tag-c); background: var(--tag-c-bg); }
+.tag.i { color: var(--tag-i); background: var(--tag-i-bg); }
+a.ref { font-size: 0.82rem; text-decoration: none; white-space: nowrap; }
+a.ref:hover { text-decoration: underline; }
+ol.sources li { margin: 8px 0; }
+ol.sources .sid { font-weight: 600; }
+@media (max-width: 600px) {
+  body { font-size: 14px; }
+  main { padding: 16px 16px 48px; }
+  h1 { font-size: 1.35rem; }
+  th, td { padding: 6px 8px; }
+  table { font-size: 0.86rem; }
+  table.stack thead { display: none; }
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
+  table.stack tr { border-bottom: 1px solid var(--border); padding: 6px 0; }
+  table.stack tr:last-child { border-bottom: 0; }
+  table.stack td { border: 0; padding: 2px 10px; }
+  table.stack td::before { content: attr(data-label); display: block; font-size: 0.75rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+}
+</style>
+</head>
+<body>
+<main>
+
+<h1>ChargerLAB POWER-Z KM003C: hardware notes</h1>
+<p class="meta">Research date 2026-11-16. Desk research only; the physical device was not touched. Device label: <code>MODEL: KM003C, DC 0-50V 0-6A</code>, USB VID <code>0x5FC9</code>, PID <code>0x0063</code>.</p>
+
+<div class="legend">
+  <div><span class="tag o">O</span> Official ChargerLAB / POWER-Z material: chargerlab.com, power-z.com (including the official product page <a href="#s3">S3</a>), power-z.cn, the official manual and official downloads.</div>
+  <div><span class="tag p">3P</span> Independent third party: reviews, a hobbyist teardown, the Linux kernel.</div>
+  <div><span class="tag c">C</span> Community reverse engineering, mainly the okhsunrog GitHub repositories. These describe one <strong>HW2.1</strong> unit and decompiled stock firmware, and ChargerLAB has not confirmed them. Treat them as strong leads, not specifications.</div>
+  <div><span class="tag i">I</span> My own inference or reading of a photo. It is unverified.</div>
+</div>
+<p>Links such as <a class="ref" href="#s2">S2</a> point to the <a href="#sources">Sources</a> list.</p>
+
+<nav class="toc" aria-label="Contents">
+<ol>
+  <li><a href="#overview">Overview and specs</a></li>
+  <li><a href="#components">Components</a></li>
+  <li><a href="#teardown">Schematic and teardown availability</a></li>
+  <li><a href="#measurement">Measurement capabilities</a></li>
+  <li><a href="#protocols">Protocol detection and PD features</a></li>
+  <li><a href="#software">Software, SDK and USB interfaces</a></li>
+  <li><a href="#cli">Notes for a CLI client</a></li>
+  <li><a href="#sources">Sources</a></li>
+</ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="overview">1. Overview and specs</h2>
+
+<p>The KM003C is the successor to the KM002C. ChargerLAB says the KM002C "was discontinued due to the shortage of chips" <a class="ref" href="#s1">S1</a>. The KM003C is an in-line USB-C power meter and PD analyzer/trigger. It has a USB-C plug, a USB-C receptacle and a third USB-C port labelled <strong>"HID"</strong>, which powers the unit and connects it to a PC <span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s6">S6</a>.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Spec</th><th>Value</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Size / weight</td><td>36.5 × 35.5 × 8.7 mm, 16.5 g</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s5">S5</a></td></tr>
+<tr><td>Display</td><td>1.54" IPS, 240×240</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s3">S3</a> <a class="ref" href="#s5">S5</a></td></tr>
+<tr><td>Ports</td><td>USB-C plug and USB-C receptacle (both "support USB4 Gen3, bidirectional"), plus a USB-C "HID" port for PC and power</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s3">S3</a> <a class="ref" href="#s6">S6</a></td></tr>
+<tr><td>HID port</td><td>USB-C (5 V). It is the only port that talks to the PC</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s10">S10</a></td></tr>
+<tr><td>VBUS range</td><td>0–50 V continuous; 6 A continuous and instantaneous</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> (spec table)</td></tr>
+<tr><td>Marketing rating</td><td>"up to 50V 6A (240W in PD)"</td><td><span class="tag o">O</span> <a class="ref" href="#s3">S3</a> <a class="ref" href="#s1">S1</a></td></tr>
+<tr><td>D+/D− and CC1/CC2 withstand</td><td>50 V (the D+/D− figure is footnoted "technically supported without enough experiments")</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Port internal resistance</td><td>"About 20 mΩ" (the KM002C is about 28 mΩ)</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s5">S5</a></td></tr>
+<tr><td>Typical operating current</td><td>15–50 mA (the KM002C is 8–25 mA)</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s5">S5</a></td></tr>
+<tr><td>Input impedance / anti-surge</td><td>&gt;800 kΩ / 4 kV</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Operating / storage temperature</td><td>−10 to +65 °C / −45 to +110 °C</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Processor / ADC</td><td>"This tester integrates ARM Cortex-M4 processor and 20 bit ADC"</td><td><span class="tag o">O</span> <a class="ref" href="#s3">S3</a>; 20-bit ADC also in <a class="ref" href="#s1">S1</a> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>PC data volume</td><td>"The PC software can obtain 10 million pieces of data at a time"</td><td><span class="tag o">O</span> <a class="ref" href="#s3">S3</a></td></tr>
+<tr><td>Storage</td><td>"4MB Flash"; "Capacity 4MB"</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s1">S1</a></td></tr>
+<tr><td>Gravity sensor (auto-rotate)</td><td>Yes</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s3">S3</a></td></tr>
+<tr><td>Supercapacitor</td><td>Yes; "can run for five to ten seconds after disconnecting"</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a></td></tr>
+<tr><td>Reverse-polarity protection</td><td><strong>None.</strong> "The USB tester has no reverse voltage protection"</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Languages</td><td>English / Chinese</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s3">S3</a></td></tr>
+<tr><td>Price</td><td>$109.99</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s3">S3</a></td></tr>
+</tbody>
+</table></div>
+
+<h3>Known hardware quirks</h3>
+<ul>
+<li><strong>USB 2.0 passthrough.</strong> The FAQ says some USB 2.0 devices "(Like mouse, keyboard)" fail through the tester: "It is a hardware issue ... the internal module has affected the USB2.0 devices. The USB3.0, USB3.1, USB3.2 and USB4 devices can work normally." <span class="tag o">O</span> <a class="ref" href="#s4">S4</a>. AnandTech also says ChargerLAB acknowledged this as a hardware design bug <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</li>
+<li><strong>Plug solder joints.</strong> A hobbyist teardown found that the solder joints of the male plug's top-side pins lift from the PCB. A unit made in 2023-11 had extra solder added at that spot <span class="tag p">3P</span> <a class="ref" href="#s17">S17</a>.</li>
+<li><strong>PD3.2.</strong> The product page now says "This tester is the latest version and can support PD3.2" <span class="tag o">O</span> <a class="ref" href="#s3">S3</a>. PD 3.2 features arrived through firmware and PC-software updates (see <a href="#protocols">§5</a>). I found no evidence of a hardware revision for PD3.2 <span class="tag i">I</span>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="components">2. Components</h2>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Part</th><th>Function / notes</th><th>Evidence and source</th></tr></thead>
+<tbody>
+<tr><td><strong>HDSC (Huada) HC32F460</strong>, marking <code>F460JETA</code> (HC32F460JETA, LQFP48)</td><td>Main MCU: Arm Cortex-M4F, 512 KB flash, 192 KB SRAM, 4 KB retention RAM</td><td><span class="tag p">3P</span> The teardown author names "Huada HDSC HC32F460" and its specs <a class="ref" href="#s17">S17</a>. <span class="tag c">C</span> The <code>F460JETA</code> marking is read from the photo, and the firmware matches the HC32F460 register map <a class="ref" href="#s19">S19</a>. <span class="tag p">3P</span> AnandTech names the same MCU, but only by inference from a KM002C photo <a class="ref" href="#s20">S20</a>. <span class="tag o">O</span> says only "ARM Cortex-M4" <a class="ref" href="#s3">S3</a></td></tr>
+<tr><td>MCU clock</td><td>Configured to 192 MHz from a 16 MHz input</td><td><span class="tag c">C</span> firmware/register analysis <a class="ref" href="#s19">S19</a>. <span class="tag i">I</span> I read "YXC 16.000" on a crystal in the teardown photo <a class="ref" href="#s17">S17</a></td></tr>
+<tr><td><strong>TI INA229</strong></td><td>20-bit power monitor (VBUS/IBUS, die temperature) on SPI2</td><td><span class="tag c">C</span> Photo marking "229", plus manufacturer/device IDs <code>0x5449</code>/<code>0x2291</code> read over SPI on HW2.1 <a class="ref" href="#s19">S19</a>. <span class="tag o">O</span> says only "Built-in 20-bit ADC (high-precision measurement IC)" <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>TI INA228 (claimed)</td><td>20-bit I²C power monitor</td><td><span class="tag o">O</span> ChargerLAB's INA228 article is about the <strong>KM002C</strong> <a class="ref" href="#s11">S11</a>. <span class="tag p">3P</span> AnandTech says "The INA228 in the KM003C has a 20-bit ADC", but this rests on the KM002C photo <a class="ref" href="#s20">S20</a>. For the KM003C, the evidence points to INA229 instead</td></tr>
+<tr><td>ADC temperature sensor</td><td>PC software: "T1 ... is ADC chip temperature, accuracy ±1°C"; "T2 is microcontroller temperature, accuracy ±5°C"</td><td><span class="tag o">O</span> <a class="ref" href="#s4">S4</a></td></tr>
+<tr><td>MCU internal ADC1</td><td>D+, D−, CC1, CC2 voltages (pads PA0–PA3)</td><td><span class="tag c">C</span> <a class="ref" href="#s19">S19</a> (docs/line-adc.md). AnandTech guessed "at least 5 ADCs" <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a></td></tr>
+<tr><td>Current shunt</td><td><strong>Value not confirmed.</strong>
+<ul>
+<li>Official specs give only "Current Sampling Resistor: 2W/20PPM".</li>
+<li>The ~20 mΩ figure is whole-port insertion resistance, not the shunt.</li>
+<li>AnandTech says "20 mOhm shunt resistors", inferred from a KM002C photo: unverified.</li>
+<li>The community says "No physical shunt resistance is inferred".</li>
+<li><span class="tag i">I</span> The teardown photo shows a large resistor marked "5L0F"; its value is unverified.</li>
+</ul></td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s5">S5</a>; <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>; <span class="tag c">C</span> <a class="ref" href="#s19">S19</a>; <span class="tag i">I</span> <a class="ref" href="#s17">S17</a></td></tr>
+<tr><td>Current sense amplifier</td><td>Built into the INA229 (no separate amplifier identified)</td><td><span class="tag c">C</span> / <span class="tag i">I</span> <a class="ref" href="#s19">S19</a></td></tr>
+<tr><td>USB-PD PHY / CC controller</td><td><strong>No dedicated PD PHY chip identified.</strong> The community finds that PD runs on HC32F460 peripherals: CMP1 comparator with a DAC1 reference for receive, and TimerA2 with DMA for transmit, plus external analog parts. CC Rd is switched by MCU GPIO PB6 and AW9523B P0_3. ChargerLAB does not document this</td><td><span class="tag c">C</span> <a class="ref" href="#s19">S19</a> (README, pd_phy_hc32f460.md, board_bringup.md)</td></tr>
+<tr><td>USB device controller</td><td>HC32F460 on-chip Synopsys DWC2-compatible USB FS OTG with internal PHY (PA11/PA12)</td><td><span class="tag c">C</span> <a class="ref" href="#s18">S18</a> <a class="ref" href="#s19">S19</a></td></tr>
+<tr><td>Display</td><td>1.54" IPS 240×240. Controller is ST7789-compatible on a QSPI bus shared with the flash. A 240×240 ST7789 replacement panel was reported to work</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a>; <span class="tag c">C</span> <a class="ref" href="#s18">S18</a> <a class="ref" href="#s19">S19</a>; the replacement report is cited via S19 from <a class="ref" href="#s23">S23</a> (not read)</td></tr>
+<tr><td><strong>AWINIC AW9523B</strong></td><td>I²C GPIO/LED expander at 0x5B (panel reset, backlight, CC2 Rd control)</td><td><span class="tag c">C</span> Marking visible in the teardown photo, and register sequences match <a class="ref" href="#s19">S19</a> <a class="ref" href="#s17">S17</a></td></tr>
+<tr><td>SC7A20-family accelerometer</td><td>Auto-rotation ("gravity sensor"); I²C 0x19, WHO_AM_I 0x11</td><td><span class="tag c">C</span> <a class="ref" href="#s18">S18</a> <a class="ref" href="#s19">S19</a>; <span class="tag o">O</span> confirms a gravity sensor exists <a class="ref" href="#s1">S1</a></td></tr>
+<tr><td>External flash</td><td>4 MiB NOR (legacy ID 0x8515; exact part unknown). Holds factory settings and calibration at 0x3FF100. <span class="tag i">I</span> It presumably also holds the offline records counted in the official "4MB Flash"</td><td><span class="tag c">C</span> <a class="ref" href="#s18">S18</a> <a class="ref" href="#s19">S19</a>; <span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Supercapacitor</td><td>KAMCAP 3.0 V 0.35 F</td><td><span class="tag p">3P</span> teardown <a class="ref" href="#s17">S17</a></td></tr>
+<tr><td>Built-in load</td><td>ChargerLAB credits MTK-PE/VOOC/SVOOC detection to a "built-in load". <span class="tag i">I</span> An "8R2" (8.2 Ω?) power resistor is visible in the photo; its function is unverified</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a>; <span class="tag i">I</span> <a class="ref" href="#s17">S17</a></td></tr>
+<tr><td>Crypto / auth chip</td><td><strong>None identified.</strong> Firmware updates (<code>.mencrypt</code>) and the PC-streaming authentication use AES-128-ECB. The community attributes this to software and the HC32F460's on-chip AES block. The authentication checks the MCU unique ID at 0x40010450</td><td><span class="tag c">C</span> <a class="ref" href="#s18">S18</a> (docs/firmware/format.md, docs/features/authentication.md), <a class="ref" href="#s19">S19</a> (overview.md)</td></tr>
+<tr><td>Bootloader</td><td>Native DFU loader in internal flash below 0x4000 <span class="tag c">C</span>. Official: Back "Press and hold it when power off, you can enter the DFU mode" <span class="tag o">O</span>. Community: hold Exit/Back while connecting power to the HID port <span class="tag c">C</span></td><td><a class="ref" href="#s2">S2</a> <a class="ref" href="#s6">S6</a> <a class="ref" href="#s18">S18</a> <a class="ref" href="#s19">S19</a></td></tr>
+</tbody>
+</table></div>
+
+<p>Other markings visible in the teardown photo that I could not identify <span class="tag i">I</span>: "SSL56" (likely a Schottky), "8633P", "85337", "2268" (8-pin) and "PQ82/H1PC" (power package). The photo is linked at <a class="ref" href="#s17">S17</a>.</p>
+
+<!-- ============================================================ -->
+<h2 id="teardown">3. Schematic and teardown availability</h2>
+<ul>
+<li><strong>Schematic: not found</strong> in the searches I ran (chargerlab.com, power-z.com, power-z.cn, general web, GitHub). No schematic is inferred here. The community firmware repo has an MCU pad inventory, but it says "This is a complete MCU-pad inventory, not a fully traced board schematic" <span class="tag c">C</span> <a class="ref" href="#s19">S19</a>.</li>
+<li><strong>ChargerLAB / chongdiantou (充电头网) teardown of the KM003C itself: not found.</strong> ChargerLAB uses the KM003C as a tool in many charger teardowns. Its only "internals" statement is the KM002C INA228 article <span class="tag o">O</span> <a class="ref" href="#s11">S11</a>.</li>
+<li><strong>EEVblog / bilibili / YouTube KM003C teardown: not found</strong> in the searches performed.</li>
+<li><strong>Hobbyist teardown, found.</strong> tomoca2's blog (Japanese), "結局、分解補修したPOWER-Z KM003C" (2024-01-06). It has photos of both PCB sides and a close-up of the component side. It names the HC32F460, shows a KAMCAP 3.0 V 0.35 F supercap, and dates the PCB to 2022-09-12 <span class="tag p">3P</span> <a class="ref" href="#s17">S17</a>.</li>
+<li><strong>Community bring-up docs.</strong> okhsunrog's <code>km003c-firmware</code> has pinout and peripheral tables from register reads on a live HW2.1 unit, plus decompiled stock firmware 1.9.9 and 2.0.7 <span class="tag c">C</span> <a class="ref" href="#s19">S19</a>.</li>
+<li><strong>AnandTech review (2023), read via a Wayback Machine snapshot from 2024-03-01.</strong> The live site now redirects to its forums. It says: "Based on the photograph of the KM002C's PCB ... the main differences appear to be the use of a Huada HDSC HC32F460 microcontroller, multiple INA228 ADCs, and 20 mOhm shunt resistors." These are inferences about the KM003C drawn from a KM002C board, and the INA228 part conflicts with the INA229 evidence above <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="measurement">4. Measurement capabilities</h2>
+
+<h3>Ranges, resolution and accuracy (official figures, quoted as published)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Figure</th><th>Value</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Voltage / current range</td><td>0–50 V / 0–6 A</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s5">S5</a></td></tr>
+<tr><td>Voltage / current <strong>resolution</strong></td><td>0.000001 V / 0.000001 A (1 µV / 1 µA display digits)</td><td><span class="tag o">O</span> <a class="ref" href="#s5">S5</a> (2024.1 comparison chart)</td></tr>
+<tr><td><strong>Accuracy</strong> (chart)</td><td>"0.1%+2d"</td><td><span class="tag o">O</span> <a class="ref" href="#s5">S5</a></td></tr>
+<tr><td>"Voltage Accuracy" / "Current Accuracy" (manual table)</td><td>0.00002 V / 0.000003 A</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Voltage / current gain error (manual table)</td><td>"0.05 &nbsp;0.25 %" (two columns, no headers; probably typ/max)</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Gain error vs temperature</td><td>"5 &nbsp;20 ppm/°C" (same two-column layout)</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>"Accuracy" (launch comparison image)</td><td>"0.00003" (no unit given)</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a></td></tr>
+<tr><td>ADC bits</td><td>20</td><td><span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s3">S3</a></td></tr>
+<tr><td>Bidirectional current</td><td>Yes. The display shows a direction arrow, and the Linux driver reports direction as the sign of <code>curr1_input</code> (label <code>IBUS</code>)</td><td><span class="tag o">O</span> <a class="ref" href="#s12">S12</a>; <span class="tag p">3P</span> <a class="ref" href="#s16">S16</a></td></tr>
+<tr><td>Wire units (official API)</td><td>Vbus/Ibus as int32 in <strong>µV / µA</strong>; CC1/CC2/D+/D−/Vdd as uint16 at <strong>0.1 mV</strong>; also raw (uncalibrated) averages, internal temperature and a 2-bit <code>Rate</code> field</td><td><span class="tag o">O</span> <a class="ref" href="#s14">S14</a> (<code>KM002C&amp;3C API Description.docx</code>)</td></tr>
+<tr><td>Averaged vs instantaneous values</td><td>AnandTech found the API's <code>Vbus_avg</code>/<code>Ibus_avg</code> change "only once every second". The instantaneous values are "the first two words in the returned ADC data struct"</td><td><span class="tag p">3P</span> <a class="ref" href="#s20">S20</a> (page 3)</td></tr>
+</tbody>
+</table></div>
+<p class="note">The official accuracy figures disagree across documents (0.1%+2d; 20 µV / 3 µA; 0.00003). None is clearly labelled as reading accuracy versus resolution. A client should not hard-code an accuracy claim.</p>
+
+<h3>Sample rates, by context</h3>
+<p>No single official list exists. Each context reports something different:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Context</th><th>Rates</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Manual, "Features" section</td><td>"Data Collection: Up to 1,000 times per second"; "Programmable Collection Speed: 1/10/50/100 times per second"</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>On-device Dashboard refresh</td><td>"2/10/50/1k Hz" (manual) <strong>vs</strong> "4sps, 15sps, 60sps, and 1Ksps" (2024 "10 functions" article)</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> vs <a class="ref" href="#s6">S6</a></td></tr>
+<tr><td>PC software (V2.x) recorder</td><td>"1SPS, 10SPS, 50SPS and 1KSPS". The cache depth is configurable up to 1999 MB, about 19.99 M points. AnandTech saw the same rates: "Available rates are 1, 10, 50, and 1000 samples per second"</td><td><span class="tag o">O</span> <a class="ref" href="#s7">S7</a>; <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a></td></tr>
+<tr><td>PC software V2.5.1 changelog (2026-04-16)</td><td>"Added a notice that 200 SPS may affect protocol control functionality". This implies a 200 SPS option in recent PC software; I found no other documentation of it</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>POWER-Z Lab V3.0 (beta)</td><td>"Sampling Rate (Adjustable from 0.1–1K SPS)". Sub-1 SPS is probably host-side decimation <span class="tag i">I</span></td><td><span class="tag o">O</span> <a class="ref" href="#s10">S10</a></td></tr>
+<tr><td>Temperature channel</td><td>PC 2.1.0: internal temperature monitoring is "only valid for 1/10/50 SPS"</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a></td></tr>
+<tr><td>Community wire protocol (StartGraph rate index)</td><td>0 = 2 SPS, 1 = 10 SPS, 2 = 50 SPS, 3 = 1000 SPS. Measured effective rates were about 1.8 / 9.6 / 47 / 956 SPS</td><td><span class="tag c">C</span> <a class="ref" href="#s18">S18</a> (docs/features/adcqueue.md)</td></tr>
+<tr><td>Plain ADC snapshot polling</td><td>~200 ms (~5 Hz) in community captures. AnandTech polled every 100 ms</td><td><span class="tag c">C</span> <a class="ref" href="#s18">S18</a>; <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a></td></tr>
+<tr><td><strong>10 kSPS</strong></td><td><strong>No official claim found.</strong> The official API header defines <code>ATT_ADC_QUEUE_10K = 0x004 //10K数据</code> ("10K data"), but the community reports it "never observed in 20k+ packets, including 1000 SPS runs"</td><td><span class="tag o">O</span> <a class="ref" href="#s14">S14</a>; <span class="tag c">C</span> <a class="ref" href="#s18">S18</a></td></tr>
+<tr><td>VBUS ripple module (separate on-device feature)</td><td>Selectable "20.0k 1250μs to 8.0M 3μs" sample rates</td><td><span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s6">S6</a></td></tr>
+</tbody>
+</table></div>
+
+<h3>Offline (stand-alone) recording</h3>
+<ul>
+<li>The unit records V/I/capacity/energy to its 4 MB flash without a PC. The PC software reads and exports the records <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s7">S7</a>.</li>
+<li>Up to <strong>40</strong> record groups. Each group holds at most <strong>10,000</strong> points. The save interval is <strong>1–120 s</strong> (5 s gives about 13 h). Auto start and stop can trigger on a current threshold <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>. The 2024 chart says "Group Number for Offline Recording: 15-40" <span class="tag o">O</span> <a class="ref" href="#s5">S5</a>.</li>
+<li>Firmware V2.0.0 "Optimized offline curve logging". V2.0.1 and V2.0.6 fixed offline-reading bugs <span class="tag o">O</span> <a class="ref" href="#s8">S8</a> <a class="ref" href="#s9">S9</a>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="protocols">5. Protocol detection and PD features</h2>
+
+<p><strong>Auto-detection (KM003C)</strong>, from the manual: PD2.0 / PD2.0 PPS / PD3.1 (EPR) / QC2.0 / QC3.0 / QC3+ / QC4+ / QC5 / AFC / FCP / SCP / VIFC / UFCS / APPLE2.4A / SAMSUNG / VOOC / MTK PE / SFCP / TFCP <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>. MTK-PE, VOOC and SVOOC detection is "thanks to built-in load" and is KM003C-only <span class="tag o">O</span> <a class="ref" href="#s1">S1</a> <a class="ref" href="#s2">S2</a>. The 2024 article's list also names SVOOC <span class="tag o">O</span> <a class="ref" href="#s6">S6</a>.</p>
+
+<p><strong>Trigger, on-device</strong> ("Application → Charging protocol"): PD2.0 / PPS / EPR / QC2.0 / QC3.0 / AFC / FCP / SCP / VIFC / UFCS / VOOC. VOOC/SVOOC needs the original cable and a small load. MTK PE and SFCP <strong>cannot</strong> be triggered <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s6">S6</a>.</p>
+
+<p><strong>Trigger from PC</strong> (firmware ≥1.7.9 with PC 2.3.0): PD (up to 28 V 5 A shown), UFCS, QC2.0/3.0, FCP, SCP, AFC, VFCP, SFCP <span class="tag o">O</span> <a class="ref" href="#s13">S13</a>. ChargerLAB also documents triggering over the CDC virtual serial port in "KM003C/002C Protocol Trigger by Virtual Serial Port (Instructions)". The manual and FAQ name this document <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s4">S4</a>. I read it from the community-hosted copy (<a class="ref" href="#s18">S18</a> <code>docs/official/</code>); <a href="#software">§6</a> summarizes it.</p>
+
+<h3>PD features</h3>
+<ul>
+<li>PD protocol analyzer / packet capture. It was added in firmware 1.2.4 and PC 2.0.3. It captures SOP/SOP'/SOP'' packets. The manual says the PC analyzer holds "up to 10,000 pieces of data" <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li>UFCS protocol analyzer (FW 1.7.1, PC 2.2) and UFCS 1.2 capture (PC 2.5.0) <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li>PD 3.2: SPR AVS added in FW 1.9.2. PD 3.2 packet capture came in PC 2.5.0, and PD 3.2 identification on the Dashboard in FW 2.0.7 <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s8">S8</a>.</li>
+<li>EPR / PD3.1: supported throughout. A 240 W cable is needed for EPR unless cable simulation is used <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li><strong>Cable simulation (decoy e-marker).</strong> The tester can "simulate a 50V/5A cable". Since FW 1.9.7 the default is 50 V 5 A (240 W, EPR) <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s9">S9</a>.</li>
+<li><strong>PDM application.</strong> FW 2.0.5 "Added support for sending and receiving custom PD data through the PDM application" <span class="tag o">O</span> <a class="ref" href="#s9">S9</a>.</li>
+<li><strong>eMarker reader.</strong> Reads 3A/5A/50V/EPR/TBT3/TBT4 cables, and Thunderbolt 5 since FW 1.9.3. The eMarker IC model has been identified since FW 2.0.0 (HUSB332x, CPS8825/8826, WAYON and others) <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s8">S8</a> <a class="ref" href="#s9">S9</a>.</li>
+<li>Apple charger SN reading. Apple device model and Huawei power-bank battery display arrived in FW 2.0.0 <span class="tag o">O</span> <a class="ref" href="#s6">S6</a> <a class="ref" href="#s9">S9</a>.</li>
+<li>The Dashboard shows a "possible" protocol from D+/D− voltage levels. The manual includes a D+/D− voltage → protocol table <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+</ul>
+
+<h3>Firmware history (tester)</h3>
+<p>Full list in <a class="ref" href="#s2">S2</a> and <a class="ref" href="#s9">S9</a>. Highlights:</p>
+<ul>
+<li>1.2.x (2022)</li>
+<li>1.6.4: Xiaomi MIPPS</li>
+<li>1.7.1: UFCS analyzer, SVOOC 160/240 W</li>
+<li>1.7.9: PC trigger module</li>
+<li>1.8.0: VBUS ripple, Motorola/Huawei protocols</li>
+<li>1.8.6: Infinix TFCP</li>
+<li>1.9.2: PD3.2 SPR AVS</li>
+<li>1.9.3: Thunderbolt 5 cable identification</li>
+<li>1.9.7, 1.9.8, 1.9.9</li>
+<li>2.0.0 (2026-03-26): eMarker IC model, Apple device models</li>
+<li>2.0.1, 2.0.2, 2.0.3, 2.0.5, 2.0.6</li>
+<li><strong>2.0.7 (2026-09-29), latest found</strong></li>
+</ul>
+<p><span class="tag o">O</span> <a class="ref" href="#s8">S8</a> <a class="ref" href="#s9">S9</a> <a class="ref" href="#s2">S2</a></p>
+
+<!-- ============================================================ -->
+<h2 id="software">6. Software, SDK and USB interfaces</h2>
+
+<h3>PC software</h3>
+<ul>
+<li><strong>"POWER-Z" PC software, V2.x.</strong> It is Windows-only in practice.
+<ul>
+<li>The executable is <strong><code>Mtools</code></strong>. Gigazine installs "Mtools" from "(V2.3.0) PE version - PC Software (KM002C/KM003C).zip" <span class="tag p">3P</span> <a class="ref" href="#s21">S21</a>, and the community found it is a Qt5 x64 app, <code>Mtools.exe</code> <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.</li>
+<li>Latest version per the manual: <strong>V2.5.1 (2026-04-16)</strong> <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li>Functions: real-time curves, recording (CSV / SQLite <code>.db</code> export), PD/UFCS analyzer, protocol trigger, firmware update, and many testers at once <span class="tag o">O</span> <a class="ref" href="#s6">S6</a> <a class="ref" href="#s7">S7</a>.</li>
+<li>The FAQ says it supports "Windows 10 or later". PC 2.2.1 "Integrate[d] the support of Windows 7" <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s4">S4</a>. AnandTech: "The KM003C supports only Windows officially" <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</li>
+</ul></li>
+<li><strong>POWER-Z Lab V3.0 Beta</strong> (2025-03-19). Windows 7/10/11 <strong>and macOS</strong>, distributed via a Telegram link.
+<ul>
+<li>It requires tester firmware 2.0.0, and its recordings are <code>.pzd</code> files.</li>
+<li>Known bugs: no offline-data viewing on Mac, and FW 2.0.0 cannot read eMarkers.</li>
+<li>As of March 2025, ChargerLAB recommended "the more stable and feature-complete V2.4.0" for most users <span class="tag o">O</span> <a class="ref" href="#s10">S10</a>.</li>
+<li>The "2.0.0" bundled with this 2025 beta predates the public V2.0.0 changelog entry (2026-03-26) by a year, and that entry adds eMarker IC reading. It is probably a different pre-release build <span class="tag i">I</span>.</li>
+</ul></li>
+<li><strong>Firmware updates</strong> run through the PC app, which "will erase the old firmware and write the new one". The files are <code>.mencrypt</code> <span class="tag o">O</span> <a class="ref" href="#s8">S8</a> <a class="ref" href="#s10">S10</a>. The community reports the format is AES-128-ECB encrypted Qt-serialized metadata plus the image, with the application at flash 0x4000 <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.</li>
+</ul>
+
+<h3>Download URLs seen on official pages</h3>
+<p>The official product page <a class="ref" href="#s3">S3</a> has no direct download links. It says "Please go to our official website to get the manual and PC software", and its navigation leads to the KM003C Technical Support page <a class="ref" href="#s4">S4</a>, where most of these links appear. I downloaded only the API toolkit (to read its source and docx) and the driver zip (file listing only). The software-re agent is handling the binaries.</p>
+<div class="table-wrap"><table class="stack">
+<thead><tr><th>What</th><th>URL</th><th>Where seen</th></tr></thead>
+<tbody>
+<tr><td data-label="What">PC software and tester firmware (KM003C/KM002C), Google Drive</td><td data-label="URL"><a href="https://drive.google.com/drive/folders/1u63v7TAPZl0DohsziWwOkfRA4Vuk6J1Q?usp=share_link">drive.google.com/drive/folders/1u63v7TAPZl0DohsziWwOkfRA4Vuk6J1Q</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s4">S4</a> <a class="ref" href="#s8">S8</a></td></tr>
+<tr><td data-label="What">PC software, direct zip</td><td data-label="URL"><a href="https://chargerlab.oss-cn-shenzhen.aliyuncs.com/POWER-Z.zip">https://chargerlab.oss-cn-shenzhen.aliyuncs.com/POWER-Z.zip</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s4">S4</a></td></tr>
+<tr><td data-label="What">All POWER-Z documents and apps, Google Drive</td><td data-label="URL"><a href="https://drive.google.com/drive/folders/1PGeIclfAEKazLUFfdVbLMX2mprdGIbVe?usp=sharing">drive.google.com/drive/folders/1PGeIclfAEKazLUFfdVbLMX2mprdGIbVe</a></td><td data-label="Where seen"><span class="tag o">O</span> <a href="https://www.chargerlab.com/power-z-technical-support/">chargerlab.com/power-z-technical-support</a></td></tr>
+<tr><td data-label="What">All POWER-Z documents and apps, Dropbox</td><td data-label="URL"><a href="https://www.dropbox.com/sh/wh8rsfvbhxye5g8/AACjDn9BWW3tONs2a27JOnGTa?dl=0">dropbox.com/sh/wh8rsfvbhxye5g8/…</a></td><td data-label="Where seen"><span class="tag o">O</span> same page</td></tr>
+<tr><td data-label="What">Online English manual (includes version history)</td><td data-label="URL"><a href="https://docs.google.com/document/d/1T55UeixUNN9La3tzAF0jO45Snw_rrd9RVGt3XQeRIM8">docs.google.com/document/d/1T55UeixUNN9La3tzAF0jO45Snw_rrd9RVGt3XQeRIM8</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s4">S4</a></td></tr>
+<tr><td data-label="What">Chinese manual / PC software changelog / FAQ (shimo.im; not read)</td><td data-label="URL"><a href="https://shimo.im/docs/3WkKVWHtCkXkVQQk/">shimo.im/docs/3WkKVWHtCkXkVQQk</a> · <a href="https://shimo.im/docs/DhvPdJpdHQGK6xtq/">shimo.im/docs/DhvPdJpdHQGK6xtq</a> · <a href="https://shimo.im/docs/Ee32MX71YehxZjA2/">shimo.im/docs/Ee32MX71YehxZjA2</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s24">S24</a></td></tr>
+<tr><td data-label="What">Windows driver installer (<code>InstallDriver.exe</code> inside)</td><td data-label="URL"><a href="https://www.chargerlab.com/wp-content/uploads/2022/07/InstallDriver.zip">https://www.chargerlab.com/wp-content/uploads/2022/07/InstallDriver.zip</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s4">S4</a></td></tr>
+<tr><td data-label="What">Windows 7 virtual-serial-port driver</td><td data-label="URL"><a href="https://power-z.oss-cn-hongkong.aliyuncs.com/driver.exe">https://power-z.oss-cn-hongkong.aliyuncs.com/driver.exe</a></td><td data-label="Where seen"><span class="tag o">O</span> Virtual Serial Port instructions (<a class="ref" href="#s18">S18</a> copy)</td></tr>
+<tr><td data-label="What">API toolkit (libusb demo and API description)</td><td data-label="URL"><a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip">https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s4">S4</a></td></tr>
+<tr><td data-label="What">POWER-Z Lab V3.0 Beta (Win/macOS), Telegram</td><td data-label="URL"><a href="https://t.me/+oGliSbeuYts1Y2Y1">https://t.me/+oGliSbeuYts1Y2Y1</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s10">S10</a></td></tr>
+<tr><td data-label="What">"POWER-Z" phone apps in the site navigation. Their relation to the KM003C is not established; they appear to be a separate phone-only app</td><td data-label="URL"><a href="https://play.google.com/store/apps/details?id=cn.powerz.powerdumper">Google Play: cn.powerz.powerdumper</a> · <a href="https://apps.apple.com/us/app/power-z/id6754865141">App Store: id6754865141</a></td><td data-label="Where seen"><span class="tag o">O</span> <a class="ref" href="#s3">S3</a></td></tr>
+</tbody>
+</table></div>
+
+<h3>Official API / SDK</h3>
+<ul>
+<li>FAQ: "Are there any open APIs available for further self-development? ... We currently only provide limited toolkit for reference." It links <code>hiddemo_vs2019_for KM002C&amp;3C</code> and names a "Protocol Trigger by Virtual Serial Port" document <span class="tag o">O</span> <a class="ref" href="#s4">S4</a>. The manual's feature list still says "Provide open API" <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li><code>hiddemo_vs2019_for-KM002C3C.zip</code> <span class="tag o">O</span> <a class="ref" href="#s14">S14</a> contains a C++ <strong>libusb-1.0</strong> demo (<code>hiddemo.cpp</code>) and a Chinese spec, <code>KM002C&amp;3C API Description.docx</code>, titled "Km002c接口说明" (KM002C interface description).
+<ul>
+<li>The demo opens VID <code>0x5FC9</code> with PID argument <code>0x0000</code>, which matches any PID, so it <strong>does not confirm <code>0x0063</code></strong>. A commented-out line uses PID <code>0x0061</code>. The demo also counts devices with VID <code>0x5558</code> (purpose unknown).</li>
+<li>It claims every interface and treats <strong>interrupt</strong> endpoints as "HID" and <strong>bulk</strong> endpoints as "user". It polls <code>CMD_GET_DATA</code> with <code>ATT_ADC</code> every 150 ms.</li>
+<li>AnandTech sent the same GET_DATA/ADC command word (<code>0x0C000200</code>) from Python/pyusb on EP <code>0x01</code> and read the reply on <code>0x81</code>. It also sent the command as a string over the Windows COM port. It found that the ID byte "could be varied from 0x0 to 0xFF without any loss in functionality" <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</li>
+</ul></li>
+<li><strong>Virtual serial port (CDC) text commands.</strong> This is official and requires FW ≥1.7.9 per <a class="ref" href="#s2">S2</a>. Commands are plain-text lines for the protocol-trigger ("PDM") module <span class="tag o">O</span> (copy at <a class="ref" href="#s18">S18</a> <code>docs/official/KM003C_002C Protocol Trigger by Virtual Serial Port (Instructions).docx</code>):
+<ul>
+<li><code>pdm open</code> / <code>pdm close</code></li>
+<li><code>pdm set type=?,em=?</code>, where <code>em</code> is cable simulation: 0 off, 1 20V5A, 2 50V5A EPR</li>
+<li><code>entry pd|ufcs|qc|fcp|scp|afc|vfcp|sfcp</code></li>
+<li><code>pd pdo</code>, <code>pd req=?,volt=?,cur=?</code> (PPS/AVS), <code>pd cmd=?</code>, <code>pd data=…</code> (raw SOP + header + data)</li>
+<li><code>qc 9V</code>, <code>qc3 volt=…</code>, <code>ufcs req=…</code>, and similar</li>
+<li><code>reset</code></li>
+</ul>
+"Virtual serial port does not need to set Baud". Windows 10/11 needs no driver; Windows 7 needs the driver listed above.</li>
+<li><strong>No official SDK or library beyond this.</strong> ChargerLAB acknowledges the community Linux driver: "Some enthusiasts developed a 'HWMON POWER-Z driver' for linux, but we are not responsible..." <span class="tag o">O</span> <a class="ref" href="#s4">S4</a>.</li>
+<li><strong>Linux kernel <code>powerz</code> hwmon driver</strong> (author Thomas Weißschuh). Supported chip: "ChargerLAB POWER-Z KM003C". It "communicates with the custom protocol over USB" and exposes channels named as on the device and PC software <span class="tag p">3P</span> <a class="ref" href="#s16">S16</a>. The patch was posted in September 2023. The driver's page exists in the kernel.org docs for v6.7 but not v6.6, which suggests it first shipped in Linux 6.7 <span class="tag p">3P</span> <a class="ref" href="#s16">S16</a> <span class="tag i">I</span>.</li>
+<li>Community implementations: <code>km003c-protocol-research</code> (Python + Rust parser, protocol spec, USB captures) and <code>km003c-rs</code> <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>. There is also a custom Rust firmware for HW2.1 <span class="tag c">C</span> <a class="ref" href="#s19">S19</a>.</li>
+</ul>
+
+<h3>USB interfaces</h3>
+<p><strong>Official</strong>: the API description docx <span class="tag o">O</span> <a class="ref" href="#s14">S14</a> (translated) says the device offers three interfaces with one command set:</p>
+<ol>
+<li><strong>USER</strong>: called WinUSB on Windows and "USB USER" elsewhere; about 200 KB/s.</li>
+<li><strong>CDC</strong> virtual serial: baud rate ignored; about 200 KB/s; works with any serial terminal.</li>
+<li><strong>HID</strong>: needs no driver on any platform; 64-byte packet limit; about 60 KB/s.</li>
+</ol>
+<p>The manual summarizes this as "Composite USB port, driver-free" <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>. AnandTech restates the three interfaces ("WinUSB (vendor specific interface) device, a HID device, or a virtual serial port (CDC)"). On their 2023 Ubuntu 20.04 setup only the HID interface was bound (to usbhid), and no <code>/dev/ttyACM0</code> appeared <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</p>
+<p class="note"><strong>Naming caution:</strong> in ChargerLAB documents, "HID" is also the name of the physical USB-C port used for PC and power. "Connect via the HID port" therefore does not mean the PC software uses the HID class <span class="tag o">O</span> <a class="ref" href="#s2">S2</a> <a class="ref" href="#s10">S10</a>.</p>
+
+<p><strong>Community descriptor dump</strong> (HW2.1) <span class="tag c">C</span> <a class="ref" href="#s18">S18</a> <code>docs/usb_transport.md</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Property</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Device</td><td>USB 2.10, Full Speed, class 0xEF (IAD), 100 mA</td></tr>
+<tr><td>Family PIDs</td><td>KM002C <code>0x0061</code>, KM003C <code>0x0063</code></td></tr>
+<tr><td>IF0</td><td>Vendor 0xFF, bulk EP <code>0x01</code> OUT / <code>0x81</code> IN, 64 B. Linux binds <code>powerz</code> here</td></tr>
+<tr><td>IF1</td><td>CDC ACM, EP <code>0x83</code> interrupt IN, 8 B</td></tr>
+<tr><td>IF2</td><td>CDC Data, bulk EP <code>0x02</code> / <code>0x82</code>, 64 B. Linux binds <code>cdc_acm</code> to IF1+IF2 (<code>/dev/ttyACM*</code>)</td></tr>
+<tr><td>IF3</td><td>HID 1.11, interrupt EP <code>0x05</code> / <code>0x85</code>, 64 B, 1 ms. Linux binds <code>usbhid</code> (<code>/dev/hidraw*</code>)</td></tr>
+<tr><td>BOS</td><td>Platform capability UUID <code>{d8dd60df-4589-4cc7-9cd2-659d9e648a9f}</code> with a 170-byte vendor-request blob. <span class="tag i">I</span> This UUID is the Microsoft OS 2.0 descriptor capability, which lets Windows bind WinUSB automatically. That would fit the "driver-free" claim, but it is unverified</td></tr>
+</tbody>
+</table></div>
+<p>Endpoint discrepancy: AnandTech wrote that ChargerLAB says commands can also go to "EP 5 OUT and EP 3 OUT ... at addresses 0x5 and 0x3" <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>. The community dump puts the CDC data OUT endpoint at <code>0x02</code> and has no <code>0x03</code> OUT. The firmware may have changed, or one source is wrong; this is unresolved <span class="tag i">I</span>.</p>
+<p><strong>Which interface the official app uses</strong> is not documented by ChargerLAB.</p>
+<ul>
+<li>The community reports that the authenticated <strong>AdcQueue streaming (needed for 50/1000 SPS graphs) works only on IF0, the vendor bulk interface</strong>. <code>Mtools.exe</code> contains the streaming-authentication routine. HID gives basic ADC and PD access but not authenticated streaming <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.</li>
+<li>AnandTech captured the official app's traffic with Wireshark/USBPcap but did not name the interface <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</li>
+<li>ChargerLAB ships a driver installer <span class="tag o">O</span> <a class="ref" href="#s4">S4</a> <a class="ref" href="#s15">S15</a>.</li>
+</ul>
+<p>Together this suggests the PC app uses the vendor/WinUSB interface (IF0) <span class="tag i">I</span>.</p>
+
+<!-- ============================================================ -->
+<h2 id="cli">7. Notes for a CLI client (summary of the above)</h2>
+<ul>
+<li>Use VID <code>0x5FC9</code>, PID <code>0x0063</code> (KM002C is <code>0x0061</code>) <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.</li>
+<li>On Linux, the in-kernel <code>powerz</code> driver claims IF0. Unbind it, or use the hwmon sysfs values <span class="tag p">3P</span> <a class="ref" href="#s16">S16</a> <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.</li>
+<li>Offer the rate set <strong>2 / 10 / 50 / 1000 SPS</strong> as the device-native streaming rates <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.
+<ul>
+<li>The manual's dashboard rates "2/10/50/1k Hz" corroborate this set <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li>The official UI's "1 SPS" likely maps to index 0, which is 2 SPS <span class="tag i">I</span>.</li>
+<li>Do not advertise 10 kSPS <a class="ref" href="#s14">S14</a> <a class="ref" href="#s18">S18</a>.</li>
+</ul></li>
+<li>Values arrive in µV / µA (int32; signed current gives direction) <span class="tag o">O</span> <a class="ref" href="#s14">S14</a>.
+<ul>
+<li>Use the instantaneous fields, not the 1-second <code>*_avg</code> fields, for fast polling <span class="tag p">3P</span> <a class="ref" href="#s20">S20</a>.</li>
+<li>Line voltages are in 0.1 mV in the ADC snapshot <span class="tag o">O</span> <a class="ref" href="#s14">S14</a>.</li>
+<li>In streaming, line-voltage units depend on the rate (community: 0.1 mV at 2 SPS, otherwise 1 mV) <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>.</li>
+</ul></li>
+<li>Temperature arrives only in the ADC snapshot, not in the stream <span class="tag c">C</span> <a class="ref" href="#s18">S18</a>. The official app shows it only at 1/10/50 SPS <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+<li>PD/QC/UFCS triggering can be scripted over the CDC serial port with the official text commands in <a href="#software">§6</a> <span class="tag o">O</span>.</li>
+<li>The tester resets if it is powered from the measured VBUS and VBUS drops to vSafe0V. Power it from the HID port <span class="tag p">3P</span> KM002C <a class="ref" href="#s22">S22</a>; <span class="tag o">O</span> <a class="ref" href="#s2">S2</a>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="sources">Sources</h2>
+<ol class="sources">
+<li id="s1"><span class="sid">S1</span> ChargerLAB, "Introducing the Brand New POWER-Z KM003C" (2022-11-16): <a href="https://www.chargerlab.com/introducing-the-brand-new-power-z-km003c/">https://www.chargerlab.com/introducing-the-brand-new-power-z-km003c/</a>. Spec images: <a href="https://www.chargerlab.com/uploads/2026/07/21/dk459z02qj8b89uhuj.jpg">key specifications</a>, <a href="https://www.chargerlab.com/uploads/2026/07/21/dk459hcoopvqbxguyu.jpg">KM003C vs KM002C</a>, <a href="https://www.chargerlab.com/uploads/2026/07/21/dk457v5i07v1jtuyxc.jpg">PDO/protocol test</a></li>
+<li id="s2"><span class="sid">S2</span> Official online manual, "ChargerLAB POWER-Z KM003C/KM002C USB Tester User Manual". It includes the version history, spec table, protocol lists and storage limits, and is linked from S4: <a href="https://docs.google.com/document/d/1T55UeixUNN9La3tzAF0jO45Snw_rrd9RVGt3XQeRIM8">https://docs.google.com/document/d/1T55UeixUNN9La3tzAF0jO45Snw_rrd9RVGt3XQeRIM8</a></li>
+<li id="s3"><span class="sid">S3</span> <strong>Official product page</strong>, POWER-Z store, "ChargerLAB POWER-Z KM003C": <a href="https://www.power-z.com/products/chargerlab-power-z-km003c">https://www.power-z.com/products/chargerlab-power-z-km003c</a></li>
+<li id="s4"><span class="sid">S4</span> POWER-Z KM003C/KM002C Technical Support (FAQ, downloads, API toolkit, driver): <a href="https://www.power-z.com/blogs/technical-support/power-z-km003c-km002c-technical-support">https://www.power-z.com/blogs/technical-support/power-z-km003c-km002c-technical-support</a></li>
+<li id="s5"><span class="sid">S5</span> "Comparison of ChargerLAB POWER-Z USB PD Testers (2024.1)" chart, linked from <a href="https://www.chargerlab.com/power-z-technical-support/">chargerlab.com/power-z-technical-support</a>: <a href="https://www.chargerlab.com/wp-content/uploads/2024/01/2024011906294954.png">https://www.chargerlab.com/wp-content/uploads/2024/01/2024011906294954.png</a></li>
+<li id="s6"><span class="sid">S6</span> ChargerLAB, "Inventory of 10 Commonly Used Functions of Power-Z KM003C" (2024-02-12): <a href="https://www.chargerlab.com/inventory-of-10-commonly-used-functions-of-power-z-km003c/">https://www.chargerlab.com/inventory-of-10-commonly-used-functions-of-power-z-km003c/</a></li>
+<li id="s7"><span class="sid">S7</span> ChargerLAB, "How to Use ChargerLAB POWER-Z KM003C Tester to Record Charging Data" (2023-02-13): <a href="https://www.chargerlab.com/how-to-use-chargerlab-power-z-km003c-tester-to-record-charging-data-offline/">https://www.chargerlab.com/how-to-use-chargerlab-power-z-km003c-tester-to-record-charging-data-offline/</a></li>
+<li id="s8"><span class="sid">S8</span> ChargerLAB, "V.2.0.7 | The New Software Version of ChargerLAB POWER-Z KM003C" (2026-09-30): <a href="https://www.chargerlab.com/v207-the-new-software-version-of-chargerlab-power-z-km003c/">https://www.chargerlab.com/v207-the-new-software-version-of-chargerlab-power-z-km003c/</a></li>
+<li id="s9"><span class="sid">S9</span> ChargerLAB, "V.2.0.6 …" (2026-08-10, version history back to 1.8.0): <a href="https://www.chargerlab.com/v206-the-new-software-version-of-chargerlab-power-z-km003c/">https://www.chargerlab.com/v206-the-new-software-version-of-chargerlab-power-z-km003c/</a>. Also <a href="https://www.chargerlab.com/v205-the-new-software-version-of-chargerlab-power-z-km003c/">V2.0.5</a> and <a href="https://www.chargerlab.com/v-1-9-9-supports-apples-new-40w-charger-the-new-software-version-of-chargerlab-power-z-km003c/">V1.9.9</a></li>
+<li id="s10"><span class="sid">S10</span> ChargerLAB, "ChargerLAB POWER-Z Lab V3.0 Beta: Now Available for Mac!" (2025-03-19): <a href="https://www.chargerlab.com/chargerlab-power-z-lab-v3-0-beta-now-available-for-mac/">https://www.chargerlab.com/chargerlab-power-z-lab-v3-0-beta-now-available-for-mac/</a></li>
+<li id="s11"><span class="sid">S11</span> ChargerLAB, "ChargerLAB POWER-Z KM002C PD3.1 Tester Adopts The TI INA228" (2022-08-19): <a href="https://www.chargerlab.com/chargerlab-power-z-km002c-pd3-1-tester-adopts-the-ti-ina228/">https://www.chargerlab.com/chargerlab-power-z-km002c-pd3-1-tester-adopts-the-ti-ina228/</a></li>
+<li id="s12"><span class="sid">S12</span> ChargerLAB, "Bi-directional Current Detection | … KM003C" (2023-05-11): <a href="https://www.chargerlab.com/bi-directional-current-detection-the-cool-feature-of-chargerlab-power-z-km003c/">https://www.chargerlab.com/bi-directional-current-detection-the-cool-feature-of-chargerlab-power-z-km003c/</a></li>
+<li id="s13"><span class="sid">S13</span> ChargerLAB, "Protocol Trigger Module on PC | The New Update of POWER-Z KM003C/2C" (2023-08-13): <a href="https://www.chargerlab.com/protocol-trigger-feature-on-pc-the-new-update-of-power-z-km003c-2c/">https://www.chargerlab.com/protocol-trigger-feature-on-pc-the-new-update-of-power-z-km003c-2c/</a></li>
+<li id="s14"><span class="sid">S14</span> Official API toolkit <code>hiddemo_vs2019_for-KM002C3C.zip</code> (<code>hiddemo.cpp</code>, <code>KM002C&amp;3C API Description.docx</code>): <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip">https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip</a></li>
+<li id="s15"><span class="sid">S15</span> Official Windows driver installer: <a href="https://www.chargerlab.com/wp-content/uploads/2022/07/InstallDriver.zip">https://www.chargerlab.com/wp-content/uploads/2022/07/InstallDriver.zip</a></li>
+<li id="s16"><span class="sid">S16</span> Linux kernel, "Kernel driver POWERZ": <a href="https://docs.kernel.org/hwmon/powerz.html">https://docs.kernel.org/hwmon/powerz.html</a>. v6.7 copy: <a href="https://www.kernel.org/doc/html/v6.7/_sources/hwmon/powerz.rst.txt">https://www.kernel.org/doc/html/v6.7/_sources/hwmon/powerz.rst.txt</a> (the v6.6 URL returns 404). Patch v3 (2023-09): <a href="https://lkml.iu.edu/hypermail/linux/kernel/2309.0/00753.html">https://lkml.iu.edu/hypermail/linux/kernel/2309.0/00753.html</a></li>
+<li id="s17"><span class="sid">S17</span> tomoca2, "結局、分解補修したPOWER-Z KM003C" (teardown and repair, 2024-01-06): <a href="https://tomoca2.hatenablog.com/entry/2024/01/06/091942">https://tomoca2.hatenablog.com/entry/2024/01/06/091942</a>. Component-side photo: <a href="https://cdn-ak.f.st-hatena.com/images/fotolife/t/tomoca2/20240105/20240105220534.jpg">https://cdn-ak.f.st-hatena.com/images/fotolife/t/tomoca2/20240105/20240105220534.jpg</a></li>
+<li id="s18"><span class="sid">S18</span> okhsunrog, <code>km003c-protocol-research</code> (community): <a href="https://github.com/okhsunrog/km003c-protocol-research">https://github.com/okhsunrog/km003c-protocol-research</a>. Files used: <code>docs/usb_transport.md</code>, <code>docs/firmware/README.md</code>, <code>docs/firmware/format.md</code>, <code>docs/firmware/mtools_analysis.md</code>, <code>docs/features/adcqueue.md</code>, <code>docs/features/authentication.md</code>, <code>docs/official/</code> (copies of official ChargerLAB documents)</li>
+<li id="s19"><span class="sid">S19</span> okhsunrog, <code>km003c-firmware</code> (community; HW2.1 bring-up): <a href="https://github.com/okhsunrog/km003c-firmware">https://github.com/okhsunrog/km003c-firmware</a>. Files used: <code>README.md</code>, <code>docs/line-adc.md</code>, <code>docs/reverse-engineering/board_bringup.md</code>, <code>overview.md</code>, <code>hc32f460_analysis.md</code>, <code>pd_phy_hc32f460.md</code></li>
+<li id="s20"><span class="sid">S20</span> AnandTech, Ganesh T S, "USB-C Power Metering with the ChargerLAB KM003C: A Google Twinkie Alternative?" (2023). The live URL now redirects to forums.anandtech.com. I read the Wayback Machine snapshot from 2024-03-01: <a href="https://web.archive.org/web/2023/https://www.anandtech.com/show/18944/usbc-power-metering-with-the-chargerlab-km003c-a-google-twinkie-alternative">page 1</a>, <a href="https://web.archive.org/web/2023/https://www.anandtech.com/show/18944/usbc-power-metering-with-the-chargerlab-km003c-a-google-twinkie-alternative/2">page 2 (Hardware Design and Software Interface)</a>, <a href="https://web.archive.org/web/2023/https://www.anandtech.com/show/18944/usbc-power-metering-with-the-chargerlab-km003c-a-google-twinkie-alternative/3">page 3 (API Access on Linux)</a>, <a href="https://web.archive.org/web/2023/https://www.anandtech.com/show/18944/usbc-power-metering-with-the-chargerlab-km003c-a-google-twinkie-alternative/4">page 4 (API Access on Windows)</a>. Original: <a href="https://www.anandtech.com/show/18944/usbc-power-metering-with-the-chargerlab-km003c-a-google-twinkie-alternative">anandtech.com/show/18944</a></li>
+<li id="s21"><span class="sid">S21</span> GIGAZINE, Power-Z KM003C review (2024-01-27): <a href="https://gigazine.net/gsc_news/en/20240127-power-z-km003c-usb-tester/">https://gigazine.net/gsc_news/en/20240127-power-z-km003c-usb-tester/</a></li>
+<li id="s22"><span class="sid">S22</span> Doug Gilbert, "POWER-Z KM002C by ChargerLab" (third party; KM002C current-sign and VBUS-power notes): <a href="https://doug-gilbert.github.io/km002c/km002c.html">https://doug-gilbert.github.io/km002c/km002c.html</a></li>
+<li id="s23"><span class="sid">S23</span> Reddit r/UsbCHardware, KM003C display-replacement report (September 2025). <strong>Not read</strong>; cited only via S19 <code>overview.md</code>: <a href="https://www.reddit.com/r/UsbCHardware/comments/1njcblc">https://www.reddit.com/r/UsbCHardware/comments/1njcblc</a></li>
+<li id="s24"><span class="sid">S24</span> POWER-Z China, "POWER-Z KM003C/2C/Lite更新日志：使用说明书、固件、客户端下载以及常见问题解答" (download and changelog page): <a href="https://www.power-z.cn/blogs/download/power-z-km003c-2c-lite">https://www.power-z.cn/blogs/download/power-z-km003c-2c-lite</a></li>
+</ol>
+
+</main>
+</body>
+</html>

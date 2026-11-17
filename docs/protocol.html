@@ -1,0 +1,2292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KM003C Protocol Spec</title>
+<meta name="description" content="Byte-level USB protocol specification for the ChargerLAB POWER-Z KM003C, compiled from the Linux kernel driver, vendor documents and sample code, and community implementations, with citations.">
+<style>
+:root {
+  --bg: #ffffff; --fg: #1d2127; --muted: #5a6370; --border: #d9dde3;
+  --surface: #f5f7f9; --accent: #1f5fbf; --code-bg: #eef1f4;
+  --src: #1d6b3a; --src-bg: #e3f3e8;
+  --vendor: #2b4f8f; --vendor-bg: #e3ebf8;
+  --notes: #6a4a00; --notes-bg: #fbf0d3;
+  --warn-bg: #fff6e0; --warn-border: #e6c26a; --danger: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+    --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+    --src: #8fd8a8; --src-bg: #1d3426;
+    --vendor: #9dbcf2; --vendor-bg: #1f2b42;
+    --notes: #f0cf7a; --notes-bg: #3a2f12;
+    --warn-bg: #2f2814; --warn-border: #7a6526; --danger: #ff8a80;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b; --fg: #e4e7eb; --muted: #9aa4b1; --border: #2e343c;
+  --surface: #1b1f25; --accent: #79a8f0; --code-bg: #232931;
+  --src: #8fd8a8; --src-bg: #1d3426;
+  --vendor: #9dbcf2; --vendor-bg: #1f2b42;
+  --notes: #f0cf7a; --notes-bg: #3a2f12;
+  --warn-bg: #2f2814; --warn-border: #7a6526; --danger: #ff8a80;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; }
+h2 { font-size: 1.25rem; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+h2, h3 { scroll-margin-top: 12px; }
+p, ul, ol { margin: 0 0 12px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); overflow-wrap: anywhere; }
+hr { display: none; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; overflow-x: auto; margin: 8px 0 16px; line-height: 1.4; }
+pre code { background: none; padding: 0; overflow-wrap: normal; white-space: pre; font-size: 0.85rem; }
+.meta { color: var(--muted); margin-bottom: 16px; }
+nav.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 16px; margin: 16px 0 8px; }
+nav.toc ul { margin: 0; padding-left: 0; list-style: none; columns: 2; column-gap: 28px; }
+nav.toc li { break-inside: avoid; }
+.note, blockquote { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px;
+  padding: 10px 14px; margin: 12px 0; }
+blockquote p:last-child { margin-bottom: 0; }
+.table-wrap { width: 100%; overflow-x: auto; margin: 8px 0 16px; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+th { background: var(--surface); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.cite { display: inline; font-size: 0.82em; border-radius: 4px; padding: 0 4px; white-space: normal; }
+.cite .kind { font-weight: 600; }
+.cite.src { color: var(--src); background: var(--src-bg); }
+.cite.vendor { color: var(--vendor); background: var(--vendor-bg); }
+.cite.notes { color: var(--notes); background: var(--notes-bg); }
+.cite a { color: inherit; }
+strong.unsafe { color: var(--danger); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; }
+.verify { border: 2px dashed var(--accent); border-radius: 8px; padding: 10px 14px 4px; margin: 12px 0 16px; background: var(--surface); }
+.verify h4 { margin: 0 0 6px; font-size: 1rem; }
+.verify .table-wrap { background: var(--bg); }
+.status { display: inline-block; font-size: 0.78rem; font-weight: 600; padding: 0 6px; border-radius: 4px; white-space: nowrap; color: var(--notes); background: var(--notes-bg); }
+.status.ok { color: var(--src); background: var(--src-bg); }
+.status.np { color: var(--muted); background: var(--code-bg); }
+.cite.device { color: var(--src); background: var(--src-bg); }
+.danger { border: 2px solid var(--danger); border-radius: 8px; padding: 10px 14px 4px; margin: 14px 0; background: var(--warn-bg); }
+.danger h4 { margin: 0 0 6px; font-size: 1rem; color: var(--danger); }
+@media (max-width: 640px) {
+  body { font-size: 14px; }
+  main { padding: 16px 16px 48px; }
+  nav.toc ul { columns: 1; }
+  th, td { padding: 6px 8px; }
+  td code { white-space: normal; }
+  table.wide { min-width: 680px; }
+  table.cols3 { min-width: 480px; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>ChargerLAB POWER-Z KM003C — USB protocol specification</h1>
+<p class="meta">Research document for the gopower-z Go client. Compiled 2026-11-16 from source code, vendor documents and published notes. Results from the user's unit (firmware 1.9.5) are in the hazard box below, the "Verified on device" callouts in §6 and §14, and rows tagged <em>device</em>. Everything else is unverified on this unit.</p>
+<div class="legend">
+<span class="cite src"><span class="kind">source</span> program code</span>
+<span class="cite vendor"><span class="kind">vendor-doc</span> ChargerLAB PDF</span>
+<span class="cite notes"><span class="kind">notes</span> project prose / third-party device observations</span>
+<span class="cite device"><span class="kind">device</span> probed on the user's unit (fw 1.9.5)</span>
+</div>
+<section class="danger" id="hazard-ep81" aria-label="Hazard observed on this unit">
+<h4>Hazard observed on this unit (fw 1.9.5): never write while EP 0x81 still holds data</h4>
+<p>If the host sends the next request while a reply is still queued on bulk IN EP 0x81, the meter never answers. Its USB stack stalls and the watchdog reboots it; the device then re-enumerates. The queued item can be the zero-length packet (ZLP) that ends a MemoryRead, or any unread reply. Our client hit this once.</p>
+<ul>
+<li><strong>After a MemoryRead:</strong> read the 20-byte <code>C4</code> confirmation, then the data transfer, then the trailing ZLP, before writing again (§9.2).</li>
+<li><strong>After any timed-out or failed exchange:</strong> drain EP 0x81 with short reads until a read times out, then write the next request.</li>
+<li>Keep one request in flight at a time.</li>
+</ul>
+<p>Evidence: a ZLP follows each MemoryRead data transfer in <code>active_bulk_log.json</code> (W6#1–W6#3, see <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">testdata/fw1.9.5/INDEX.txt</a>). The stall and reboot were observed by the team during a client run; no capture file exists for it.</p>
+</section>
+</header>
+<nav class="toc" aria-label="Contents"><ul>
+<li><a href="#0-how-to-read-this-document">0. How to read this document</a></li>
+<li><a href="#1-tldr-for-the-go-client">1. TL;DR for the Go client</a></li>
+<li><a href="#2-usb-identity-and-transports">2. USB identity and transports</a></li>
+<li><a href="#3-packet-headers">3. Packet headers</a></li>
+<li><a href="#4-message-types-and-safety-classification">4. Message types and safety classification</a></li>
+<li><a href="#5-get_data-attributes">5. GET_DATA attributes</a></li>
+<li><a href="#6-adc-snapshot-attribute-0x001">6. ADC snapshot (attribute 0x001)</a> · <a href="#verified-adc">verified on device</a></li>
+<li><a href="#7-pd-data-attribute-0x010-and-related">7. PD data (attribute 0x010) and related</a></li>
+<li><a href="#8-adcqueue-attribute-0x002-settings-0x008-and-other-reads">8. AdcQueue (attribute 0x002), SETTINGS (0x008) and other reads</a></li>
+<li><a href="#9-device-information-model-firmware-serial">9. Device information (model, firmware, serial)</a></li>
+<li><a href="#10-authentication-0x4c-what-it-gates">10. Authentication (0x4C): what it gates</a></li>
+<li><a href="#11-cdc-only-behaviour-adcnew-and-pdm-text-do-not-use">11. CDC-only behaviour: ADCNEW and PDM text (do not use)</a></li>
+<li><a href="#12-safe-read-whitelist-and-never-send-list">12. Safe-read whitelist and never-send list</a></li>
+<li><a href="#13-detected-fast-charge-protocol-shown-on-the-screen">13. "Detected fast-charge protocol" (shown on the screen)</a></li>
+<li><a href="#14-open-questions-and-conflicts">14. Open questions and conflicts</a> · <a href="#verified-conflicts">verified on device</a></li>
+<li><a href="#15-sources">15. Sources</a></li>
+</ul></nav>
+<p>This is a byte-level specification for a Go client of the ChargerLAB POWER-Z KM003C (USB <code>5FC9:0063</code>). It was written from source code, two vendor PDFs, the vendor's C++ sample and the published notes of other projects. Results from whitelisted reads on the user's unit (firmware 1.9.5) were added afterwards, and are marked as such.</p>
+<h2 id="0-how-to-read-this-document">0. How to read this document</h2>
+<h3 id="evidence-labels">Evidence labels</h3>
+<p>Every claim carries one of these labels:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>[source]</strong></td>
+<td>Taken from program source code (a struct, constant, encoder or parser). A reference such as <code>R packet.rs:9-54</code> gives the file and line range at the pinned commit listed in §15.</td>
+</tr>
+<tr>
+<td><strong>[vendor-doc]</strong></td>
+<td>Taken from a ChargerLAB PDF (page number given).</td>
+</tr>
+<tr>
+<td><strong>[notes]</strong></td>
+<td>Taken from a project's prose: firmware reverse-engineering notes, or "[device]" observations that another project reports from its own hardware. These are useful but are <strong>not</strong> source code. Each one says which firmware it was observed on.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="firmware-versions-behind-the-sources">Firmware versions behind the sources</h3>
+<ul>
+<li><strong>R / RR</strong> (okhsunrog). The reverse-engineering notes cover firmware <strong>V1.9.9</strong>.</li>
+<li><strong>O</strong> (nesquikm/open-powerz). Device observations are on firmware <strong>2.0.6</strong>, with a few on 2.0.7.</li>
+<li><strong>V1</strong> (vendor API PDF). The example appears to come from an older firmware or a KM002C, because its ADC payload is 40 bytes rather than 44.</li>
+<li><strong>The unit on this machine runs application firmware 1.9.5</strong> (build date 2025.1.7). That is <strong>older than both reference sources</strong>: R covers 1.9.9 and O covers 2.0.6.
+<ul>
+<li>Its 0x420 info block reports version "2.2" (2024.9.23). This is not the application firmware version.</li>
+<li>Serial 050002, USB <code>bcdDevice</code> 0x0100, HID report descriptor <code>0600ff0901a1010902150025ff75089540810209039102c0</code>, CDC port <code>/dev/cu.usbmodem0500022</code>.</li>
+<li>Version evidence: MemoryRead of 0x4420 and 0x420 (<a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_2_plain.hex">bulk_W6_2_plain.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_plain.hex">bulk_W6_1_plain.hex</a>).</li>
+</ul></li>
+<li><strong>Which observations come from this unit.</strong> Results probed on this unit appear only in the two "Verified on device" callouts (§6, §14), the hazard box at the top, and rows tagged <span class="cite device"><span class="kind">device</span> fw 1.9.5</span>. Every other device observation comes from other people's KM003Cs running firmware 1.9.9 or 2.0.6.</li>
+<li><strong>Firmware package format.</strong> R documents the <code>.mencrypt</code> update file:
+<ul>
+<li>ten big-endian Qt <code>QString</code> fields (format labels, model, version, build date, CRC32, plaintext size, Chinese and English release notes), followed by one <code>QByteArray</code> holding the encrypted image;</li>
+<li>the image is AES-128-ECB with key0, the memory-read key;</li>
+<li>the normal updater always uses base address <code>0x4000</code>.</li>
+</ul>
+<span class="cite notes"><span class="kind">notes</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/FIRMWARE.md?plain=1#L71-L82">FIRMWARE.md:71-82</a></span>. This is for reference only; the client must never flash firmware (§12.2).</li>
+</ul>
+<h3 id="source-keys-full-urls-and-shas-in-15">Source keys (full URLs and SHAs in §15)</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Project</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>K</strong></td>
+<td>Linux <code>drivers/hwmon/powerz.c</code></td>
+</tr>
+<tr>
+<td><strong>V1</strong></td>
+<td>Vendor PDF <em>KM002C&amp;3C API Description</em></td>
+</tr>
+<tr>
+<td><strong>V2</strong></td>
+<td>Vendor PDF <em>Protocol Trigger by Virtual Serial Port</em></td>
+</tr>
+<tr>
+<td><strong>VS</strong></td>
+<td>Vendor C++ sample <code>hiddemo.cpp</code> from ChargerLAB's official "limited toolkit" zip. This is the only vendor-published <strong>code</strong>.</td>
+</tr>
+<tr>
+<td><strong>R</strong></td>
+<td>okhsunrog/km003c-rs, Rust library <code>km003c-lib/src/</code></td>
+</tr>
+<tr>
+<td><strong>RR</strong></td>
+<td>okhsunrog/km003c-protocol-research</td>
+</tr>
+<tr>
+<td><strong>O</strong></td>
+<td>nesquikm/open-powerz, <code>crates/powerz-protocol/src/</code> and <code>docs/protocol.md</code></td>
+</tr>
+<tr>
+<td><strong>I</strong></td>
+<td>inuchanbt/KM003C-CLI</td>
+</tr>
+<tr>
+<td><strong>N</strong></td>
+<td>nbuchwitz/usb-meter</td>
+</tr>
+<tr>
+<td><strong>C</strong></td>
+<td>chaseleif/km003c</td>
+</tr>
+<tr>
+<td><strong>L</strong></td>
+<td>LongDirtyAnimAlf/km003c (Pascal)</td>
+</tr>
+<tr>
+<td><strong>NV</strong></td>
+<td>nevetssf/powerz</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="1-tldr-for-the-go-client">1. TL;DR for the Go client</h2>
+<ol type="1">
+<li><p><strong>Primary transport: IF0 vendor bulk</strong>, OUT endpoint <code>0x01</code>, IN endpoint <code>0x81</code>.</p>
+<ul>
+<li>The Linux kernel driver uses this interface <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L17-L18">powerz.c:17-18, 126-130, 264-268</a></span>.</li>
+<li>On macOS, libusb can claim IF0 without detaching a driver <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L58-L61">protocol.md:58-61</a></span>.</li>
+</ul></li>
+<li><p><strong>Read the ADC once.</strong> Write the 4 bytes <code>0C &lt;id&gt; 02 00</code> and read one bulk transfer. The reply is 52 bytes (48 on older firmware): <code>41 &lt;id&gt; xx xx</code> + <code>01 00 00 0B</code> + a 44-byte payload.</p>
+<ul>
+<li>The kernel driver sends exactly <code>0c 00 02 00</code> with no CONNECT, no authentication and no reset <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L121-L130">powerz.c:121-130</a></span>.</li>
+<li>The vendor PDF shows the same request bytes <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span>. The vendor's own C++ sample sends them over HID with nothing before them <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:230-252</a></span>.</li>
+</ul></li>
+<li><p><strong>No handshake is needed</strong> for ADC or PD polling.</p>
+<ul>
+<li><strong>ADC on bulk:</strong> the kernel driver sends no CONNECT <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L110-L150">powerz.c:110-150</a></span>.</li>
+<li><strong>PD on bulk:</strong> I polls <code>PD_PACKET</code> over IF0 without CONNECT <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L228-L283">transport.py:228-283</a>, <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_cli.py#L817">km003c_cli.py:817</a></span>, and its README reports a working USB PD capture on hardware <span class="cite notes"><span class="kind">notes</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/README.md?plain=1#L354">README.md:354</a></span>.</li>
+<li><strong>SETTINGS:</strong> shown to work without CONNECT only on CDC <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L378-L382">protocol.md:378-382, 777-778</a></span>. Whether SETTINGS on bulk works without CONNECT is <strong>unverified</strong>; send CONNECT first if it fails.</li>
+</ul>
+<p>Authentication (0x4C, AES) only matters for:</p>
+<ul>
+<li>streaming control, which is AdcQueue start/stop and the PD sniffer;</li>
+<li>TICK and the offline-record list;</li>
+<li>writes.</li>
+</ul>
+<p>CONNECT (0x02) is only needed on bulk, before a MemoryRead, which is how the device-info blocks are read (§9).</p></li>
+<li><p><strong>HID (IF3, interrupt endpoints <code>0x05</code>/<code>0x85</code>) is ADC-only.</strong> Send exactly one request, <code>0C &lt;id&gt; 02 00</code>, zero-padded to 64 bytes.</p>
+<ul>
+<li>A reply longer than 64 bytes hangs the firmware, and the watchdog reboots the meter 1.5–3.5 s later <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L741-L769">protocol.md:741-769</a>, firmware 2.0.6</span>.</li>
+<li>The O library's HID transport refuses every other request <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/hid.rs#L49-L63">transport/hid.rs:49-63</a></span>.</li>
+</ul></li>
+<li><p><strong>Avoid CDC (IF2) for the binary protocol.</strong> On CDC:</p>
+<ul>
+<li>bytes <code>0x01</code>, <code>0x02</code> and <code>0x03</code> start, keep alive and stop the vendor "ADCNEW" stream;</li>
+<li>the same byte stream carries the ASCII "PDM" trigger commands, which change VBUS.</li>
+</ul>
+<p>The CDC trigger-command list is in <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM003C_002C%20Protocol%20Trigger%20by%20Virtual%20Serial%20Port%20(Instructions).pdf">V2 p.1-2</a></span> and <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L771-L970">protocol.md:771-970</a></span>. The rule that CDC refuses frame types 0x01–0x03 is in <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/cdc_frame.rs#L30-L36">transport/cdc_frame.rs:30-36</a></span>.</p></li>
+<li><p><strong>Never send</strong> these frame types: <code>0x04</code>, <code>0x08</code>, <code>0x09</code>, <code>0x0A</code>, <code>0x42</code>, <code>0x48</code>, <code>0x4A</code>, <code>0x4B</code>, <code>0x4D</code> (§12). They are taken from:</p>
+<ul>
+<li>the O command guard <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L18-L27">transport/guard.rs:18-27</a></span>;</li>
+<li>the R/RR firmware notes <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L18-L37">docs/firmware/handlers.md:18-37</a></span>.</li>
+</ul></li>
+</ol>
+<hr />
+<h2 id="2-usb-identity-and-transports">2. USB identity and transports</h2>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VID:PID</td>
+<td><code>5FC9:0063</code> (KM003C); <code>5FC9:0061</code> is the KM002C</td>
+<td><span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L264-L268">powerz.c:264-268</a></span>, <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L140-L141">device.rs:140-141</a></span></td>
+</tr>
+<tr>
+<td>Kernel binding</td>
+<td><code>USB_DEVICE_INTERFACE_NUMBER(0x5FC9, 0x0063, 0x00)</code>: the hwmon driver binds <strong>interface 0</strong> only</td>
+<td><span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L264-L268">powerz.c:264-268</a></span></td>
+</tr>
+<tr>
+<td>Device class</td>
+<td>0xEF/0x02/0x01 (IAD composite), USB 2.10, full speed, EP0 maximum packet 32</td>
+<td><span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L36">protocol.md:36</a></span>, <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/usb_transport.md?plain=1#L9-L17">usb_transport.md:9-17</a></span></td>
+</tr>
+<tr>
+<td>Interface string of IF0</td>
+<td><code>APP</code> in application mode; a BOOT or DFU string means bootloader</td>
+<td><span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L38">protocol.md:38, 530</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="interfaces-and-endpoints">Interfaces and endpoints</h3>
+<p>The endpoint addresses agree across sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L143-L151">device.rs:143-151</a></span>, <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L115">transport.py:115,123</a></span>, <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L45-L50">protocol.md:45-50</a></span>, <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/usb_transport.md?plain=1#L116-L126">usb_transport.md:116-126</a></span>.</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>IF</th>
+<th>Class</th>
+<th>Endpoints</th>
+<th>Carries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>0xFF vendor</td>
+<td>bulk OUT <code>0x01</code>, bulk IN <code>0x81</code> (64 B packets)</td>
+<td>The full binary protocol. Every documented feature works here.</td>
+</tr>
+<tr>
+<td>1</td>
+<td>0x02/0x02 CDC ACM</td>
+<td>interrupt IN <code>0x83</code> (8 B, 10 ms)</td>
+<td>CDC notifications only</td>
+</tr>
+<tr>
+<td>2</td>
+<td>0x0A CDC data</td>
+<td>bulk OUT <code>0x02</code>, bulk IN <code>0x82</code></td>
+<td>One shared byte stream with three uses: the binary protocol (GET_DATA works), the ADCNEW push stream and the ASCII PDM trigger commands. macOS exposes it as <code>/dev/cu.usbmodem*</code>.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>0x03 HID, usage page 0xFF00</td>
+<td>interrupt OUT <code>0x05</code>, IN <code>0x85</code> (64 B, 1 ms)</td>
+<td>One 64-byte input report and one 64-byte output report, no report ID. Only the ADC snapshot is safe here.</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote class="note">
+<p><strong>Source C's endpoint map does not match the KM003C layout.</strong> <span class="cite src"><span class="kind">source</span> C <a href="https://github.com/chaseleif/km003c/blob/699a25ac9b3a26eaff11410f94a16b9506fc5972/record.py#L59-L64">record.py:59-64</a></span> pairs IF1 with <code>0x05</code>/<code>0x85</code> and IF3 with <code>0x03</code>/<code>0x83</code>. That disagrees with R, I, O and RR. Interface numbering reportedly differs between models (the KM002C is said to put HID at IF1) <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L52-L54">protocol.md:52-54</a></span>.</p>
+<p><strong>Select interfaces by class</strong> (0xFF vendor, 0x03 HID, 0x0A CDC data), not by number, and read the endpoint addresses from the configuration descriptor.</p>
+</blockquote>
+<h3 id="vendor-statement-about-transports">Vendor statement about transports</h3>
+<p><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span> says there are three interfaces, and that the <strong>same commands</strong> work on all of them:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Interface</th>
+<th>Stated throughput</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WinUSB / "USB USER"</td>
+<td>200 KB/s</td>
+</tr>
+<tr>
+<td>CDC (baud rate is ignored)</td>
+<td>200 KB/s</td>
+</tr>
+<tr>
+<td>HID (data limited to 64 bytes)</td>
+<td>60 KB/s</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the extended-header <code>size</code> field, the two vendor sources disagree:</p>
+<ul>
+<li>The PDF says it must not exceed 1024−8 bytes, <code>chunk*size</code> must not exceed 4080, and <strong>the HID interface must not exceed 60</strong> <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>.</li>
+<li>The vendor sample code says "must not exceed 4095−8 bytes; <strong>CDC and HID less than 64 bytes</strong>" (<code>不能超过4095-8个字节 CDC HID 小于 64字节</code>) <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:91</a></span>.</li>
+</ul>
+<p>Device observations on firmware 2.0.6 show that "same commands everywhere" is only partly true <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L55-L57">protocol.md:55-57, 741-783</a></span>. On CDC, a 188-byte SETTINGS reply was observed to work, contrary to the VS comment (§14 C21).</p>
+<p><strong>Vendor endpoint selection.</strong> The VS demo enables <code>libusb_set_auto_detach_kernel_driver</code>, claims every interface, and picks endpoints by <strong>transfer type</strong>: the first interrupt IN/OUT is "hid", and the first bulk IN/OUT is "user" (IF0, which comes before the CDC bulk pair) <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:133-224</a></span>.</p>
+<h3 id="transport-framing-rules">Transport framing rules</h3>
+<p><strong>Bulk (IF0)</strong></p>
+<ul>
+<li>One request is one OUT transfer.</li>
+<li>One response is one IN transfer, delimited by a short packet.</li>
+<li>R reads into a 2048-byte buffer and joins transfers until a short packet <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L155">device.rs:155, 718-741</a></span>. I reads with a 65536-byte buffer <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L121-L127">transport.py:121-127</a></span>.</li>
+<li>The vendor app sends a zero-length packet after any OUT write whose length is a non-zero multiple of 64 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L62-L64">protocol.md:62-64</a>; source O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/bulk.rs#L19-L23">transport/bulk.rs:19-23</a></span>. Requests in the safe set are 4 or 36 bytes, so this never applies to them.</li>
+</ul>
+<p><strong>Stale data at open (bulk)</strong></p>
+<p>A stale <code>DISCONNECT</code> (<code>03 xx 00 00</code>) often waits on EP 0x81 when the device is opened. Drain the IN endpoint with short reads until one times out <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/bulk.rs#L25-L36">transport/bulk.rs:25-36</a></span>, <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L142">protocol.md:142, 709</a></span>.</p>
+<p><strong>HID (IF3)</strong></p>
+<ul>
+<li><strong>Output report:</strong> 64 bytes, request zero-padded. Through hidapi you write 65 bytes, where byte 0 is report ID <code>0x00</code>. That leading 0x00 is a hidapi convention and is <strong>not</strong> sent on the wire <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/hid.rs#L66-L73">transport/hid.rs:66-73</a></span>, <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L43-L50">transport.py:43-50</a></span>, <span class="cite src"><span class="kind">source</span> NV <a href="https://github.com/nevetssf/powerz/blob/33b23b932eb302f53cae5185558e8f5984b7ea8a/src/powerz/constants.py#L29">constants.py:29</a></span>.</li>
+<li><strong>Input report:</strong> 64 bytes, response zero-padded, no report-ID byte <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L743-L745">protocol.md:743-745</a></span>.</li>
+<li><strong>Linux hidraw:</strong> N writes the bare 4-byte request to <code>/dev/hidraw*</code> and reads 64 bytes <span class="cite src"><span class="kind">source</span> N <a href="https://github.com/nbuchwitz/usb-meter/blob/3d065276e24cafcf419b3fb71bed948841493dda/src/usb_meter/connection.py#L143-L152">connection.py:143-152</a>, <a href="https://github.com/nbuchwitz/usb-meter/blob/3d065276e24cafcf419b3fb71bed948841493dda/src/usb_meter/meter.py#L191-L193">meter.py:191-193</a></span>.</li>
+</ul>
+<p><strong>CDC (IF2)</strong></p>
+<ul>
+<li>Bytes are written to the tty. The baud rate is ignored <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>. The vendor tools use 2 000 000 8N1 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L774-L775">protocol.md:774-775</a></span>.</li>
+<li>Replies, ADCNEW frames and PDM text lines can be interleaved on the same stream. Demultiplex by header and id <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L820-L828">protocol.md:820-828</a></span>, <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L243-L266">transport.py:243-266</a></span>.</li>
+</ul>
+<hr />
+<h2 id="3-packet-headers">3. Packet headers</h2>
+<p>Every frame begins with one <strong>4-byte little-endian u32</strong>. Bit 0 is the least significant bit of byte 0. The same word is read in one of three views.</p>
+<h3 id="31-control-view-requests-and-control-replies">3.1 Control view (requests and control replies)</h3>
+<pre><code> bit: 31                         17 16 15            8 7 6           0
+      +----------------------------+--+---------------+-+-------------+
+      |        att (15 bits)       |e |   id (8 bits) |x| type (7)    |
+      +----------------------------+--+---------------+-+-------------+
+ byte:  [3]..............[2]bit1   [2]b0     [1]       [0]b7  [0]b0..6</code></pre>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Bits</th>
+<th>Field</th>
+<th>Meaning</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0–6</td>
+<td>type</td>
+<td>Message type. Values below 0x40 are control; 0x40 and above are data.</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span> <code>type:7 "大于63为数据"</code> (values above 63 are data); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L9-L20">packet.rs:9-20</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L205-L214">frame.rs:205-214</a></span></td>
+</tr>
+<tr>
+<td>7</td>
+<td>extend / reserved</td>
+<td>0 in requests. V1 says it is "used to transmit very large packets". It is set on the MemoryRead confirmation <code>C4</code>.</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L13-L15">packet.rs:13-15</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L80">protocol.md:80, 97</a></span></td>
+</tr>
+<tr>
+<td>8–15</td>
+<td>id</td>
+<td>Transaction id. The PDF says "default 0"; the VS comment says "keeps incrementing". The VS demo never sets it, so it always sends 0.</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span> ("id 默认0"); <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:72, 235-237</a></span> ("id 不停的累加"); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L16">packet.rs:16</a></span></td>
+</tr>
+<tr>
+<td>16</td>
+<td>enc</td>
+<td>V1 says "data is in encrypted format". 0 in every request.</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L211">frame.rs:211</a></span></td>
+</tr>
+<tr>
+<td>17–31</td>
+<td>att</td>
+<td>Attribute mask or argument (15 bits)</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L19">packet.rs:19</a></span>; <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L121-L124">powerz.c:121-124</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Encoding.</strong> <code>word = type | id&lt;&lt;8 | att&lt;&lt;17</code>, then write it little-endian.</p>
+<p>The same formula appears in three sources: <span class="cite src"><span class="kind">source</span> N <a href="https://github.com/nbuchwitz/usb-meter/blob/3d065276e24cafcf419b3fb71bed948841493dda/src/usb_meter/protocol.py#L90">protocol.py:90</a></span>, <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L62-L65">protocol.py:62-65</a></span>, <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L240-L245">frame.rs:240-245</a></span>.</p>
+<p>Because <code>att</code> starts at bit 17, the att value shows up <strong>doubled in byte 2</strong>:</p>
+<ul>
+<li>att 1 encodes as <code>02 00</code>;</li>
+<li>att 0x10 encodes as <code>20 00</code>;</li>
+<li>att 0x200 encodes as <code>00 04</code>.</li>
+</ul>
+<p>The ADC request built this way is <code>0C 00 02 00</code> in four places: <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L121-L124">powerz.c:121-124</a></span>, <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span>, <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/tests/adc_tests.rs#L74-L90">tests/adc_tests.rs:74-90</a></span>, <span class="cite src"><span class="kind">source</span> C <a href="https://github.com/chaseleif/km003c/blob/699a25ac9b3a26eaff11410f94a16b9506fc5972/record.py#L11">record.py:11</a></span>.</p>
+<h3 id="32-data-view-put_data-and-other-data-type-frames">3.2 Data view (PUT_DATA and other data-type frames)</h3>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Bits</th>
+<th>Field</th>
+<th>Meaning</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0–6</td>
+<td>type</td>
+<td>0x41 = PUT_DATA</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L22-L35">packet.rs:22-35</a></span></td>
+</tr>
+<tr>
+<td>7</td>
+<td>extend</td>
+<td>0 on PUT_DATA</td>
+<td><span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L97">protocol.md:97</a></span></td>
+</tr>
+<tr>
+<td>8–15</td>
+<td>id</td>
+<td>Echo of the request id (exceptions below)</td>
+<td><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L167-L169">device.rs:167-169, 842-846</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L98">protocol.md:98</a></span></td>
+</tr>
+<tr>
+<td>16</td>
+<td>encode</td>
+<td>1 means the payload is AES-encrypted. It is 0 on PUT_DATA, and 1 on the MemoryRead confirmation and the auth reply.</td>
+<td><span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:81</a></span> (<code>encode : 1</code>); <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L162-L167">memory.rs:162-167</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L217-L227">frame.rs:217-227</a></span></td>
+</tr>
+<tr>
+<td>17–18</td>
+<td>permi</td>
+<td>The session's auth level (0, 1 or 2)</td>
+<td><span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:82</a></span> (<code>permi : 2</code>, so the field exists in vendor code); <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L224">frame.rs:224</a></span>; semantics <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L100">protocol.md:100, 109-111</a></span>. R treats bits 16–21 as unused <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L33">packet.rs:33</a></span>.</td>
+</tr>
+<tr>
+<td>19–21</td>
+<td>reserved</td>
+<td></td>
+<td><span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:83</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L101">protocol.md:101</a></span></td>
+</tr>
+<tr>
+<td>22–31</td>
+<td>obj</td>
+<td><strong>Opaque. Do not frame by it.</strong> Conflicting meanings are listed in §14.</td>
+<td><span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:84</a></span>; <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span> ("4 bytes per object"); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L416-L423">message.rs:416-423</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L104-L108">protocol.md:104-108</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="33-extended-section-header">3.3 Extended (section) header</h3>
+<p>Each logical section inside a PUT_DATA starts with its own 4-byte header.</p>
+<pre><code> bit: 31          22 21     16 15 14                          0
+      +-------------+---------+--+----------------------------+
+      | size (10)   |chunk (6)|nx|       att (15 bits)         |
+      +-------------+---------+--+----------------------------+</code></pre>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Bits</th>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0–14</td>
+<td>att</td>
+<td>The single attribute bit this section answers</td>
+</tr>
+<tr>
+<td>15</td>
+<td>next</td>
+<td>1 means another section follows</td>
+</tr>
+<tr>
+<td>16–21</td>
+<td>chunk</td>
+<td>Record count for ADC_QUEUE, so at most 63 records per reply</td>
+</tr>
+<tr>
+<td>22–31</td>
+<td>size</td>
+<td>Payload bytes. For ADC_QUEUE this is the record size (20).</td>
+</tr>
+</tbody>
+</table></div>
+<p>The layout is the same in <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>, <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L47-L54">packet.rs:47-54</a></span>, <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L278-L306">frame.rs:278-306</a></span>, <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L100-L122">protocol.py:100-122</a></span> and <span class="cite src"><span class="kind">source</span> N <a href="https://github.com/nbuchwitz/usb-meter/blob/3d065276e24cafcf419b3fb71bed948841493dda/src/usb_meter/protocol.py#L113-L129">protocol.py:113-129</a></span>.</p>
+<p><strong>Section payload length:</strong></p>
+<ul>
+<li>ADC_QUEUE: <code>chunk * size</code> <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L296-L304">frame.rs:296-304</a></span>, <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L491-L501">packet.rs:491-501</a></span>.</li>
+<li>PD_STATUS (0x020) and RECORD_LIST (0x200): the size field is 0 or unusable, so the payload is <strong>the rest of the frame</strong> <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L379-L393">frame.rs:379-393</a></span>. R derives the 0x020 boundary from queue prefixes instead <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L492-L493">packet.rs:492-493</a></span>.</li>
+<li>Every other attribute: <code>size</code>.</li>
+</ul>
+<p><strong>Section order.</strong> Sections arrive in ascending attribute-bit order. An attribute that is gated, or has nothing to report, is left out <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L128-L130">protocol.md:128-130</a></span>. An <strong>empty PUT_DATA</strong> is a bare 4-byte header such as <code>41 id 00 00</code>. Bits 17–18 may be non-zero in it, as in <code>41 id 02 00</code> <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L448-L456">packet.rs:448-456</a></span>, <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L196-L198">protocol.md:196-198, 737</a></span>.</p>
+<p><strong>Worked decode of a section header.</strong></p>
+<ol type="1">
+<li><code>01 00 00 0B</code> is the LE word 0x0B000001.</li>
+<li>att = 0x0B000001 &amp; 0x7FFF = 1 (ADC).</li>
+<li>next = (word &gt;&gt; 15) &amp; 1 = 0.</li>
+<li>size = 0x0B000001 &gt;&gt; 22 = 44.</li>
+</ol>
+<p><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/tests/adc_tests.rs#L12-L26">tests/adc_tests.rs:12-26</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/tests/vectors/adc_52.hex">tests/vectors/adc_52.hex</a></span>.</p>
+<hr />
+<h2 id="4-message-types-and-safety-classification">4. Message types and safety classification</h2>
+<p>Classes used in the tables:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SAFE-READ</td>
+<td>No device-side state change</td>
+</tr>
+<tr>
+<td>READ-CONSUMES</td>
+<td>Read-only, but drains a device-side FIFO. Another consumer would lose that data.</td>
+</tr>
+<tr>
+<td>SESSION</td>
+<td>Changes only volatile session state (connect, auth level)</td>
+</tr>
+<tr>
+<td>MODE</td>
+<td>Starts or stops a volatile runtime mode (a stream or sniffer). Reversible, not persisted.</td>
+</tr>
+<tr>
+<td><strong class="unsafe">UNSAFE-WRITE</strong></td>
+<td>Persistent settings, calibration, flash or record changes</td>
+</tr>
+<tr>
+<td><strong class="unsafe">UNSAFE-POWER</strong></td>
+<td>Changes VBUS or the charger negotiation</td>
+</tr>
+<tr>
+<td><strong class="unsafe">UNSAFE-BOOT</strong></td>
+<td>Reset, bootloader, DFU or firmware erase</td>
+</tr>
+<tr>
+<td>AVOID</td>
+<td>Purpose unknown or not needed</td>
+</tr>
+</tbody>
+</table></div>
+<p>Names come from <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span> (<code>cmd_ctrl_msg_type</code>, <code>cmd_data_msg_type</code>), <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L59-L94">packet.rs:59-94</a></span> and <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L12-L26">frame.rs:12-26</a></span>. Semantics come from the cited notes.</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Request bytes</th>
+<th>Reply</th>
+<th>Class</th>
+<th>Evidence and notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x01</td>
+<td>SYNC</td>
+<td>—</td>
+<td>—</td>
+<td>AVOID</td>
+<td>Bulk: per-chunk acknowledgement during firmware download. <strong>CDC: ADCNEW keep-alive.</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L140">protocol.md:140, 789</a></span></td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>CONNECT</td>
+<td><code>02 id 00 00</code></td>
+<td><code>05 id 00 00</code> (ACCEPT)</td>
+<td>SESSION (bulk only)</td>
+<td>Required before MemoryRead or auth on bulk (firmware 2.0.6). <strong>No reply over HID. On CDC it starts an ADCNEW stream.</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L141">protocol.md:141, 477-484, 779-781</a></span>. R retries up to 3 times because the device sometimes answers DISCONNECT first <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L975-L996">device.rs:975-996</a></span>. <strong>The ADC read does not need it</strong> <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L110-L150">powerz.c:110-150</a></span>.</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>DISCONNECT</td>
+<td><code>03 id 00 00</code></td>
+<td>ACCEPT</td>
+<td>SESSION</td>
+<td>May arrive in place of PUT_DATA, meaning "no data", or stale at open. <strong>CDC: stops ADCNEW.</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L142">protocol.md:142, 735, 791</a></span></td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>RESET</td>
+<td>—</td>
+<td>—</td>
+<td><strong class="unsafe">UNSAFE-BOOT</strong></td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span>; never sent <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L18-L22">transport/guard.rs:18-22</a></span></td>
+</tr>
+<tr>
+<td>0x05</td>
+<td>ACCEPT</td>
+<td>reply only</td>
+<td></td>
+<td>—</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span></td>
+</tr>
+<tr>
+<td>0x06</td>
+<td>REJECT</td>
+<td>reply only</td>
+<td></td>
+<td>—</td>
+<td>Sent when the auth level is too low, a stream is already started, or MemoryRead comes before CONNECT <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L734">protocol.md:734</a></span>; also when MemoryRead validation fails <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L183-L200">handlers.md:183-200</a></span></td>
+</tr>
+<tr>
+<td>0x07</td>
+<td>FINISHED</td>
+<td>reply only</td>
+<td></td>
+<td>—</td>
+<td>Answer to settings and record writes <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L146">protocol.md:146</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L132-L133">handlers.md:132-133</a></span></td>
+</tr>
+<tr>
+<td>0x08</td>
+<td>JUMP_APROM</td>
+<td>—</td>
+<td>—</td>
+<td><strong class="unsafe">UNSAFE-BOOT</strong></td>
+<td>Leaves DFU <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L147">protocol.md:147</a></span></td>
+</tr>
+<tr>
+<td>0x09</td>
+<td>JUMP_DFU</td>
+<td>—</td>
+<td>—</td>
+<td><strong class="unsafe">UNSAFE-BOOT</strong></td>
+<td>Enters firmware-update mode <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L148">protocol.md:148</a></span></td>
+</tr>
+<tr>
+<td>0x0A</td>
+<td>"GET_STATUS" (V1 name)</td>
+<td>—</td>
+<td>FINISHED</td>
+<td><strong class="unsafe">UNSAFE-WRITE</strong></td>
+<td><strong>Misnamed. It is a settings-write message.</strong> Its keys include <code>0x08</code> = factory reset (erases settings and records). It works over CDC with no auth, and is ignored over bulk. <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L149">protocol.md:149, 366-436</a></span>; forbidden <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L22">transport/guard.rs:22</a></span></td>
+</tr>
+<tr>
+<td>0x0B</td>
+<td>ERROR</td>
+<td>—</td>
+<td></td>
+<td>AVOID</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span></td>
+</tr>
+<tr>
+<td>0x0C</td>
+<td>GET_DATA</td>
+<td><code>0C id &lt;att*2 LE16&gt;</code></td>
+<td>PUT_DATA 0x41</td>
+<td>Depends on the attribute (§5)</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2-3</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L436-L443">message.rs:436-443</a></span></td>
+</tr>
+<tr>
+<td>0x0D</td>
+<td>GET_FILE</td>
+<td>—</td>
+<td></td>
+<td>AVOID</td>
+<td>Unused by the vendor app <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L152">protocol.md:152</a></span>; firmware handler exists <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L28">handlers.md:28</a></span></td>
+</tr>
+<tr>
+<td>0x0E</td>
+<td>START_GRAPH (AdcQueue start)</td>
+<td><code>0E id &lt;rate*2&gt; 00</code>; rate 0=2, 1=10, 2=50, 3=1000 SPS</td>
+<td>ACCEPT / REJECT</td>
+<td>MODE</td>
+<td>Needs auth level ≥1. On firmware 2.0.6 it is REJECTed at L0 and while a stream is already running. <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L444-L451">message.rs:444-451</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adcqueue.rs#L24-L32">adcqueue.rs:24-32</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L153">protocol.md:153, 252-279</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L200-L223">protocol_reference.md:200-223</a></span></td>
+</tr>
+<tr>
+<td>0x0F</td>
+<td>STOP_GRAPH</td>
+<td><code>0F id 00 00</code></td>
+<td>ACCEPT / REJECT</td>
+<td>MODE</td>
+<td>REJECTed at L0 on firmware 2.0.6 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L154">protocol.md:154</a></span></td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>ENABLE_PD_MONITOR (sniffer start)</td>
+<td><code>10 id 02 00</code> (att 1 = PD; O says 2..5 = UFCS)</td>
+<td>ACCEPT / REJECT</td>
+<td>MODE</td>
+<td>REJECTed at L0 on firmware 2.0.6. PD polling works without it. <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L17">message.rs:17, 500-507</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L155">protocol.md:155, 972-988</a></span></td>
+</tr>
+<tr>
+<td>0x11</td>
+<td>DISABLE_PD_MONITOR</td>
+<td><code>11 id 00 00</code></td>
+<td>ACCEPT / REJECT</td>
+<td>MODE</td>
+<td><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L508-L515">message.rs:508-515</a></span></td>
+</tr>
+<tr>
+<td>0x27</td>
+<td>NOT_READABLE</td>
+<td>reply only</td>
+<td></td>
+<td>—</td>
+<td>MemoryRead hit a bus fault <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L86-L87">packet.rs:86-87</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L202-L209">handlers.md:202-209</a></span></td>
+</tr>
+<tr>
+<td>0x40</td>
+<td>HEAD</td>
+<td><code>40 id 00 01</code> + 16 zero bytes</td>
+<td>Type 0x40, <strong>id 0</strong></td>
+<td>AVOID</td>
+<td>O's static analysis says it is read-only. It is also part of the firmware-flash flow. <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L162">protocol.md:162, 533-534</a></span></td>
+</tr>
+<tr>
+<td>0x41</td>
+<td>PUT_DATA</td>
+<td>reply only</td>
+<td></td>
+<td>—</td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span></td>
+</tr>
+<tr>
+<td>0x42</td>
+<td>firmware descriptor</td>
+<td><code>42 id 00 04</code> + 64 B</td>
+<td></td>
+<td><strong class="unsafe">UNSAFE-BOOT</strong></td>
+<td>Starts an erase <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L164">protocol.md:164</a></span>; forbidden <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L22">guard.rs:22</a></span></td>
+</tr>
+<tr>
+<td>0x44</td>
+<td>MEMORY_READ</td>
+<td><code>44 id 01 01</code> + 32 B AES</td>
+<td><code>C4 id 01 01</code> + 16 B, then raw ciphertext</td>
+<td>SAFE-READ, <strong>restricted</strong></td>
+<td>Allowed only at the 4 known addresses, on bulk, after CONNECT (§9). Other addresses reportedly crash the meter <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L520-L521">protocol.md:520-521, 1241</a></span>.</td>
+</tr>
+<tr>
+<td>0x48</td>
+<td>SET_DATA / settings batch</td>
+<td>varies</td>
+<td>FINISHED</td>
+<td><strong class="unsafe">UNSAFE-WRITE</strong></td>
+<td>Nested operations include <strong>0x08 reset system and 0x09 reset both settings blocks</strong>, and need <strong>no auth</strong> <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L117-L170">handlers.md:117-170</a></span>; forbidden <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L22">guard.rs:22</a></span></td>
+</tr>
+<tr>
+<td>0x4A</td>
+<td>flash / memory write</td>
+<td>encrypted</td>
+<td></td>
+<td><strong class="unsafe">UNSAFE-WRITE</strong></td>
+<td>Needs auth L≥1 <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L33">handlers.md:33, 104-105</a></span>; forbidden <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L22">guard.rs:22</a></span></td>
+</tr>
+<tr>
+<td>0x4B</td>
+<td>offset memory read (0x98000000 + addr)</td>
+<td>?</td>
+<td></td>
+<td>AVOID</td>
+<td>Framing unconfirmed <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L34">handlers.md:34, 356-367</a></span></td>
+</tr>
+<tr>
+<td>0x4C</td>
+<td>STREAMING_AUTH</td>
+<td><code>4C id 00 02</code> + 32 B AES</td>
+<td><code>4C 00 &lt;lvl word&gt;</code> + 32 B</td>
+<td>SESSION</td>
+<td>Raises the auth level, which unlocks privileged writes as a side effect. Not needed for basic reads (§10).</td>
+</tr>
+<tr>
+<td>0x4D</td>
+<td>privileged settings batch</td>
+<td></td>
+<td></td>
+<td><strong class="unsafe">UNSAFE-WRITE</strong></td>
+<td>Needs L2 and writes calibration <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L36">handlers.md:36, 117-150</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="5-get_data-attributes">5. GET_DATA attributes</h2>
+<p><strong>Request:</strong> <code>0C id b2 b3</code>, where <code>(b3&lt;&lt;8 | b2) = mask &lt;&lt; 1</code>. Several bits can be OR-ed together; the reply then holds one section per attribute, chained by <code>next</code>. <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L151-L170">packet.rs:151-170</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L175-L191">protocol.md:175-191</a></span></p>
+<p>Read the "Auth (FW 1.9.9 / 2.0.6)" column as "minimum auth level on 1.9.9 / minimum auth level on 2.0.6".</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Mask</th>
+<th>Name (vendor / R / O)</th>
+<th>Request (id=0)</th>
+<th>Reply section</th>
+<th>Auth (FW 1.9.9 / 2.0.6)</th>
+<th>Class and transport</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x001</td>
+<td>ATT_ADC / Adc / ADC</td>
+<td><code>0C 00 02 00</code></td>
+<td>44 B (40 B on older firmware)</td>
+<td>0 / 0</td>
+<td><strong>SAFE-READ. Bulk, HID, CDC.</strong></td>
+</tr>
+<tr>
+<td>0x002</td>
+<td>ATT_ADC_QUEUE / AdcQueue / ADC_QUEUE</td>
+<td><code>0C 00 04 00</code></td>
+<td><code>chunk</code> × 20 B records</td>
+<td>1 / <strong>0</strong> (conflict)</td>
+<td>READ-CONSUMES. Bulk and CDC; never HID.</td>
+</tr>
+<tr>
+<td>0x004</td>
+<td>ATT_ADC_QUEUE_10K</td>
+<td><code>0C 00 08 00</code></td>
+<td>Always empty</td>
+<td>—</td>
+<td>AVOID</td>
+</tr>
+<tr>
+<td>0x008</td>
+<td>ATT_SETTINGS / Settings / SETTINGS</td>
+<td><code>0C 00 10 00</code></td>
+<td>180 B</td>
+<td>0 / 0</td>
+<td>SAFE-READ. Bulk and CDC (188 B reply); <strong>never HID</strong>.</td>
+</tr>
+<tr>
+<td>0x010</td>
+<td>ATT_PD_PACKET / PdPacket / PD_PACKET</td>
+<td><code>0C 00 20 00</code></td>
+<td>12 B status plus event records</td>
+<td>0 / 0</td>
+<td>READ-CONSUMES (PD event FIFO). Bulk and CDC; HID is not safe.</td>
+</tr>
+<tr>
+<td>0x011</td>
+<td>ADC + PD_PACKET</td>
+<td><code>0C 00 22 00</code></td>
+<td>44 + 12+ B (68 B total when idle)</td>
+<td>0 / 0</td>
+<td>Bulk and CDC only. <strong>68 B reply reboots the meter over HID</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L757-L760">protocol.md:757-760</a></span>.</td>
+</tr>
+<tr>
+<td>0x020</td>
+<td>ATT_PD_STATUS / PdTrace / PD_STATUS</td>
+<td><code>0C 00 40 00</code></td>
+<td>Size field = 0; rest of frame</td>
+<td>1 / <strong>0</strong></td>
+<td>READ-CONSUMES (trace queues). Bulk and CDC.</td>
+</tr>
+<tr>
+<td>0x040</td>
+<td>ATT_QC_PACKET / UFCS trace / QC_PACKET</td>
+<td><code>0C 00 80 00</code></td>
+<td>12 B status plus UFCS records</td>
+<td>1 / <strong>0</strong></td>
+<td>READ-CONSUMES. Bulk and CDC.</td>
+</tr>
+<tr>
+<td>0x080</td>
+<td>TICK</td>
+<td><code>0C 00 00 01</code></td>
+<td>8 B: u32 uptime ms + u32 0</td>
+<td>? / 1 (empty at 0)</td>
+<td>SAFE-READ</td>
+</tr>
+<tr>
+<td>0x100</td>
+<td>TICK2</td>
+<td><code>0C 00 00 02</code></td>
+<td>Always empty</td>
+<td>—</td>
+<td>AVOID</td>
+</tr>
+<tr>
+<td>0x200</td>
+<td>LogMetadata / RecordList</td>
+<td><code>0C 00 00 04</code></td>
+<td>N × 48 B</td>
+<td>1 / 1 (empty at 0)</td>
+<td>SAFE-READ</td>
+</tr>
+<tr>
+<td>0x400</td>
+<td>PDList</td>
+<td><code>0C 00 00 08</code></td>
+<td>Always empty</td>
+<td>—</td>
+<td>AVOID</td>
+</tr>
+</tbody>
+</table></div>
+<p>Where each row comes from:</p>
+<ul>
+<li><strong>Names:</strong> vendor names <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.2</a></span>, plus <code>ATT_TICK = 0x080</code> and <code>ATT_TICK__ = 0x100</code> in the vendor sample <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:38-50</a></span>; R names <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/packet.rs#L151-L170">packet.rs:151-170</a></span>; O names and the 0x080–0x400 rows <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L179-L191">protocol.md:179-191</a></span>; L constants <span class="cite src"><span class="kind">source</span> L <a href="https://github.com/LongDirtyAnimAlf/km003c/blob/be3fcf02865bdca0fd04f9309b0d6c6e9893ae21/PC/USBCController/km003c.pas#L297-L305">km003c.pas:297-305</a></span>.</li>
+<li><strong>The 1.9.9 gating:</strong> firmware decompilation shows <code>attribute_mask &amp;= 0x19</code> at auth level 0, which keeps only ADC, SETTINGS and PD_PACKET <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L110-L113">handlers.md:110-113, 254-270</a></span>.</li>
+<li><strong>The 2.0.6 gating:</strong> device observations <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L181-L206">protocol.md:181-206</a></span>.</li>
+<li><strong>HID PD reports:</strong> I found that "HID PD-only requests did not respond on the tested unit" <span class="cite notes"><span class="kind">notes</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/README.md?plain=1#L354">README.md:354</a></span>. NV sends <code>0C 00 20 00</code> over HID by default <span class="cite src"><span class="kind">source</span> NV <a href="https://github.com/nevetssf/powerz/blob/33b23b932eb302f53cae5185558e8f5984b7ea8a/src/powerz/constants.py#L15-L18">constants.py:15-18,66</a>; <a href="https://github.com/nevetssf/powerz/blob/33b23b932eb302f53cae5185558e8f5984b7ea8a/src/powerz/device/reader.py#L41">device/reader.py:41</a></span>. R calls HID "ADC/PD polling" mode <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L196-L224">device.rs:196-224</a></span>. <strong>Treat PD over HID as unsafe</strong> (§14 C8).</li>
+</ul>
+<hr />
+<h2 id="6-adc-snapshot-attribute-0x001">6. ADC snapshot (attribute 0x001)</h2>
+<section class="verify" id="verified-adc" aria-label="Verified on device: ADC">
+<h4>Verified on device: the user's KM003C (application firmware 1.9.5, serial 050002)</h4>
+<p>These results come from whitelisted reads on 2026-11-16. Each row is <span class="status ok">verified (fw 1.9.5)</span>, <span class="status">pending</span> or <span class="status np">not probed</span>. Evidence links point to the raw frames in <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">hardware/km003c/testdata/fw1.9.5/</a>; request ids 1–14 were on bulk, 15–17 on HID and 18–20 on CDC.</p>
+<div class="table-wrap"><table class="wide">
+<thead><tr><th>Item</th><th>Spec says</th><th>Verified on device</th><th>Evidence (capture / date)</th></tr></thead>
+<tbody>
+<tr><td>Firmware version (MemoryRead 0x4420, +0x1C)</td><td>Unknown (§9, C20)</td><td><span class="status ok">verified (fw 1.9.5)</span> Model <code>KM003C</code>, version <code>1.9.5</code>, date <code>2025.1.7</code>, u32@0 = <code>0x00004000</code>. The 0x420 block reads <code>KM003C</code> / <code>2.2</code> / <code>2024.9.23</code>.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_2_plain.hex">bulk_W6_2_plain.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_plain.hex">bulk_W6_1_plain.hex</a> (2026-11-16)</td></tr>
+<tr><td>ADC request over bulk IF0</td><td><code>0C id 02 00</code>, no CONNECT or auth (§6.5)</td><td><span class="status ok">verified (fw 1.9.5)</span> Answered with no prior CONNECT or auth, 5 of 5. Latency 0.54–0.74 ms.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_req.hex">bulk_W1_1_req.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a> … <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_5_resp.hex">bulk_W1_5_resp.hex</a></td></tr>
+<tr><td>Reply length and section header</td><td>52 B; <code>01 00 00 0B</code> (size 44), or 48 B with size 40</td><td><span class="status ok">verified (fw 1.9.5)</span> 52 B: <code>41 id 80 02</code> + <code>01 00 00 0B</code> + a 44-byte payload.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a></td></tr>
+<tr><td>Reply id echo</td><td>Echoed (C6)</td><td><span class="status ok">verified (fw 1.9.5)</span> The request id was echoed on 20 of 20 requests across bulk, HID and CDC.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a> (echo column)</td></tr>
+<tr><td>Header bytes 2–3 (obj, permi)</td><td>Opaque; permi = auth level (C5)</td><td><span class="status ok">verified (fw 1.9.5)</span> permi = 0 without auth. obj = <code>len/4 − 3</code> held for all four reply sizes: 20 B gave obj 2 (<code>80 00</code>), 52 B gave 10 (<code>80 02</code>), 68 B gave 14 (<code>80 03</code>), 188 B gave 44 (<code>00 0B</code>). Still frame by section headers.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W3_1_resp.hex">bulk_W3_1_resp.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W4_1_resp.hex">bulk_W4_1_resp.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W2_1_resp.hex">bulk_W2_1_resp.hex</a></td></tr>
+<tr><td>Payload 0x00–0x23 scaling</td><td>µV, µA, °C = raw/128, 0.1 mV (§6.2)</td><td><span class="status ok">verified (fw 1.9.5)</span> Matches the meter's screen. Idle example: VBUS 5.173 mV, IBUS −28 µA, temperature raw 3366 = 26.30 °C, CC1 68.2 mV, CC2 27.8 mV, D+ 86.5 mV, D− 90.6 mV, VDD 3.206 V.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a></td></tr>
+<tr><td>Tail 0x24–0x2B and rate byte</td><td>Firmware-dependent; rate at 0x24 or 0x26 (C1, C2)</td><td><span class="status ok">verified (fw 1.9.5)</span> Tail = <code>00 80 1A 00 55 00 5A 00</code>.
+<ul>
+<li>0x26, 0x28 and 0x2A are u16 <strong>CC2, D+ and D− averages in mV</strong>: 26 vs CC2 27.8, 85 vs D+ 86.5, 90 vs D− 90.5. This confirms R's layout and rules out O's on this firmware.</li>
+<li>0x24 = 0x00 while SETTINGS reports rate code 2 (50 SPS), so <strong>0x24 is not the configured rate</strong> here.</li>
+<li>0x24–0x25 are a constant <code>00 80</code> of unknown meaning.</li>
+</ul></td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a> … <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_5_resp.hex">_5</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W2_1_resp.hex">bulk_W2_1_resp.hex</a> (SETTINGS)</td></tr>
+<tr><td>IBUS sign vs. power-flow direction</td><td>Conflicting (C3)</td><td><span class="status">pending</span> Only about 0 A was measured (±tens of µA of noise), so the sign convention is still open.</td><td>—</td></tr>
+<tr><td>Same ADC request over HID IF3</td><td>One 64-byte report, ADC only (§6.5)</td><td><span class="status ok">verified (fw 1.9.5)</span> 64 B: the 52-byte frame plus 12 zero bytes. 2.23–2.41 ms, no reboot.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/hid_W1_1_req.hex">hid_W1_1_req.hex</a> (65 B hidapi buffer; the leading 00 is not on the wire), <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/hid_W1_1_resp.hex">hid_W1_1_resp.hex</a> … <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/hid_W1_3_resp.hex">_3</a></td></tr>
+<tr><td>Same ADC request over CDC IF2</td><td>Works; avoid other frames (§6.5, §11)</td><td><span class="status ok">verified (fw 1.9.5)</span> Exactly 52 B, 0.25–0.29 ms.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/cdc_W1_1_resp.hex">cdc_W1_1_resp.hex</a> … <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/cdc_W1_3_resp.hex">_3</a></td></tr>
+<tr><td>SETTINGS over bulk without CONNECT</td><td>Unverified on bulk (§1, W2)</td><td><span class="status ok">verified (fw 1.9.5)</span> 188 B, sent before any CONNECT. Both CRC-32s verify. u32@0x60 = <code>0x4A</code> (rate code 2, rotation 2). Name <code>POWER-Z</code>.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W2_1_resp.hex">bulk_W2_1_resp.hex</a></td></tr>
+<tr><td>PD_PACKET (0x10) and ADC+PD (0x11)</td><td>12-byte status, plus records (§7)</td><td><span class="status ok">verified (fw 1.9.5)</span>
+<ul>
+<li>PD: 20 B, a 12-byte status and no records when idle.</li>
+<li>ADC+PD: 68 B in two chained sections (att 1, next = 1, size 44; then att 0x10, size 12).</li>
+</ul></td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W3_1_resp.hex">bulk_W3_1_resp.hex</a> … <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W3_3_resp.hex">_3</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W4_1_resp.hex">bulk_W4_1_resp.hex</a></td></tr>
+<tr><td>CONNECT and MemoryRead (bulk)</td><td>CONNECT then <code>44 id 01 01</code> + AES; no auth (§9.2)</td><td><span class="status ok">verified (fw 1.9.5)</span>
+<ul>
+<li>CONNECT returned <code>05 0b 00 00</code> on the first try.</li>
+<li>0x420, 0x4420 and 0x03000C00 each returned a 20-byte <code>C4 id 01 01</code> confirmation (encrypted flag set), then 64 B of ciphertext about 14 ms later as a separate transfer, <strong>then a zero-length packet</strong>.</li>
+</ul></td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W5_1_resp.hex">bulk_W5_1_resp.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_req.hex">bulk_W6_1_req.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_resp.hex">bulk_W6_1_resp.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_respdata.hex">bulk_W6_1_respdata.hex</a> (and W6_2, W6_3)</td></tr>
+<tr><td>Stale data on EP 0x81 at open</td><td>Often a stale <code>03 xx 00 00</code> (§2)</td><td><span class="status ok">verified (fw 1.9.5)</span> Nothing was stale at open in this run (the drain read 0 transfers). Draining is still required after failures: see the hazard box at the top.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a> (drain note)</td></tr>
+</tbody>
+</table></div>
+</section>
+<h3 id="61-response-frame">6.1 Response frame</h3>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Packet offset</th>
+<th>Size</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>4</td>
+<td>Main header: <code>41 id xx xx</code> (type 0x41; bytes 2–3 opaque)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>4</td>
+<td>Section header: <code>01 00 00 0B</code> (att 1, next 0, chunk 0, size 44). Older firmware: <code>01 00 00 0A</code> (size 40).</td>
+</tr>
+<tr>
+<td>8</td>
+<td>44 (or 40)</td>
+<td>ADC payload (6.2)</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>Total length is 52 bytes, or 48 on older firmware.</li>
+<li>K treats packet bytes 0–7 as <code>_unknown_1[8]</code> and requires <code>actual_length &gt;= 48</code> <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L20-L34">powerz.c:20-34, 146-147</a></span>.</li>
+<li>The 40-byte form comes from <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> (<code>01 00 00 0A</code>).</li>
+</ul>
+<h3 id="62-payload-layout">6.2 Payload layout</h3>
+<p>Offsets are relative to the payload start, which is packet offset 8. All values are little-endian.</p>
+<p>Columns: <strong>Off</strong> is the payload offset and <strong>Pkt</strong> is the offset inside the full packet.</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Off</th>
+<th>Pkt</th>
+<th>Type</th>
+<th>Field</th>
+<th>Unit and scale</th>
+<th>Agreement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>8</td>
+<td>i32</td>
+<td>VBUS</td>
+<td>µV; V = raw/1e6</td>
+<td>All sources: <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L22">powerz.c:22, 181</a></span> (/1000 gives mV); <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> ("单位1uV", unit 1 µV); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L72">adc.rs:72, 142</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/adc.rs#L43">decode/adc.rs:43,60-62</a></span>; <span class="cite src"><span class="kind">source</span> N <a href="https://github.com/nbuchwitz/usb-meter/blob/3d065276e24cafcf419b3fb71bed948841493dda/src/usb_meter/meter.py#L65">meter.py:65,69</a></span>; <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L175">protocol.py:175</a></span></td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>12</td>
+<td>i32</td>
+<td>IBUS, <strong>signed</strong></td>
+<td>µA; A = raw/1e6</td>
+<td>All sources: <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L23">powerz.c:23, 173</a></span> (s32); <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L73">adc.rs:73</a></span>. The sign convention conflicts (§14 C3).</td>
+</tr>
+<tr>
+<td>0x08</td>
+<td>16</td>
+<td>i32</td>
+<td>VBUS average (smoothed)</td>
+<td>µV</td>
+<td><span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L24">powerz.c:24,195</a></span>; <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> ("平滑滤波后的平均电压", smoothed average voltage); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L74">adc.rs:74</a></span></td>
+</tr>
+<tr>
+<td>0x0C</td>
+<td>20</td>
+<td>i32</td>
+<td>IBUS average (smoothed)</td>
+<td>µA</td>
+<td><span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L25">powerz.c:25,175</a></span>; <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span>; <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L75">adc.rs:75</a></span></td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>24</td>
+<td>i32</td>
+<td>VBUS average, <strong>uncalibrated</strong></td>
+<td>Raw. µV per <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/adc.rs#L47">decode/adc.rs:47</a></span></td>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> ("未校准", uncalibrated); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L76">adc.rs:76</a></span> ("Uncalibrated"); K skips it (<code>_unknown_2</code>)</td>
+</tr>
+<tr>
+<td>0x14</td>
+<td>28</td>
+<td>i32</td>
+<td>IBUS average, uncalibrated</td>
+<td>Raw / µA</td>
+<td>Same sources as 0x10</td>
+</tr>
+<tr>
+<td>0x18</td>
+<td>32</td>
+<td>i16</td>
+<td>Temperature</td>
+<td>°C = raw/128. <code>0x8000</code> = invalid.</td>
+<td><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L78-L79">adc.rs:78-79, 155</a></span> (raw/128); <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/adc.rs#L12">decode/adc.rs:12, 49, 90-92</a></span> (adds the 0x8000 sentinel); <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L27">powerz.c:27, 200</a></span> computes m°C = <code>b[1]*2000 + b[0]*1000/128</code>, which equals raw/128 only when raw ≥ 0; <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> (<code>int16_t Temp</code>, unit not stated)</td>
+</tr>
+<tr>
+<td>0x1A</td>
+<td>34</td>
+<td>u16</td>
+<td>CC1 voltage</td>
+<td>0.1 mV; V = raw/10000</td>
+<td><span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L28">powerz.c:28,183</a></span> (/10 gives mV); <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> ("分辨率0.1mV", 0.1 mV resolution); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L80">adc.rs:80,160</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/adc.rs#L50">decode/adc.rs:50,95-97</a></span></td>
+</tr>
+<tr>
+<td>0x1C</td>
+<td>36</td>
+<td>u16</td>
+<td>CC2 voltage</td>
+<td>0.1 mV</td>
+<td>Same sources as 0x1A</td>
+</tr>
+<tr>
+<td>0x1E</td>
+<td>38</td>
+<td>u16</td>
+<td>D+ voltage</td>
+<td>0.1 mV</td>
+<td>Same sources as 0x1A</td>
+</tr>
+<tr>
+<td>0x20</td>
+<td>40</td>
+<td>u16</td>
+<td>D− voltage</td>
+<td>0.1 mV</td>
+<td>Same sources as 0x1A</td>
+</tr>
+<tr>
+<td>0x22</td>
+<td>42</td>
+<td>u16</td>
+<td>Internal VDD</td>
+<td>0.1 mV (about 3.2 V seen)</td>
+<td><span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L32">powerz.c:32,191</a></span>; <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> ("内部VDD电压", internal VDD voltage); <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L84">adc.rs:84</a></span></td>
+</tr>
+<tr>
+<td>0x24–0x2B</td>
+<td>44–51</td>
+<td>—</td>
+<td><strong>Tail: layout depends on firmware</strong></td>
+<td>—</td>
+<td>See 6.3</td>
+</tr>
+</tbody>
+</table></div>
+<p>Notes:</p>
+<ul>
+<li>Power is computed on the host as <code>V × I</code> (signed) <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L150">adc.rs:150</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L239">protocol.md:239</a></span>.</li>
+<li>The temperature reads <code>0x8000</code> (invalid) while the queue runs at 1000 SPS <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L224">protocol.md:224</a></span>.</li>
+</ul>
+<h3 id="63-tail-bytes-0x240x2b-unresolved-decode-as-raw">6.3 Tail bytes 0x24–0x2B: unresolved, decode as raw</h3>
+<p>Each source reads the tail differently:</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Source</th>
+<th>0x24</th>
+<th>0x25</th>
+<th>0x26–0x27</th>
+<th>0x28–0x29</th>
+<th>0x2A–0x2B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span> (40-byte form)</td>
+<td><code>uint8 Rate:2</code> (low 2 bits)</td>
+<td><code>n[3]</code>, continuing through 0x27</td>
+<td>(0x26–0x27 are part of <code>n[3]</code>)</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L85-L89">adc.rs:85-89</a></span> (firmware 1.9.9 notes)</td>
+<td>u8 sample-rate index (0=2, 1=10, 2=50, 3=1k, 4=10k SPS)</td>
+<td>u8 "vendor flags" (128 seen)</td>
+<td>u16 CC2 average, 1 mV</td>
+<td>u16 D+ average, 1 mV</td>
+<td>u16 D− average, 1 mV</td>
+</tr>
+<tr>
+<td><span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/adc.rs#L10">decode/adc.rs:10, 55</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L230-L234">protocol.md:230-234</a></span> (firmware 2.0.6)</td>
+<td>i16 second temperature (<code>0x8000</code> = invalid), across 0x24–0x25</td>
+<td>(part of the i16)</td>
+<td>u8 at 0x26 = queue rate code 0..3; u8 at 0x27 unknown (0xF0)</td>
+<td>u16 battery level ×10</td>
+<td>u16 unknown (0x00FF)</td>
+</tr>
+<tr>
+<td><span class="cite src"><span class="kind">source</span> L <a href="https://github.com/LongDirtyAnimAlf/km003c/blob/be3fcf02865bdca0fd04f9309b0d6c6e9893ae21/PC/USBCController/km003c.pas#L229-L234">km003c.pas:229-234</a></span></td>
+<td>Rate</td>
+<td>Flags</td>
+<td>V_cc2_avg</td>
+<td>V_dp_avg</td>
+<td>V_dm_avg (same as R)</td>
+</tr>
+<tr>
+<td><span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L180-L181">protocol.py:180-181</a></span></td>
+<td><code>payload[36] &amp; 3</code> as rate</td>
+<td>Rest kept as raw hex</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>K</td>
+<td><code>_unknown_3[4]</code>; reads only up to 0x27</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>How the captured vectors fit each layout (my own decode of the bytes, §6.4):</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Vector</th>
+<th>Tail bytes</th>
+<th>Fits R?</th>
+<th>Fits O?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>O <code>adc_52.hex</code> (firmware 2.0.6)</td>
+<td><code>00 80 02 F0 00 00 FF 00</code></td>
+<td>No: CC2 average 0xF002 does not match CC2 = 29.4 mV</td>
+<td>Plausibly, by inference: a separate O settings dump shows a meter rate of 50 SPS = code 2 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L343-L346">protocol.md:343-346</a></span>. That dump is not from the same capture.</td>
+</tr>
+<tr>
+<td>R <code>EXTENDED_ADC_DATA</code> (<code>tests/common/mod.rs:36-37</code>)</td>
+<td><code>00 80 A4 0C 00 00 00 00</code></td>
+<td>Yes: CC2 average 0x0CA4 = 3236 mV vs CC2 = 3237.1 mV</td>
+<td>No: rate code 0xA4 is impossible</td>
+</tr>
+<tr>
+<td>R <code>REAL_ADC_RESPONSE</code> (<code>tests/common/mod.rs:28-32</code>)</td>
+<td><code>00 80 02 00 00 00 00 00</code></td>
+<td>Ambiguous</td>
+<td>Ambiguous</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Conclusion:</strong></p>
+<ol type="1">
+<li>Decode offsets 0x00–0x23 (36 bytes) only.</li>
+<li>Expose 0x24–0x2B as raw bytes.</li>
+<li>Accept a section size of 40 or 44, and never require more than 36.</li>
+</ol>
+<h3 id="64-worked-examples">6.4 Worked examples</h3>
+<p><strong>Example A</strong>, firmware 2.0.6, idle, nothing attached <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/tests/vectors/adc_52.hex">tests/vectors/adc_52.hex</a></span>:</p>
+<pre><code>41 01 80 02  01 00 00 0B  64 10 00 00  A1 FF FF FF  91 10 00 00  B0 FF FF FF
+F5 10 00 00  00 00 00 00  BA 0E 25 03  26 01 D4 02  F2 02 30 7D  00 80 02 F0
+00 00 FF 00</code></pre>
+<p>Decoded:</p>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Field</th>
+<th>Raw</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Header</td>
+<td><code>41 01 80 02</code></td>
+<td>type 0x41, id 1; bytes 2–3 = 0x0280, so obj = 10 and permi = 0</td>
+</tr>
+<tr>
+<td>VBUS</td>
+<td>4196</td>
+<td>4.196 mV</td>
+</tr>
+<tr>
+<td>IBUS</td>
+<td>−95</td>
+<td>−95 µA</td>
+</tr>
+<tr>
+<td>VBUS average</td>
+<td>4241</td>
+<td>µV</td>
+</tr>
+<tr>
+<td>IBUS average</td>
+<td>−80</td>
+<td>µA</td>
+</tr>
+<tr>
+<td>VBUS uncalibrated</td>
+<td>4341</td>
+<td></td>
+</tr>
+<tr>
+<td>IBUS uncalibrated</td>
+<td>0</td>
+<td></td>
+</tr>
+<tr>
+<td>Temperature</td>
+<td>3770</td>
+<td>29.45 °C</td>
+</tr>
+<tr>
+<td>CC1</td>
+<td>805</td>
+<td>80.5 mV</td>
+</tr>
+<tr>
+<td>CC2</td>
+<td>294</td>
+<td>29.4 mV</td>
+</tr>
+<tr>
+<td>D+</td>
+<td>724</td>
+<td>72.4 mV</td>
+</tr>
+<tr>
+<td>D−</td>
+<td>754</td>
+<td>75.4 mV</td>
+</tr>
+<tr>
+<td>VDD</td>
+<td>32048</td>
+<td>3.2048 V</td>
+</tr>
+</tbody>
+</table></div>
+<p>O's prose gives the same values <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L236-L238">protocol.md:236-238</a></span>. I re-derived them from the hex.</p>
+<p><strong>Example B</strong>, with a 5 V source <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/tests/common/mod.rs#L26-L32">tests/common/mod.rs:26-32</a>; asserted values in <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/tests/adc_tests.rs#L108-L200">tests/adc_tests.rs:108-200</a></span>:</p>
+<pre><code>41 00 80 02  01 00 00 0B  45 1C 4D 00  AE 9E FE FF  ...  C9 0C  8A 10 ...</code></pre>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Field</th>
+<th>Raw</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VBUS</td>
+<td>0x004D1C45 = 5053509</td>
+<td>5.0535 V</td>
+</tr>
+<tr>
+<td>IBUS</td>
+<td>0xFFFE9EAE = −90450</td>
+<td>−0.090 A</td>
+</tr>
+<tr>
+<td>Temperature</td>
+<td>0x0CC9 = 3273</td>
+<td>25.57 °C</td>
+</tr>
+<tr>
+<td>CC1</td>
+<td>0x108A = 4234</td>
+<td>0.4234 V</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Example C</strong>, vendor PDF, 40-byte payload <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.3</a></span>:</p>
+<pre><code>41 09 02 02  01 00 00 0A  05 3E 00 00  1A 00 00 00 ... 4D 84 69 0C D2 0C</code></pre>
+<p>The request was <code>0c 00 02 00</code>, yet the reply id is <code>09</code>; see §14 C6.</p>
+<h3 id="65-recipe-read-adc-once-bulk-if0">6.5 Recipe: "read ADC once" (bulk IF0)</h3>
+<ol type="1">
+<li>Find <code>5FC9:0063</code>, open it and claim interface 0.
+<ul>
+<li>Linux: detach <code>powerz</code> first.</li>
+<li>macOS: no detach is needed <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L58-L61">protocol.md:58-61</a></span>.</li>
+<li>Do <strong>not</strong> USB-reset the device. R resets by default and then waits 1.5 s <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L510-L521">device.rs:510-521</a></span>; nothing requires a reset. K never resets.</li>
+</ul></li>
+<li>Drain EP 0x81: read with roughly a 50–100 ms timeout until a read times out, discarding anything that arrives (for example <code>03 xx 00 00</code>) <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/bulk.rs#L25-L36">transport/bulk.rs:25-36</a></span>. <strong>Do the same after any timed-out or failed exchange, before the next write.</strong> On the user's unit, writing while EP 0x81 still held a reply or ZLP stalled the meter and caused a watchdog reboot; see the hazard box at the top <span class="cite device"><span class="kind">device</span> fw 1.9.5</span>.</li>
+<li><code>id := next u8</code>. Any value works; K uses 0. Write <code>0C id 02 00</code> (4 bytes) to EP 0x01.</li>
+<li>Read EP 0x81 into a buffer of at least 2048 bytes, with a 1 s timeout.
+<ul>
+<li>K waits only 5 ms <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c#L134-L135">powerz.c:134-135</a></span>.</li>
+<li>RR measured a median ADC latency of 164 µs <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L694">protocol_reference.md:694</a></span>.</li>
+<li>The vendor app uses 1000 ms (2000 ms for CONNECT) <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L738">protocol.md:738</a></span>.</li>
+</ul></li>
+<li>Validate the reply:
+<ul>
+<li><code>len &gt;= 8</code>.</li>
+<li><code>b[0] &amp; 0x7F == 0x41</code>. If it is <code>0x03</code> (DISCONNECT) or <code>0x06</code> (REJECT), retry once.</li>
+<li><code>b[1] == id</code>. If the id differs, the frame is stale: skip it and keep reading until the timeout. Then drain EP 0x81 before the next write (§14 C6, resolved on fw 1.9.5).</li>
+<li><code>ext := LE32(b[4:8])</code>, <code>ext &amp; 0x7FFF == 1</code>, and <code>size := ext &gt;&gt; 22</code> is at least 36.</li>
+<li><code>len &gt;= 8 + size</code>.</li>
+<li>A 4-byte <code>41 id ..</code> reply means empty: retry.</li>
+</ul></li>
+<li>Decode <code>b[8 : 8+size]</code> with the table in 6.2.</li>
+<li><strong>Pacing:</strong>
+<ul>
+<li>Keep one request in flight.</li>
+<li>The vendor app polls ADC about every 200 ms <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L614-L621">protocol_reference.md:614-621</a></span>.</li>
+<li>O uses at least 60 ms between requests <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L718-L719">protocol.md:718-719</a></span>.</li>
+</ul></li>
+</ol>
+<p><strong>HID variant (IF3).</strong></p>
+<ul>
+<li>Write the 64-byte output report <code>0C id 02 00</code> followed by 60 × <code>00</code>. Through hidapi that is a 65-byte buffer starting with <code>00</code>.</li>
+<li>Read one 64-byte input report and parse it as above. Bytes after <code>8+size</code> are zero padding.</li>
+<li>Do <strong>not</strong> send anything else over HID <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/hid.rs#L49-L73">transport/hid.rs:49-73</a></span>, <span class="cite src"><span class="kind">source</span> N <a href="https://github.com/nbuchwitz/usb-meter/blob/3d065276e24cafcf419b3fb71bed948841493dda/src/usb_meter/meter.py#L178-L204">meter.py:178-204</a></span>.</li>
+<li><strong>The vendor's own sample does exactly this</strong> <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:230-252, 266-291</a></span>. It sends a 64-byte interrupt OUT transfer whose first 4 bytes are <code>0C 00 02 00</code> (id always 0), reads one 64-byte interrupt IN transfer, uses a 1000 ms timeout and polls every 150 ms. It checks <code>type == 0x41</code> and section <code>att == 1</code>, and displays <code>Vbus_avg</code> and <code>Ibus_avg</code>.
+<ul>
+<li>In that sample, bytes 4–63 of the OUT buffer are uninitialised stack memory, so the firmware evidently ignores them. Zero-pad anyway.</li>
+</ul></li>
+<li>O also reports that control commands (CONNECT, 0x0E, 0x0F, 0x44, 0x4C) get no reply over HID <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L754-L756">protocol.md:754-756</a></span>.</li>
+</ul>
+<p><strong>CDC variant (not recommended).</strong></p>
+<ul>
+<li>Write <code>0C id 02 00</code> to the tty and read until a full 52-byte frame matches the id. I's hardware check confirmed it works <span class="cite notes"><span class="kind">notes</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/README.md?plain=1#L354">README.md:354</a>; source I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L268-L283">transport.py:268-283</a></span>.</li>
+<li>Never write <code>0x01</code>, <code>0x02</code> or <code>0x03</code> frames there.</li>
+</ul>
+<hr />
+<h2 id="7-pd-data-attribute-0x010-and-related">7. PD data (attribute 0x010) and related</h2>
+<h3 id="71-pd-status-block-12-bytes">7.1 PD status block (12 bytes)</h3>
+<p>When the payload is exactly 12 bytes, the reply is status only. When it is longer, the status block is the preamble of an event stream.</p>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>Off</th>
+<th>Type</th>
+<th>Field</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>u32</td>
+<td>Device timestamp</td>
+<td>ms</td>
+</tr>
+<tr>
+<td>4</td>
+<td>u16</td>
+<td>VBUS</td>
+<td>mV</td>
+</tr>
+<tr>
+<td>6</td>
+<td>i16</td>
+<td>IBUS, signed</td>
+<td>mA</td>
+</tr>
+<tr>
+<td>8</td>
+<td>u16</td>
+<td>CC1 (on a UFCS stream: D+)</td>
+<td>mV</td>
+</tr>
+<tr>
+<td>10</td>
+<td>u16</td>
+<td>CC2 (on a UFCS stream: D−)</td>
+<td>mV</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/pd.rs#L18-L30">pd.rs:18-30</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/constants.rs#L9-L10">constants.rs:9-10</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/pd_packet.rs#L7-L36">decode/pd_packet.rs:7-36</a></span>; <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L255">protocol.py:255</a></span>; <span class="cite src"><span class="kind">source</span> L <a href="https://github.com/LongDirtyAnimAlf/km003c/blob/be3fcf02865bdca0fd04f9309b0d6c6e9893ae21/PC/USBCController/km003c.pas#L173-L180">km003c.pas:173-180</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L990-L998">protocol.md:990-998</a></span>.</p>
+<h3 id="72-event-and-pd-message-records-after-the-status-block">7.2 Event and PD-message records after the status block</h3>
+<p>Each record starts with a flag/length byte <code>b0</code>.</p>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th><code>b0</code></th>
+<th>Record length (including b0)</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bit 7 set</td>
+<td><code>(b0 &amp; 0x3F) + 1</code></td>
+<td>PD message</td>
+</tr>
+<tr>
+<td>bit 7 clear, bit 5 set</td>
+<td><code>(b0 &amp; 0x1F) + 1 + u16 at +6</code></td>
+<td>Long (extended) PD message, per <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/pd_packet.rs#L232-L251">decode/pd_packet.rs:232-251</a></span></td>
+</tr>
+<tr>
+<td>bit 7 clear, bit 5 clear</td>
+<td><code>(b0 &amp; 0x1F) + 1</code></td>
+<td>Event (for example <code>0x45</code> gives 6 bytes)</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>Bit 6 of <code>b0</code> marks a record the meter sent itself <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L1008-L1009">protocol.md:1008-1009</a></span>.</li>
+<li>The PD-message length rule agrees with R and I. They compute <code>wire_len = (b0&amp;0x3F) − 5</code> after a 6-byte header, which gives the same total <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/pd.rs#L222-L252">pd.rs:222-252</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/constants.rs#L36-L40">constants.rs:36-40</a></span>, <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L283-L306">protocol.py:283-306</a></span>.</li>
+</ul>
+<p><strong>Record body:</strong></p>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Offset</th>
+<th>PD message</th>
+<th>Event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>+1</td>
+<td>u32 timestamp, ms, same clock as the status block</td>
+<td>Same</td>
+</tr>
+<tr>
+<td>+5</td>
+<td>SOP type in the low 3 bits: 0 SOP, 1 SOP′, 2 SOP″, 3 SOP′_Debug, 4 SOP″_Debug</td>
+<td>Low nibble = event code, high nibble = parameter</td>
+</tr>
+<tr>
+<td>+6</td>
+<td>u16 USB-PD message header</td>
+<td>—</td>
+</tr>
+<tr>
+<td>+8</td>
+<td>u32 × n data objects (no CRC)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources: <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/pd_packet.rs#L255-L285">decode/pd_packet.rs:255-285</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L1017-L1031">protocol.md:1017-1031</a></span>.</p>
+<p><strong>Event codes:</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>none</td>
+</tr>
+<tr>
+<td>1</td>
+<td>attach (parameter 1 = CC1, 2 = CC2)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>detach</td>
+</tr>
+<tr>
+<td>3</td>
+<td>bad message id</td>
+</tr>
+<tr>
+<td>4</td>
+<td>hard reset</td>
+</tr>
+<tr>
+<td>5</td>
+<td>cable reset</td>
+</tr>
+<tr>
+<td>6</td>
+<td>receive error (the parameter gives the cause)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>monitor type</td>
+</tr>
+<tr>
+<td>8</td>
+<td>big message</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources: <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L1029-L1031">protocol.md:1029-1031</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/pd_packet.rs#L286-L322">decode/pd_packet.rs:286-322</a></span> (<code>decode_event</code>: low nibble = code, high nibble = parameter).</p>
+<p>L's constants agree with this decoding: <code>0x11</code> attach CC1, <code>0x12</code> detach CC1, <code>0x21</code> / <code>0x22</code> connect / disconnect, <code>0x46</code>–<code>0x96</code> receive errors <span class="cite src"><span class="kind">source</span> L <a href="https://github.com/LongDirtyAnimAlf/km003c/blob/be3fcf02865bdca0fd04f9309b0d6c6e9893ae21/PC/USBCController/km003c.pas#L283-L295">km003c.pas:283-295</a></span>. R treats <code>0x45</code> + <code>0x21</code>/<code>0x22</code> as connect/disconnect and <code>0x11</code>/<code>0x12</code> as "legacy" <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/constants.rs#L21-L34">constants.rs:21-34</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/pd.rs#L202-L219">pd.rs:202-219</a></span>. See §14 C15.</p>
+<p><strong>Reading PD data:</strong></p>
+<ul>
+<li>Classification: READ-CONSUMES. Records are queued in the device and drained by each poll.</li>
+<li>One section carries at most about 320 bytes. Poll quickly (every 5–40 ms) to keep up <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L980-L984">protocol.md:980-984</a></span>.</li>
+<li>PD polling works at L0 without 0x10 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L977-L984">protocol.md:977-984</a></span>, <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L639-L649">protocol_reference.md:639-649</a></span>.</li>
+</ul>
+<h3 id="73-attribute-0x020-pd_status--pdtrace">7.3 Attribute 0x020 (PD_STATUS / PdTrace)</h3>
+<p>The section-header size is 0, so take the rest of the frame <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/frame.rs#L387-L393">frame.rs:387-393</a></span>, <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L392-L397">protocol_reference.md:392-397</a></span>.</p>
+<p><strong>R reading (firmware 1.9.9):</strong> two length-prefixed queues: <code>[n1:u8][code:u8, uptime_s:u32]... [n2:u8][code:u8, uptime_s:u32]...</code> <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L380-L408">protocol_reference.md:380-408</a></span>. O sees 2 or 12 trailing bytes <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L186">protocol.md:186, 193-195</a></span>, which fits two empty queues (<code>00 00</code>) or one record in each queue.</p>
+<p>Classification: READ-CONSUMES. A CLI does not need it.</p>
+<h3 id="74-attribute-0x040-qc_packet-really-a-ufcs-sniffer">7.4 Attribute 0x040 (QC_PACKET; really a UFCS sniffer)</h3>
+<ul>
+<li>Firmware notes say this is a UFCS trace: a 12-byte preamble followed by 8-byte descriptors and frames <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L300-L320">handlers.md:300-320</a></span>.</li>
+<li>When idle, O sees the 12-byte status plus 8 constant bytes <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L187">protocol.md:187, 1032-1033</a></span>.</li>
+<li><strong>It is not a "detected protocol" field</strong> (§13).</li>
+</ul>
+<hr />
+<h2 id="8-adcqueue-attribute-0x002-settings-0x008-and-other-reads">8. AdcQueue (attribute 0x002), SETTINGS (0x008) and other reads</h2>
+<h3 id="81-adcqueue">8.1 AdcQueue</h3>
+<p>The CLI does not need this. The queue gives buffered high-rate samples.</p>
+<p><strong>Record (20 bytes):</strong></p>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Off</th>
+<th>Type</th>
+<th>Field</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>(conflict, §14 C10)</td>
+<td>4 bytes of time information</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>i32</td>
+<td>VBUS, µV</td>
+</tr>
+<tr>
+<td>0x08</td>
+<td>i32</td>
+<td>IBUS, µA</td>
+</tr>
+<tr>
+<td>0x0C</td>
+<td>u16</td>
+<td>CC1</td>
+</tr>
+<tr>
+<td>0x0E</td>
+<td>u16</td>
+<td>CC2</td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>u16</td>
+<td>D+</td>
+</tr>
+<tr>
+<td>0x12</td>
+<td>u16</td>
+<td>D−</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>CC and D± units: 0.1 mV at rate code 0 (2 SPS), 1 mV at the faster rates.</li>
+<li>Sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adcqueue.rs#L24-L32">adcqueue.rs:24-32, 65-69, 125-157</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/queue.rs#L5-L36">decode/queue.rs:5-36</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L271-L291">protocol.md:271-291</a></span>.</li>
+<li>Poll at least every 60 ms at 1000 SPS, or samples are lost <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L261-L263">protocol.md:261-263</a></span>.</li>
+</ul>
+<h3 id="82-settings">8.2 SETTINGS</h3>
+<p>The reply is 188 bytes: header, then section <code>att 8, size 180</code>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Offset</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00–0x5F</td>
+<td>Block A (96 B)</td>
+</tr>
+<tr>
+<td>0x00</td>
+<td>u32 flags: bit 0 language; bits 3–9 brightness %; bits 10–11 dim timeout; bits 14–15 startup-logo time; bits 16–18 theme; bit 27 auto-rotate</td>
+</tr>
+<tr>
+<td>0x1C</td>
+<td>5 × i32 calibration array</td>
+</tr>
+<tr>
+<td>0x30</td>
+<td>10 × i32 gains, about 1e6</td>
+</tr>
+<tr>
+<td>0x58</td>
+<td>i32 offset</td>
+</tr>
+<tr>
+<td>0x5C</td>
+<td>CRC-32 (IEEE/zlib) of 0x00..0x5B</td>
+</tr>
+<tr>
+<td>0x60–0xB3</td>
+<td>Block B (84 B)</td>
+</tr>
+<tr>
+<td>0x60</td>
+<td>u32 flags: bits 0–1 rotation; <strong>bits 2–3 = sample-rate code</strong> (0=2, 1=10, 2=50, 3=1000 SPS)</td>
+</tr>
+<tr>
+<td>0x70</td>
+<td>char[64] device name, e.g. <code>POWER-Z</code></td>
+</tr>
+<tr>
+<td>0xB0</td>
+<td>CRC-32 of 0x60..0xAF</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/settings.rs#L10-L17">settings.rs:10-17</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L410-L470">protocol_reference.md:410-470</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L297-L346">protocol.md:297-346</a></span>.</p>
+<ul>
+<li>Classification: SAFE-READ over bulk or CDC. <strong>Never over HID.</strong></li>
+<li>Use: the rate code at 0x60 bits 2–3 can be compared with ADC tail byte 0x24 or 0x26 to settle §14 C1 without changing anything on the device.</li>
+</ul>
+<h3 id="83-tick-and-logmetadatarecordlist">8.3 TICK and LogMetadata/RecordList</h3>
+<ul>
+<li><strong>TICK (0x080):</strong> 8 bytes, u32 uptime in ms followed by u32 0. Needs auth level 1 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L188">protocol.md:188</a></span>. The name comes from <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:48</a></span>.</li>
+<li><strong>LogMetadata/RecordList (0x200):</strong> N × 48-byte catalog entries. Needs L1. Entry size: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/offline.rs#L29">offline.rs:29</a></span> (<code>LOG_METADATA_SIZE = 48</code>); <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L525-L549">protocol_reference.md:525-549</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L544-L549">protocol.md:544-549</a></span>.</li>
+</ul>
+<hr />
+<h2 id="9-device-information-model-firmware-serial">9. Device information (model, firmware, serial)</h2>
+<h3 id="91-without-the-protocol-usb-descriptors-safe">9.1 Without the protocol: USB descriptors (SAFE)</h3>
+<p>These need no protocol traffic:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Descriptor</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>iManufacturer</td>
+<td><code>ChargerLab</code></td>
+</tr>
+<tr>
+<td>iProduct</td>
+<td><code>POWER-Z KM003C</code></td>
+</tr>
+<tr>
+<td>iSerial</td>
+<td><code>050002</code> on this unit</td>
+</tr>
+<tr>
+<td>IF0 interface string</td>
+<td><code>APP</code> = application mode, per <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L38">protocol.md:38</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<p>Neither the firmware version nor the OTP serial is in the descriptors.</p>
+<h3 id="92-memoryread-0x44-bulk-only-after-connect-known-addresses-only">9.2 MemoryRead (0x44): bulk only, after CONNECT, known addresses only</h3>
+<p><strong>Preconditions:</strong></p>
+<ul>
+<li><strong>Bulk IF0 only.</strong> Over HID there is no reply; over CDC there is no reply, and CONNECT there starts ADCNEW <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L477-L484">protocol.md:477-484, 754-756</a></span>.</li>
+<li><strong>CONNECT is required first.</strong> Without it the device answers <code>06 id 00 00</code> REJECT. This was observed on firmware 2.0.6 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L478-L482">protocol.md:478-482</a></span>, and O enforces it in code <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/memory.rs#L219">session/memory.rs:219</a></span>.</li>
+<li><strong>No authentication is needed</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L477-L478">protocol.md:477-478</a></span>. The firmware 1.9.9 decompilation shows no auth check on 0x44 <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L172-L200">handlers.md:172-200</a></span>.</li>
+</ul>
+<p><strong>Request (36 bytes):</strong> <code>44 id 01 01</code> followed by <code>AES-128-ECB(key0, P)</code>.</p>
+<ul>
+<li>Bytes 2–3 <code>01 01</code> are a raw header word. Do not build them with the att&lt;&lt;17 encoder <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L516-L523">message.rs:516-523</a></span>, <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/protocol_reference.md?plain=1#L154-L155">protocol_reference.md:154-155</a></span>.</li>
+<li><code>P</code> is 32 bytes of plaintext:</li>
+</ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Off</th>
+<th>Field</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>u32 address</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>u32 length</td>
+</tr>
+<tr>
+<td>0x08</td>
+<td>u32 <code>0xFFFFFFFF</code></td>
+</tr>
+<tr>
+<td>0x0C</td>
+<td>u32 CRC-32 (IEEE, as zlib <code>crc32</code>) of P[0:12]</td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>16 × <code>0xFF</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L271-L292">auth.rs:271-292</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/crypto/mod.rs#L15-L51">crypto/mod.rs:15-51</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L486-L495">protocol.md:486-495</a></span>.</p>
+<ul>
+<li><strong>key0</strong> = ASCII <code>Lh2yfB7n6X7d9a5Z</code> = <code>4C 68 32 79 66 42 37 6E 36 58 37 64 39 61 35 5A</code>. It appears in <span class="cite src"><span class="kind">source</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/km003c_analysis/device/protocol.py#L76-L77">km003c_analysis/device/protocol.py:76-77</a></span> and as <code>KEYS[0]</code> in <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/crypto/keys.rs#L10-L13">crypto/keys.rs:10-13</a></span>.</li>
+</ul>
+<p><strong>Reply:</strong></p>
+<ol type="1">
+<li>A 20-byte framed confirmation: <code>C4 id &lt;b2&gt; 01</code> followed by the plaintext echo of P[0:16] (address, length, magic, CRC).
+<ul>
+<li>Type <code>0x44</code> has the extend bit set, which gives <code>C4</code>.</li>
+<li><code>b2</code> bit 0 is the encrypted flag.</li>
+<li>Sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L312-L358">auth.rs:312-358</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L115-L168">memory.rs:115-168</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L497-L502">protocol.md:497-502</a></span>.</li>
+</ul></li>
+<li>Then <strong>unframed</strong> transfer(s) totalling <code>roundup16(length)</code> bytes. If the flag is set, decrypt them with AES-128-ECB key0 and truncate to <code>length</code> <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L29-L113">memory.rs:29-113</a></span>.</li>
+<li><strong>Then a zero-length packet</strong>, observed after a 64-byte (multiple-of-64) data transfer. <strong>Read it before writing the next request</strong>; leaving it queued stalls the meter and triggers a watchdog reboot (see the hazard box at the top).
+<ul>
+<li>On this unit: the confirmation arrived after 1.1–1.4 ms, the 64-byte ciphertext 14.5–15.2 ms after the request, then the ZLP.</li>
+<li><span class="cite device"><span class="kind">device</span> fw 1.9.5 <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_resp.hex">bulk_W6_1_resp.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_respdata.hex">bulk_W6_1_respdata.hex</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a></span></li>
+</ul></li>
+</ol>
+<p><strong>Errors:</strong></p>
+<ul>
+<li><code>06</code> REJECT: missing CONNECT, or bad magic, size or address.</li>
+<li><code>27</code> NOT_READABLE: bus fault.</li>
+</ul>
+<p>Sources: <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L43-L55">memory.rs:43-55</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L179-L187">device.rs:179-187</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L183-L209">handlers.md:183-209</a></span>.</p>
+<p><strong>Chunking and pacing:</strong></p>
+<ul>
+<li>Use at most <strong>256 bytes</strong> per request. O observed truncation above that on 2.0.6 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L504-L509">protocol.md:504-509</a></span>; R uses a 2528-byte chunk <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L14">memory.rs:14</a></span> (§14 C11). The info blocks are only 64 bytes.</li>
+<li>Space reads at least 50–100 ms apart <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L520-L521">protocol.md:520-521</a></span>.</li>
+<li>Do not read while AdcQueue streaming is active <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L1155-L1162">device.rs:1155-1162</a></span>.</li>
+</ul>
+<p><strong>Known addresses: the whitelist.</strong> Do not read any other address. Third parties report that other peripheral addresses crash the meter <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L520-L521">protocol.md:520-521, 1241</a></span>.</p>
+<p><strong>The firmware itself does not restrict addresses; the client-side whitelist is the only protection.</strong></p>
+<ul>
+<li>The MemoryRead handler checks only three things: magic = <code>0xFFFFFFFF</code>, size &lt; <code>0x3D0901</code>, and address &lt; <code>0x983D0901</code>.</li>
+<li>There is no lower bound and no allow-list, so peripheral registers can be read. Reading some registers has side effects, such as FIFOs and clear-on-read status registers.</li>
+<li>Sources: <a href="firmware.html#memread">firmware analysis §11</a> (1.9.5 through 2.0.7, identical logic), and <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L172-L200">handlers.md:172-200</a></span> (1.9.9).</li>
+</ul>
+<p><strong>Check the confirmation against the request.</strong> The confirmation echoes the address and length. The client must reject a <code>C4</code> confirmation whose address or length differs from what was requested, and must not read the following data as the requested block.</p>
+<ul>
+<li>One case where they differ: the firmware may redirect reads inside the OTP window 0x03000C00–0x03000D7F to 0x03000D80 (<a href="firmware.html#memread">firmware analysis §11</a>).</li>
+<li>R performs the same check <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L143-L148">memory.rs:143-148</a></span>.</li>
+<li>After a rejected confirmation, drain EP 0x81 before writing again: the ciphertext and the zero-length packet will still arrive (see the hazard box at the top).</li>
+</ul>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Address</th>
+<th>Length</th>
+<th>Content and parse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00000420</code></td>
+<td>64</td>
+<td>Info block. <code>0x10</code> model[12], e.g. <code>KM003C</code>. <code>0x1C</code> version[12]: R calls it hardware version ("2.1"); O says it is likely the bootloader/hardware version ("2.5"). <code>0x28</code> date, <code>0x34</code> extra. <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L164-L178">auth.rs:164-178</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/info.rs#L26-L40">decode/info.rs:26-40</a></span>; see §14 C12.</td>
+</tr>
+<tr>
+<td><code>0x00004420</code></td>
+<td>64</td>
+<td>Application firmware block. <code>0x00</code> u32 = <code>0x00004000</code>; <code>0xFFFFFFFF</code> means none. <code>0x10</code> model[12], <strong><code>0x1C</code> firmware version[12]</strong> (e.g. <code>1.9.9</code>, <code>2.0.6</code>), <code>0x28</code> firmware date[12]. <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L180-L196">auth.rs:180-196</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/info.rs#L26-L40">decode/info.rs:26-40</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L516">protocol.md:516</a></span></td>
+</tr>
+<tr>
+<td><code>0x03000C00</code></td>
+<td>64</td>
+<td>OTP/calibration block. The <strong>serial</strong> is the first ASCII token: R reads 7 bytes at 0x00, space-padded (e.g. <code>007965</code>); O reads up to a space, NUL or 0xFF. R reads a 32-character hex UUID at 0x07..0x26. <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L198-L208">auth.rs:198-208</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/info.rs#L64-L85">decode/info.rs:64-85</a></span></td>
+</tr>
+<tr>
+<td><code>0x40010450</code></td>
+<td>12</td>
+<td>MCU unique ID, used as the auth level-1 credential. Read it only if authentication is needed. <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L43-L47">auth.rs:43-47</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/memory.rs#L15-L21">session/memory.rs:15-21</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<p>R's whole "full init" sequence is: CONNECT, read 0x420, 0x4420 and 0x3000C00, read the UID, then StreamingAuth <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L961-L1034">device.rs:961-1034</a></span>. For a read-only <code>info</code> command, CONNECT plus the three 64-byte reads are enough.</p>
+<hr />
+<h2 id="10-authentication-0x4c-what-it-gates">10. Authentication (0x4C): what it gates</h2>
+<p><strong>Request (36 bytes):</strong> <code>4C id 00 02</code> followed by <code>AES-128-ECB(key3, P32)</code>.</p>
+<ul>
+<li>Bytes 2–3 <code>00 02</code> are a raw word: 0x0200 <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/message.rs#L524-L531">message.rs:524-531</a></span>, <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/auth.rs#L48-L53">session/auth.rs:48-53</a></span>.</li>
+<li><strong>key3</strong> = <code>Fa0b4tA25f4R038a</code> <span class="cite src"><span class="kind">source</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/km003c_analysis/device/protocol.py#L78-L79">protocol.py:78-79</a></span>, <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/crypto/keys.rs#L22-L25">crypto/keys.rs:22-25</a></span> (<code>KEYS[3]</code>).</li>
+<li>The P32 plaintext differs by source; per the 1.9.9 decompilation, only the credential bytes are checked:</li>
+</ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>P32 layout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L383-L403">auth.rs:383-403</a></span></td>
+<td><code>[u64 LE ms timestamp][12-byte credential][12 random bytes]</code></td>
+</tr>
+<tr>
+<td><span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/auth.rs#L17-L28">session/auth.rs:17-28</a></span></td>
+<td><code>[u64 ms][credential (≤16 B)][u64 random]</code>, padded with 0xFF</td>
+</tr>
+</tbody>
+</table></div>
+<p>Credential check: <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L76-L96">handlers.md:76-96</a></span>.</p>
+<p><strong>Reply:</strong> <code>4C 00 &lt;lo&gt; &lt;hi&gt;</code> followed by 32 bytes.</p>
+<ul>
+<li>The id is <strong>always 0</strong> <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L37">auth.rs:37</a>, <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L1036-L1050">device.rs:1036-1050</a></span>.</li>
+<li>The raw word bytes 2–3 hold: bit 0 = result/encrypted flag; bits 1–2 = <strong>auth level</strong>.
+<ul>
+<li><code>0x0201</code> = level 0 (failed).</li>
+<li><code>0x0203</code> = level 1.</li>
+<li><code>0x0205</code> = level 2.</li>
+<li><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L31-L35">auth.rs:31-35, 468-495</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L98-L102">handlers.md:98-102</a></span>.</li>
+</ul></li>
+<li>The payload is the plaintext re-encrypted with <code>FX0b4tA25f4R038a</code> (key3 with byte 1 = <code>X</code>) <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/auth.rs#L55-L83">session/auth.rs:55-83</a></span>, <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/features/authentication.md?plain=1#L93-L98">features/authentication.md:93-98</a></span>.</li>
+</ul>
+<p><strong>Credentials:</strong></p>
+<ul>
+<li><strong>Level 1:</strong> the 12-byte UID read from 0x40010450.</li>
+<li><strong>Level 2:</strong> a calibration credential. Sources disagree on which bytes (§14 C13).</li>
+<li><strong>Behaviour:</strong> HID gets no reply. The level is lost when the device is reopened. Keep requests at least 1 s apart. <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L686-L697">protocol.md:686-697</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/auth.rs#L11-L12">session/auth.rs:11-12</a></span></li>
+</ul>
+<h3 id="gating-summary">Gating summary</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Needs</th>
+<th>Commands</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Nothing</strong> (no CONNECT, no auth)</td>
+<td>GET_DATA ADC on bulk, HID and CDC <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c">powerz.c</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L240-L241">protocol.md:240-241</a></span>. PD_PACKET on bulk <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_cli.py#L817">km003c_cli.py:817</a></span>. SETTINGS on CDC <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L378-L382">protocol.md:378-382</a></span>. SETTINGS on bulk without CONNECT is unverified.</td>
+</tr>
+<tr>
+<td><strong>CONNECT only, on bulk</strong></td>
+<td>MemoryRead at the known addresses</td>
+</tr>
+<tr>
+<td><strong>Firmware-dependent at L0</strong></td>
+<td>AdcQueue poll, 0x020, 0x040: masked at L0 on 1.9.9, served at L0 on 2.0.6 (§14 C7)</td>
+</tr>
+<tr>
+<td><strong>L ≥ 1</strong></td>
+<td>0x0E, 0x0F, 0x10, 0x11; TICK; RecordList; 0x4A flash write</td>
+</tr>
+<tr>
+<td><strong>L2</strong></td>
+<td>0x4D; calibration operations</td>
+</tr>
+<tr>
+<td><strong>Ungated and dangerous</strong></td>
+<td>0x48 settings batch (including reset operations) <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L117-L170">handlers.md:117-170</a></span>; 0x0A settings write over CDC <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L366-L386">protocol.md:366-386</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Recommendation:</strong> the Go client should <strong>never authenticate</strong>. Nothing it needs is gated, and authenticating only widens what a bug could do.</p>
+<hr />
+<h2 id="11-cdc-only-behaviour-adcnew-and-pdm-text-do-not-use">11. CDC-only behaviour: ADCNEW and PDM text (do not use)</h2>
+<h3 id="adcnew-stream">ADCNEW stream</h3>
+<ul>
+<li><strong>Frames:</strong> <code>[type=0x02][att][obj = body words][crc8]</code>, then 20-byte records (u32 ms, i32 µV, i32 µA, 4 × u16).</li>
+<li><strong>Start:</strong> <code>02</code> alone, or <code>02 &lt;att&gt;</code> where the high nibble is the content and the low nibble is the rate.</li>
+<li><strong>Keep-alive:</strong> <code>01</code>. <strong>Stop:</strong> <code>03</code>.</li>
+<li>The stream stops after one hour unless refreshed.</li>
+</ul>
+<p>Sources: <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L286-L338">transport.py:286-338</a>, <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/protocol.py#L310-L327">protocol.py:310-327</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L784-L828">protocol.md:784-828</a></span>.</p>
+<p><strong>Conflict:</strong> I says the CRC-8 algorithm is undocumented and leaves it unverified on hardware <span class="cite notes"><span class="kind">notes</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/README.md?plain=1#L198-L206">README.md:198-206</a></span>. O reports poly 0x29, init 0 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L800">protocol.md:800</a></span>.</p>
+<p>Classification: MODE, CDC only. Not needed.</p>
+<h3 id="pdm-text-commands">PDM text commands</h3>
+<p>These are lowercase ASCII, one command per write, with no terminator. Examples:</p>
+<ul>
+<li><code>pdm open</code> and <code>pdm close</code>;</li>
+<li><code>pdm set type=..,em=..</code>;</li>
+<li><code>entry pd|qc|ufcs|fcp|scp|afc|vfcp|sfcp</code>;</li>
+<li><code>qc 9V</code>, <code>qc3 volt=...</code>, <code>pd req=...</code>, <code>pd cmd=...</code>, <code>pd data=...</code>;</li>
+<li><code>reset</code>.</li>
+</ul>
+<p>Sources: <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM003C_002C%20Protocol%20Trigger%20by%20Virtual%20Serial%20Port%20(Instructions).pdf">V2 p.1-2</a></span>; <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L341-L371">transport.py:341-371</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L830-L970">protocol.md:830-970</a></span>.</p>
+<p><strong>All of them are UNSAFE-POWER:</strong></p>
+<ul>
+<li><code>pdm open</code> makes the meter present Rd as a sink.</li>
+<li>The <code>entry</code> and request commands negotiate higher VBUS with the charger.</li>
+<li><code>entry list</code> actively probes the charger and <strong>can raise VBUS</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L844-L873">protocol.md:844-873</a></span>.</li>
+</ul>
+<hr />
+<h2 id="12-safe-read-whitelist-and-never-send-list">12. Safe-read whitelist and never-send list</h2>
+<h3 id="121-whitelist-the-only-frames-a-read-only-cli-should-emit">12.1 Whitelist: the only frames a read-only CLI should emit</h3>
+<div class="table-wrap"><table class="wide">
+<thead>
+<tr>
+<th>#</th>
+<th>Bytes (id = <code>ii</code>)</th>
+<th>Transport</th>
+<th>Purpose</th>
+<th>Class</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>W1</td>
+<td><code>0C ii 02 00</code></td>
+<td>IF0 bulk, IF3 HID (padded to 64), IF2 CDC</td>
+<td>ADC snapshot</td>
+<td>SAFE-READ</td>
+</tr>
+<tr>
+<td>W2</td>
+<td><code>0C ii 10 00</code></td>
+<td>Bulk, CDC</td>
+<td>SETTINGS (rate code, device name). On bulk without CONNECT this is unverified; send W5 first if it fails.</td>
+<td>SAFE-READ</td>
+</tr>
+<tr>
+<td>W3</td>
+<td><code>0C ii 20 00</code></td>
+<td>Bulk, CDC</td>
+<td>PD status and PD records</td>
+<td>READ-CONSUMES</td>
+</tr>
+<tr>
+<td>W4</td>
+<td><code>0C ii 22 00</code></td>
+<td>Bulk, CDC</td>
+<td>ADC + PD in one request</td>
+<td>READ-CONSUMES</td>
+</tr>
+<tr>
+<td>W5</td>
+<td><code>02 ii 00 00</code></td>
+<td><strong>Bulk only</strong></td>
+<td>CONNECT, before W6</td>
+<td>SESSION</td>
+</tr>
+<tr>
+<td>W6</td>
+<td><code>44 ii 01 01</code> + AES(key0, P)</td>
+<td><strong>Bulk only</strong>, after W5</td>
+<td>MemoryRead of exactly <code>0x420/64</code>, <code>0x4420/64</code> or <code>0x03000C00/64</code> (and <code>0x40010450/12</code> only if ever needed)</td>
+<td>SAFE-READ (restricted)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Optional (READ-CONSUMES, and gating depends on firmware): <code>0C ii 04 00</code> (AdcQueue), <code>0C ii 40 00</code>, <code>0C ii 80 00</code>.</p>
+<h3 id="122-never-send">12.2 Never send</h3>
+<div class="table-wrap"><table class="cols3">
+<thead>
+<tr>
+<th>Item</th>
+<th>Why</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Types <code>0x04</code>, <code>0x08</code>, <code>0x09</code>, <code>0x42</code></td>
+<td>Reset, DFU, firmware erase</td>
+<td><span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L18-L22">guard.rs:18-22</a></span></td>
+</tr>
+<tr>
+<td>Types <code>0x0A</code>, <code>0x48</code>, <code>0x4A</code>, <code>0x4D</code></td>
+<td>Persistent writes, including factory reset and calibration</td>
+<td><span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/guard.rs#L18-L22">guard.rs:18-22</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L28-L37">handlers.md:28-37, 117-170</a></span></td>
+</tr>
+<tr>
+<td><code>0x4B</code></td>
+<td>Unconfirmed memory-read variant</td>
+<td><span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L356-L367">handlers.md:356-367</a></span></td>
+</tr>
+<tr>
+<td><code>0x40</code> HEAD, <code>0x0D</code>, <code>0x0B</code></td>
+<td>Not needed; flash-flow related or unknown</td>
+<td><span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L150-L152">protocol.md:150-152, 162</a></span></td>
+</tr>
+<tr>
+<td><code>0x0E</code>, <code>0x0F</code>, <code>0x10</code>, <code>0x11</code></td>
+<td>Need auth; change runtime modes</td>
+<td>§4</td>
+</tr>
+<tr>
+<td><code>0x4C</code></td>
+<td>Raises privileges; not needed</td>
+<td>§10</td>
+</tr>
+<tr>
+<td>MemoryRead at any address not on the whitelist</td>
+<td>Reported to crash the meter</td>
+<td><span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L1241">protocol.md:1241</a></span></td>
+</tr>
+<tr>
+<td>Any HID request other than W1</td>
+<td>Replies over 64 bytes hang and reboot the meter</td>
+<td><span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L757-L769">protocol.md:757-769</a></span>; <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/hid.rs#L49-L63">transport/hid.rs:49-63</a></span></td>
+</tr>
+<tr>
+<td>On CDC: frame types <code>0x01</code>–<code>0x03</code>, and any ASCII text</td>
+<td>Control ADCNEW; PDM changes VBUS</td>
+<td><span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/transport/cdc_frame.rs#L30-L36">transport/cdc_frame.rs:30-36</a></span>; <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM003C_002C%20Protocol%20Trigger%20by%20Virtual%20Serial%20Port%20(Instructions).pdf">V2</a></span></td>
+</tr>
+<tr>
+<td>USB port reset, and vendor control request <code>0xC2/0x32</code> (170 B)</td>
+<td>Not needed; the control request's semantics are unknown</td>
+<td><span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L510-L521">device.rs:510-521</a></span>; <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/usb_transport.md?plain=1#L226">usb_transport.md:226</a></span></td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="13-detected-fast-charge-protocol-shown-on-the-screen">13. "Detected fast-charge protocol" (shown on the screen)</h2>
+<p><strong>No source exposes it as a binary read.</strong></p>
+<ul>
+<li>None of the GET_DATA attributes documented by V1, R, RR or O carries the protocol name the meter shows on screen.</li>
+<li>The vendor name <code>ATT_QC_PACKET</code> (0x040) is a UFCS sniffer stream, not a detection result (§7.4). The name is not evidence.</li>
+<li>The only documented detection path is the CDC text command <code>entry list</code>, and the per-protocol <code>entry bc</code> / <code>entry apple</code>. These <strong>actively probe the charger and can raise VBUS</strong> <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L865-L873">protocol.md:865-873, 901-912</a></span>. They are UNSAFE.</li>
+</ul>
+<p>What a client can do instead, as <strong>inference only and labelled as such</strong>:</p>
+<ul>
+<li>show D+/D− voltages from the ADC (§6.2), for example BC1.2 or Apple divider levels;</li>
+<li>show passively captured PD Source_Capabilities, which appear in the PD records (§7.2) when the meter takes part in a negotiation.</li>
+</ul>
+<hr />
+<h2 id="14-open-questions-and-conflicts">14. Open questions and conflicts</h2>
+<section class="verify" id="verified-conflicts" aria-label="Verified on device: conflicts">
+<h4>Verified on device: conflict resolution (user's KM003C, fw 1.9.5)</h4>
+<p>These are results from the user's unit on 2026-11-16. Each row is <span class="status ok">verified (fw 1.9.5)</span>, <span class="status">pending</span> or <span class="status np">not probed</span>. A result on 1.9.5 does not prove the same behaviour on 1.9.9 or 2.0.x; the conflict text below each heading still describes the other firmware versions. Rows marked "do not probe" need a risky request, so leave them unless the team lead approves.</p>
+<div class="table-wrap"><table class="wide">
+<thead><tr><th>Conflict</th><th>Safe way to settle it</th><th>Verified on device</th><th>Evidence (capture / date)</th></tr></thead>
+<tbody>
+<tr><td>C1 / C2: ADC tail and rate byte</td><td>Compare SETTINGS u32@0x60 bits 2–3 with ADC bytes 0x24 and 0x26</td><td><span class="status ok">verified (fw 1.9.5)</span>
+<ul>
+<li>R's layout holds: 0x26, 0x28 and 0x2A are CC2, D+ and D− averages in mV.</li>
+<li>O's layout (rate at 0x26, battery at 0x28) is ruled out on this firmware.</li>
+<li>0x24 = 0x00 while the rate code is 2, so 0x24 is <strong>not</strong> the configured rate here, and there is no rate byte in the tail on 1.9.5.</li>
+<li>0x24–0x25 are a constant <code>00 80</code> of unknown meaning.</li>
+</ul></td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a> … <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_5_resp.hex">_5</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W2_1_resp.hex">bulk_W2_1_resp.hex</a></td></tr>
+<tr><td>C3: IBUS sign</td><td>One reading with a load in a known direction</td><td><span class="status">pending</span> Only about 0 A has been measured so far.</td><td>—</td></tr>
+<tr><td>C4: temperature encoding</td><td>Compare raw/128 with the on-screen temperature</td><td><span class="status ok">verified (fw 1.9.5)</span> raw/128 matches the screen (raw 3366 = 26.30 °C). Negative temperatures and the 0x8000 sentinel were not exercised.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a></td></tr>
+<tr><td>C5: obj and permi bits</td><td>Record bytes 2–3 of ADC replies of different lengths</td><td><span class="status ok">verified (fw 1.9.5)</span> obj = <code>len/4 − 3</code> for 20, 52, 68 and 188-byte replies, and permi = 0 without auth. The vendor PDF example (obj 8 for a 48-byte frame) is still unexplained.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W3_1_resp.hex">W3_1</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">W1_1</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W4_1_resp.hex">W4_1</a>, <a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W2_1_resp.hex">W2_1</a></td></tr>
+<tr><td>C6: id echo</td><td>Send ADC requests with varying ids</td><td><span class="status ok">resolved (fw 1.9.5)</span> Echoed on 20 of 20 requests (ids 1–20) over bulk, HID and CDC, including CONNECT and the MemoryRead confirmation. Recommendation changed to <strong>match on type and id</strong> (see C6 below).</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a></td></tr>
+<tr><td>C7: level-0 gating</td><td>AdcQueue poll <code>0C id 04 00</code> at L0 (read-only, drains the queue)</td><td><span class="status np">not probed</span></td><td>—</td></tr>
+<tr><td>C8: PD over HID</td><td>Do not probe (a reply over 64 bytes can reboot the meter)</td><td><span class="status np">not probed</span> (by design)</td><td>—</td></tr>
+<tr><td>C11: MemoryRead chunk limit</td><td>Not needed; info blocks are 64 B</td><td><span class="status np">not probed</span> Only 64-byte reads were made; each returned one 64-byte data transfer plus a ZLP.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_respdata.hex">bulk_W6_1_respdata.hex</a></td></tr>
+<tr><td>C12: meaning of the 0x420 block</td><td>CONNECT + MemoryRead 0x420/64 over bulk</td><td><span class="status ok">verified (fw 1.9.5)</span> Contents only: model <code>KM003C</code>, version <code>2.2</code>, date <code>2024.9.23</code>, extra empty. This differs from the application version 1.9.5, which fits O's "bootloader/hardware block" reading; what the field means is still unproven.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_1_plain.hex">bulk_W6_1_plain.hex</a></td></tr>
+<tr><td>C16: CONNECT necessity</td><td>ADC read without CONNECT; SETTINGS over bulk without CONNECT</td><td><span class="status ok">verified (fw 1.9.5)</span> ADC, SETTINGS, PD and ADC+PD all answered before any CONNECT was sent. CONNECT was used only ahead of MemoryRead.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a> (order: W1–W4, then W5 CONNECT, then W6)</td></tr>
+<tr><td>C18: ZLP on 64-byte-multiple replies</td><td>Observe bulk reads of 64-byte-multiple replies</td><td><span class="status ok">verified (fw 1.9.5)</span> Answered for MemoryRead: the 64-byte data transfer <strong>is followed by a ZLP</strong>. Leaving that ZLP (or any reply) unread before the next write stalls the meter and triggers a watchdog reboot; see the hazard box at the top. No 64-byte-multiple GET_DATA reply was seen; SETTINGS is 188 B.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a> (drain note); <code>active_bulk_log.json</code></td></tr>
+<tr><td>C20: firmware version</td><td>CONNECT + MemoryRead 0x4420/64 over bulk</td><td><span class="status ok">verified (fw 1.9.5)</span> Application firmware <strong>1.9.5</strong> (2025.1.7). That is older than R's 1.9.9 and O's 2.0.6.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/bulk_W6_2_plain.hex">bulk_W6_2_plain.hex</a></td></tr>
+<tr><td>C21: CDC reply size</td><td>Do not probe beyond the ADC read on CDC</td><td><span class="status np">not probed</span> (by design). The 52-byte ADC reply over CDC worked.</td><td><a href="https://github.com/ljagiello/gopower-z/blob/main/hardware/km003c/testdata/fw1.9.5/cdc_W1_1_resp.hex">cdc_W1_1_resp.hex</a></td></tr>
+<tr><td>New: EP 0x81 stall</td><td>Always consume the post-MemoryRead ZLP; drain EP 0x81 after any failure</td><td><span class="status ok">observed (fw 1.9.5)</span> Writing while a reply or ZLP was still queued: no answer, USB stall, watchdog reboot, re-enumeration.</td><td>Team client run; no capture file</td></tr>
+</tbody>
+</table></div>
+</section>
+<p><strong>C1 – ADC tail 0x24–0x2B.</strong> There are three layouts:</p>
+<ul>
+<li>V1: Rate:2 at 0x24.</li>
+<li>R and L (firmware 1.9.x): rate at 0x24, flags at 0x25, then CC2/D+/D− averages.</li>
+<li>O (firmware 2.0.6): T2 i16 at 0x24, rate at 0x26, battery at 0x28.</li>
+</ul>
+<p>The captured vectors fit different layouts (§6.3), so the layout is firmware-dependent.</p>
+<p><em>To resolve without changing anything:</em> read SETTINGS and compare bits 2–3 of the u32 at 0x60 with ADC bytes 0x24 and 0x26. Also read the 0x4420 block to learn the firmware version.</p>
+<p><strong>C2 – Sample-rate field offset.</strong> It is 0x24 (V1, R, I) or 0x26 (O). Same evidence as C1.</p>
+<p><strong>C3 – IBUS sign convention.</strong></p>
+<ul>
+<li>R: positive = power flows from the USB female (input) side to the male (output) side <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adc.rs#L98-L104">adc.rs:98-104</a></span>.</li>
+<li>O: negative = current from the receptacle (female) to the plug (male) <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L219">protocol.md:219</a></span>.</li>
+</ul>
+<p>These are opposite. K only says the sign shows direction <span class="cite src"><span class="kind">source</span> K <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/Documentation/hwmon/powerz.rst">Documentation/hwmon/powerz.rst</a></span>. <em>To resolve:</em> one measurement with a known load direction.</p>
+<p><strong>C4 – Temperature.</strong></p>
+<ul>
+<li>R and O: i16/128 °C. O adds <code>0x8000</code> = invalid.</li>
+<li>K: <code>b1*2000 + b0*1000/128</code> m°C, which is wrong for negative raw values.</li>
+<li>V1 example: raw 0.</li>
+<li>NV: raw/100 <span class="cite src"><span class="kind">source</span> NV <a href="https://github.com/nevetssf/powerz/blob/33b23b932eb302f53cae5185558e8f5984b7ea8a/src/powerz/constants.py#L51">constants.py:51</a></span>. It also masks CC/D± with 0x0FFF and divides by 1000 <span class="cite src"><span class="kind">source</span> NV <a href="https://github.com/nevetssf/powerz/blob/33b23b932eb302f53cae5185558e8f5984b7ea8a/src/powerz/constants.py#L54-L57">constants.py:54-57</a></span>, which contradicts every other source. <strong>Disregard NV's scalings.</strong></li>
+</ul>
+<p><strong>C5 – Data-header bytes 2–3 (obj, permi).</strong></p>
+<ul>
+<li><strong>permi is settled.</strong> The vendor sample code declares <code>encode:1, permi:2, :3, obj:10</code> <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:76-85</a></span>. This matches O's reading that bits 17–18 hold the auth level. The PDF still shows the older unnamed <code>:6</code> <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>. In the V1 example <code>41 09 02 02</code> and in R's <code>EXTENDED_ADC_DATA</code>, permi = 1, which suggests those captures came from authenticated sessions.</li>
+<li><strong>obj is still in conflict:</strong>
+<ul>
+<li>V1 and VS: payload size in 4-byte words.</li>
+<li>R: <code>len/4 − 3</code>.</li>
+<li>O: about <code>(len−12)/4</code>, with exceptions.</li>
+<li>The V1 example has obj = 8 for a 48-byte frame, where the R formula gives 9.</li>
+</ul></li>
+</ul>
+<p>Treat obj as opaque. Treat permi as diagnostic only.</p>
+<p><strong>C6 – Transaction-id echo.</strong></p>
+<ul>
+<li>R and O (device) observe the request id echoed; R matches on it <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L167-L169">device.rs:167-169</a></span>.</li>
+<li>Exceptions: the 0x4C auth reply and the HEAD reply carry id 0.</li>
+<li>The vendor app never checks ids <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L721-L722">protocol.md:721-722</a></span>.</li>
+<li>The V1 example shows request id 0 and reply id 9. It is probably not the same exchange.</li>
+<li>The vendor sample always sends id 0 and checks only the type and section att <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:235-237, 275</a></span>. Its own comment nonetheless says the id "keeps incrementing" <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:72</a></span>.</li>
+<li>I matches on type only <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L274-L279">transport.py:274-279</a></span>.</li>
+</ul>
+<p><strong>Resolved (fw 1.9.5).</strong> The user's unit echoed the request id on 20 of 20 replies, including the CONNECT ACCEPT and the MemoryRead <code>C4</code> confirmation (§6 and §14 "Verified on device").</p>
+<p><em>Recommendation:</em> <strong>match replies on type AND id.</strong></p>
+<ul>
+<li><strong>Why not type only:</strong> a stale reply that arrives after a retry would be taken as the retry's answer. The retry's real reply then stays queued on EP 0x81, and the next write stalls the meter (see the hazard box at the top).</li>
+<li><strong>What the powerz client does:</strong> it skips frames carrying a foreign id, keeps the last frame of the wanted type only as a fallback, and drains EP 0x81 before the next write.</li>
+<li><strong>Exceptions that keep id 0:</strong> the 0x4C auth reply and the HEAD reply. The client never sends those requests.</li>
+</ul>
+<p><strong>C7 – Level-0 gating.</strong> On 1.9.9 the decompilation masks the attributes to <code>0x19</code> <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L110-L113">handlers.md:110-113</a></span>. On 2.0.6, AdcQueue, 0x020 and 0x040 are served at L0 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L203-L206">protocol.md:203-206</a></span>.</p>
+<p><strong>C8 – PD over HID.</strong></p>
+<ul>
+<li>R presents HID as an "ADC/PD polling" mode <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L196-L224">device.rs:196-224</a></span>.</li>
+<li>NV sends PD over HID by default.</li>
+<li>I got no reply to PD-only requests over HID.</li>
+<li>O observed hangs and reboots for any reply over 64 bytes.</li>
+</ul>
+<p><em>Decision:</em> HID is ADC-only.</p>
+<p><strong>C9 – Names of 0x020 and 0x040.</strong> V1 calls them <code>ATT_PD_STATUS</code> and <code>ATT_QC_PACKET</code>. R calls 0x020 <code>PdTrace</code>. RR and O treat 0x040 as UFCS.</p>
+<p><strong>C10 – AdcQueue record bytes 0–3.</strong> R reads u16 sequence + u16 marker <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/adcqueue.rs#L125-L127">adcqueue.rs:125-127</a></span>. O reads a u32 ms time and says R's reading is wrong <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/queue.rs#L27">decode/queue.rs:27</a></span>; <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L285">protocol.md:285</a></span>.</p>
+<p><strong>C11 – MemoryRead chunk limit.</strong> R uses 2528 bytes <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L14">memory.rs:14</a></span>. O observed 256 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L504-L509">protocol.md:504-509</a></span>. Use ≤ 256.</p>
+<p><strong>C12 – Meaning of the 0x420 block.</strong> R says model, hardware version and manufacturing date (24 B) <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/auth.rs#L165-L178">auth.rs:165-178</a></span>. O says model, version ("2.5", likely bootloader), date (12 B) and extra <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/info.rs#L26-L40">decode/info.rs:26-40</a></span>.</p>
+<p><strong>C13 – Level-2 credential.</strong> R uses the first 12 bytes of the calibration record at 0x03000D80, falling back to 0x03000C00 <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L1095-L1138">device.rs:1095-1138</a></span>. O uses the first 16 bytes of the OTP at 0x03000C00 <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/session/auth.rs#L14-L38">session/auth.rs:14-38</a></span>. This does not matter for a read-only client.</p>
+<p><strong>C14 – StreamingAuth plaintext layout.</strong> The two sources lay out the bytes after the credential differently (§10). Only the credential is checked.</p>
+<p><strong>C15 – PD connection events.</strong></p>
+<ul>
+<li>R: marker <code>0x45</code>, a <strong>24-bit</strong> timestamp at +1..+3, and code <code>0x21</code> / <code>0x22</code> = connect / disconnect, with <code>0x11</code> / <code>0x12</code> as "legacy" <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/pd.rs#L202-L219">pd.rs:202-219</a></span>.</li>
+<li>O and L: generic event records with a <strong>u32</strong> timestamp. The code byte's low nibble is the event and the high nibble the CC line, so <code>0x11</code> / <code>0x21</code> = attach on CC1 / CC2 <span class="cite src"><span class="kind">source</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/crates/powerz-protocol/src/decode/pd_packet.rs#L255-L322">decode/pd_packet.rs:255-322</a></span>; <span class="cite src"><span class="kind">source</span> L <a href="https://github.com/LongDirtyAnimAlf/km003c/blob/be3fcf02865bdca0fd04f9309b0d6c6e9893ae21/PC/USBCController/km003c.pas#L283-L295">km003c.pas:283-295</a></span>.</li>
+</ul>
+<p><strong>C16 – CONNECT necessity.</strong> K, N, I and O show that the ADC needs no CONNECT. R's vendor mode always sends CONNECT plus a full init, including a USB reset. <em>Decision:</em> send CONNECT only before MemoryRead.</p>
+<p><strong>C17 – Unreliable sources.</strong> C's endpoint map and NV's scalings contradict the descriptors and every other source. They are kept only for completeness.</p>
+<p><strong>C18 – Bulk replies that are an exact multiple of 64 bytes.</strong> It is unknown whether the device ends them with a zero-length packet. A large read buffer plus a timeout is the robust approach. R's <code>until_short_packet</code> would error without a ZLP <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L722-L729">device.rs:722-729</a></span>.</p>
+<p><strong>C19 – Vendor control request <code>0xC2/0x32</code>, wLength 170.</strong> Seen during enumeration in VM passthrough; semantics unknown <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/usb_transport.md?plain=1#L222-L227">usb_transport.md:222-227</a></span>. Do not send it.</p>
+<p><strong>C20 – Firmware of the local unit.</strong> Unknown. Learn it with W5 and W6 at 0x4420, which also helps decide C1, C2, C7 and C11.</p>
+<p><strong>C21 – Section-size limits in the vendor material.</strong></p>
+<ul>
+<li>PDF: size ≤ 1024−8, <code>chunk*size</code> ≤ 4080, HID ≤ 60 <span class="cite vendor"><span class="kind">vendor-doc</span> <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/official/KM002C%263C%20API%20Description.pdf">V1 p.1</a></span>.</li>
+<li>Sample code: size ≤ 4095−8, and "CDC and HID less than 64 bytes" <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:91</a></span>.</li>
+<li>O observed 188-byte SETTINGS replies working over CDC <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L777-L778">protocol.md:777-778</a></span>.</li>
+</ul>
+<p>The HID limit is consistent across all of them. On CDC, prefer replies under 64 bytes (ADC only) unless the device agent confirms longer replies are safe there.</p>
+<hr />
+<h2 id="15-sources">15. Sources</h2>
+<p>All repositories were read at the pinned commits below. Line numbers refer to those commits. Downloaded code was read and never executed.</p>
+<p><strong>K – Linux kernel</strong></p>
+<ul>
+<li><code>drivers/hwmon/powerz.c</code> at torvalds/linux@<code>4dd10fbbeb9c33709edc89916e19c03c780a0751</code>: <a href="https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c">https://github.com/torvalds/linux/blob/4dd10fbbeb9c33709edc89916e19c03c780a0751/drivers/hwmon/powerz.c</a></li>
+<li>The ADC request is lines 121–124; the struct is lines 20–34; the scaling is lines 171–203; the ID table is lines 264–268.</li>
+<li><code>Documentation/hwmon/powerz.rst</code> at the same tree.</li>
+</ul>
+<p><strong>V1 – vendor PDF</strong> <em>KM002C&amp;3C API Description</em> (Chinese, 3 pages), mirrored at okhsunrog/km003c-protocol-research@<code>776b783b76b17e7ba0b59e9fff1d123180f32d2c</code> <code>docs/official/KM002C&amp;3C API Description.pdf</code>.</p>
+<ul>
+<li>p.1: transports and <code>MsgHeader_TypeDef</code>.</li>
+<li>p.2: message and attribute enums.</li>
+<li>p.3: ADC example and <code>AdcData_TypeDef</code>.</li>
+</ul>
+<p><strong>V2 – vendor PDF</strong> <em>KM003C/002C Protocol Trigger by Virtual Serial Port (Instructions)</em> (2 pages), same mirror and path prefix.</p>
+<p><strong>VS – vendor sample code</strong> <code>hiddemo_vs2019_for km002/hiddemo.cpp</code> (328 lines, SHA-256 <code>6f6eb3625ea8c75aad685a73449df4b21d3d2db2df411179ae58af1a8b98dc57</code>).</p>
+<ul>
+<li>Source: ChargerLAB's "limited toolkit" zip at <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip">https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip</a>, linked from the POWER-Z technical-support FAQ "Are there any open APIs?" at <a href="https://www.power-z.com/blogs/technical-support/power-z-km003c-km002c-technical-support">https://www.power-z.com/blogs/technical-support/power-z-km003c-km002c-technical-support</a>.</li>
+<li>The zip was fetched and extracted by the hardware-research teammate. I read it here and did not build or run it.</li>
+<li>The zip's <code>KM002C&amp;3C API Description.docx</code> is byte-identical to the RR mirror copy (SHA-256 <code>23fc3127…bbbd42</code>).</li>
+</ul>
+<p><strong>R – okhsunrog/km003c-rs</strong>@<code>c063388ecab1a169326de1b57e650a3a45fc94f6</code>. Paths are under <code>km003c-lib/src/</code> unless they start with <code>tests/</code>, which means <code>km003c-lib/tests/</code>. Main files: <code>packet.rs</code>, <code>adc.rs</code>, <code>message.rs</code>, <code>device.rs</code>, <code>auth.rs</code>, <code>memory.rs</code>, <code>pd.rs</code>, <code>constants.rs</code>, <code>adcqueue.rs</code>, <code>settings.rs</code>, <code>tests/common/mod.rs</code>, <code>tests/adc_tests.rs</code>. <a href="https://github.com/okhsunrog/km003c-rs/tree/c063388ecab1a169326de1b57e650a3a45fc94f6">https://github.com/okhsunrog/km003c-rs/tree/c063388ecab1a169326de1b57e650a3a45fc94f6</a></p>
+<p><strong>RR – okhsunrog/km003c-protocol-research</strong>@<code>776b783b76b17e7ba0b59e9fff1d123180f32d2c</code>. Its notes cover firmware V1.9.9 reverse engineering and USB captures.</p>
+<ul>
+<li>Code: <code>km003c_analysis/device/protocol.py</code>.</li>
+<li>Notes: <code>docs/protocol_reference.md</code>, <code>docs/usb_transport.md</code>, <code>docs/firmware/handlers.md</code>, <code>docs/features/authentication.md</code>.</li>
+</ul>
+<p><a href="https://github.com/okhsunrog/km003c-protocol-research/tree/776b783b76b17e7ba0b59e9fff1d123180f32d2c">https://github.com/okhsunrog/km003c-protocol-research/tree/776b783b76b17e7ba0b59e9fff1d123180f32d2c</a></p>
+<p><strong>O – nesquikm/open-powerz</strong>@<code>6180fe74afc4972aebfd9ef527bc9136872d86ea</code>. Notes cover firmware 2.0.6 device observations plus static analysis of vendor PC software V2.5.2.</p>
+<ul>
+<li>Code under <code>crates/powerz-protocol/src/</code>: <code>frame.rs</code>, <code>decode/adc.rs</code>, <code>decode/info.rs</code>, <code>decode/queue.rs</code>, <code>decode/pd_packet.rs</code>, <code>transport/guard.rs</code>, <code>transport/hid.rs</code>, <code>transport/bulk.rs</code>, <code>transport/cdc_frame.rs</code>, <code>session/memory.rs</code>, <code>session/auth.rs</code>, <code>crypto/mod.rs</code>, <code>crypto/keys.rs</code>.</li>
+<li>Test vector: <code>crates/powerz-protocol/tests/vectors/adc_52.hex</code>.</li>
+<li>Notes: <code>docs/protocol.md</code>.</li>
+</ul>
+<p><a href="https://github.com/nesquikm/open-powerz/tree/6180fe74afc4972aebfd9ef527bc9136872d86ea">https://github.com/nesquikm/open-powerz/tree/6180fe74afc4972aebfd9ef527bc9136872d86ea</a></p>
+<p><strong>I – inuchanbt/KM003C-CLI</strong>@<code>823e6766a049805e533a83973e5cb6e9ceabf7de</code>: <code>km003c_modules/protocol.py</code>, <code>km003c_modules/transport.py</code>, <code>README.md</code>. <a href="https://github.com/inuchanbt/KM003C-CLI/tree/823e6766a049805e533a83973e5cb6e9ceabf7de">https://github.com/inuchanbt/KM003C-CLI/tree/823e6766a049805e533a83973e5cb6e9ceabf7de</a></p>
+<p><strong>N – nbuchwitz/usb-meter</strong>@<code>3d065276e24cafcf419b3fb71bed948841493dda</code>: <code>src/usb_meter/protocol.py</code>, <code>meter.py</code>, <code>connection.py</code>. <a href="https://github.com/nbuchwitz/usb-meter/tree/3d065276e24cafcf419b3fb71bed948841493dda">https://github.com/nbuchwitz/usb-meter/tree/3d065276e24cafcf419b3fb71bed948841493dda</a></p>
+<p><strong>C – chaseleif/km003c</strong>@<code>699a25ac9b3a26eaff11410f94a16b9506fc5972</code>: <code>record.py</code>.</p>
+<p><strong>L – LongDirtyAnimAlf/km003c</strong>@<code>be3fcf02865bdca0fd04f9309b0d6c6e9893ae21</code>: <code>PC/USBCController/km003c.pas</code>.</p>
+<p><strong>NV – nevetssf/powerz</strong>@<code>33b23b932eb302f53cae5185558e8f5984b7ea8a</code>: <code>src/powerz/constants.py</code>, <code>src/powerz/device/protocol.py</code>, <code>connection.py</code>, <code>reader.py</code>.</p>
+<p><strong>Not consulted:</strong></p>
+<ul>
+<li><strong>sigrok:</strong> a web search found no sigrok/libsigrok driver for ChargerLAB. The libsigrok tree itself was not searched.</li>
+<li><strong>Manuals archive:</strong> okhsunrog/km003c-resources (archived manuals and firmware) was not read.</li>
+<li><strong>ADCNEW vendor note:</strong> the note that O and I cite for the CDC stream was not located.</li>
+<li><strong>Derivative projects:</strong> jfessard/km003c-web, alanyeh1128/powerz-km003c-monitor, fejesd/mcp-powerz-km003c, KHWLGH/laPower, kbsing/km003c-app and weixunkkkkk/km003c-workbench-macos appear to derive from the above. They were found by search but not read.</li>
+</ul>
+
+</main>
+</body>
+</html>

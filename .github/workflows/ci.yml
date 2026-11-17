@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Runs on every pull request and every push to main:
+#   - go vet + go test (race detector) on Linux amd64/arm64 and macOS
+#   - golangci-lint
+#   - fuzzing of every parser of untrusted meter / USB-PD data
+#   - actionlint (GitHub Actions workflow syntax and shellcheck)
+jobs:
+  test:
+    name: go vet + go test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install libusb (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev pkg-config
+
+      - name: Install libusb (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libusb pkgconf
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: go build -trimpath -o powerz ./cmd/powerz
+
+      - name: Smoke test (no meter attached)
+        run: |
+          ./powerz version --json
+          ./powerz schema > schema.json
+          python3 -c 'import json; d=json.load(open("schema.json")); assert d["schema_version"] >= 1; print(len(d["commands"]), "commands")'
+          set +e
+          ./powerz read --json 2> err.json
+          code=$?
+          set -e
+          cat err.json
+          # No meter on CI runners: expect not_found (3) or permission_denied (6).
+          test "$code" = 3 -o "$code" = 6
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev pkg-config
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
+  fuzz:
+    name: fuzz (untrusted input)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev pkg-config
+      - name: Fuzz every target
+        # Seed corpora (captured meter frames) already run in `go test`; this
+        # explores beyond them. Crashers are uploaded below for reproduction.
+        run: ./scripts/fuzz.sh 15s
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+
+  actionlint:
+    name: actionlint (workflow syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run actionlint
+        # shellcheck is preinstalled on ubuntu runners; actionlint uses it for run: scripts.
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+  docs:
+    name: docs are HTML only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: No Markdown in docs/
+        run: |
+          stray=$(git ls-files 'docs/*.md' 'docs/**/*.md')
+          if [ -n "$stray" ]; then echo "::error::docs must be HTML, found: $stray"; exit 1; fi

@@ -1,0 +1,39 @@
+name: Fuzz (nightly)
+
+# Long fuzzing of every parser that handles untrusted data from the meter or
+# from sniffed USB-PD traffic. Short runs of the same targets happen on every
+# pull request in ci.yml.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Time per fuzz target (Go duration)"
+        default: "5m"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev pkg-config
+      - name: Fuzz every target
+        env:
+          FUZZTIME: ${{ inputs.fuzztime || '5m' }}
+        run: ./scripts/fuzz.sh "$FUZZTIME"
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
