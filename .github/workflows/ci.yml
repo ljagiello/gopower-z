@@ -18,32 +18,83 @@ concurrency:
 #   - golangci-lint
 #   - fuzzing of every parser of untrusted meter / USB-PD data
 #   - actionlint (GitHub Actions workflow syntax and shellcheck)
+#
+# Documentation-only changes (docs/, site/, *.md, Vercel config, issue
+# templates, LICENSE) skip all of the above; only "docs are HTML only" runs.
+# The skipped jobs still report success, which is what the ruleset's required
+# checks need. Matrix jobs skip their steps rather than the whole job, because
+# a skipped matrix job reports under its unexpanded name and the required
+# per-OS checks would never arrive. If change detection fails, everything runs.
 jobs:
+  changes:
+    name: detect code changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          files=""
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          elif [ "$EVENT" = push ] && [ -n "${BEFORE//0/}" ]; then
+            files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename')
+          fi
+          # Files that are not documentation. grep -v without -q, so a SIGPIPE
+          # under pipefail can never be mistaken for "nothing else changed".
+          other=$(printf '%s\n' "$files" |
+            grep -vE '^(docs/|site/|\.github/ISSUE_TEMPLATE/)|\.md$|^(vercel\.json|\.vercelignore|LICENSE)$' || true)
+          code=true
+          if [ -n "$files" ] && [ -z "$other" ]; then code=false; fi
+          printf 'changed files:\n%s\n\ncode=%s\n' "$files" "$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
     name: go vet + go test (${{ matrix.os }})
+    needs: changes
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      RUN: ${{ needs.changes.outputs.code != 'false' }}
     steps:
+      - name: Documentation-only change
+        if: env.RUN != 'true'
+        run: echo "Only documentation changed; Go checks skipped."
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.RUN == 'true'
         with:
           go-version-file: go.mod
 
       - name: Install libusb (Linux)
-        if: runner.os == 'Linux'
+        if: env.RUN == 'true' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev pkg-config
 
       - name: Install libusb (macOS)
-        if: runner.os == 'macOS'
+        if: env.RUN == 'true' && runner.os == 'macOS'
         run: brew install libusb pkgconf
 
       - name: gofmt
+        if: env.RUN == 'true'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -51,15 +102,20 @@ jobs:
           fi
 
       - name: go mod tidy
+        if: env.RUN == 'true'
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
 
-      - run: go vet ./...
-      - run: go test -race -count=1 ./...
-      - run: go build -trimpath -o powerz ./cmd/powerz
+      - if: env.RUN == 'true'
+        run: go vet ./...
+      - if: env.RUN == 'true'
+        run: go test -race -count=1 ./...
+      - if: env.RUN == 'true'
+        run: go build -trimpath -o powerz ./cmd/powerz
 
       - name: Smoke test (no meter attached)
+        if: env.RUN == 'true'
         run: |
           ./powerz version --json
           ./powerz schema > schema.json
@@ -74,6 +130,8 @@ jobs:
 
   lint:
     name: golangci-lint
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,6 +147,8 @@ jobs:
 
   fuzz:
     name: fuzz (untrusted input)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,6 +171,8 @@ jobs:
 
   actionlint:
     name: actionlint (workflow syntax)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
