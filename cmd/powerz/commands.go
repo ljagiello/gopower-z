@@ -7,13 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 )
 
 func isBrokenPipe(err error) bool {
@@ -30,6 +29,17 @@ func checkInterval(cmd string, d, minimum time.Duration) error {
 	return nil
 }
 
+// endReason says how a measure or pd window ended.
+func endReason(stop error) string {
+	switch {
+	case stop == nil:
+		return "completed"
+	case errors.Is(stop, context.Canceled):
+		return "interrupted"
+	}
+	return "error"
+}
+
 // ---------------------------------------------------------------- read
 
 func setupRead(fs *flag.FlagSet) func(context.Context, globals) error {
@@ -39,15 +49,16 @@ func setupRead(fs *flag.FlagSet) func(context.Context, globals) error {
 			return err
 		}
 		defer m.close()
+		m.detect(ctx)
 		a, err := m.ReadADC(ctx)
 		if err != nil {
 			return err
 		}
-		snap := toSnapshot(a, time.Now(), m.usb.Serial, m.FirmwareVersion())
+		snap := toSnapshot(a, time.Now(), m.usb.Serial, m.FirmwareVersion(), m.firmwareError())
 		if g.jsonMode() {
-			return emitIndented(snap)
+			return g.emitIndented(snap)
 		}
-		printSnapshotText(snap, a)
+		printSnapshotText(g.out(), g.style(), snap, a)
 		return nil
 	}
 }
@@ -59,12 +70,11 @@ func deref(p *string, def string) string {
 	return *p
 }
 
-func printSnapshotText(s snapshot, a km003c.ADC) {
-	st := style{on: colorOn()}
+func printSnapshotText(w io.Writer, st style, s snapshot, a km003c.ADC) {
 	row := func(label, val, extra string) {
-		fmt.Printf("  %-6s %s  %s\n", label, val, st.dim(extra))
+		_, _ = fmt.Fprintf(w, "  %-6s %s  %s\n", label, val, st.dim(extra))
 	}
-	fmt.Println(st.bold("POWER-Z KM003C") + st.dim("  "+s.Serial+"  "+s.Time))
+	_, _ = fmt.Fprintln(w, st.bold("POWER-Z KM003C")+st.dim("  "+s.Serial+"  "+s.Time))
 	row("VBUS", st.green(grouped(a.VBus())+" V"), fmt.Sprintf("meter avg %.6f V", s.VBusAvgV))
 	row("IBUS", st.pink(grouped(a.FlowA())+" A"), fmt.Sprintf("meter avg %.6f A · flow %s", s.IBusAvgA, s.Direction))
 	row("PWR", st.blue(grouped(a.FlowPower())+" W"), fmt.Sprintf("meter avg %.6f W", s.PowerAvgW))
@@ -78,12 +88,19 @@ func printSnapshotText(s snapshot, a km003c.ADC) {
 	row("D+", st.green(fmt.Sprintf("%.4f V", s.DPV)), avgText(s.DPAvgV))
 	row("D-", st.yellow(fmt.Sprintf("%.4f V", s.DMV)), avgText(s.DMAvgV))
 	row("VDD", fmt.Sprintf("%.4f V", s.VDDV), "meter internal supply")
-	fmt.Println()
-	fmt.Println("  " + st.dim("label: ") + deref(s.Inferred.DashboardLabel, "[N/A]") + " / " +
-		deref(s.Inferred.DashboardLabel2, "[N/A]") + st.dim("  (meter's D+/D- dashboard labels, recomputed)"))
-	fmt.Println("  " + st.dim("CC:    ") + s.Inferred.CC.Text + st.dim("  (inferred)"))
-	if s.FirmwareVersion != nil {
-		fmt.Println("  " + st.dim("firmware "+*s.FirmwareVersion))
+	_, _ = fmt.Fprintln(w)
+	if s.Inferred.DashboardClassifier != nil {
+		_, _ = fmt.Fprintln(w, "  "+st.dim("label: ")+deref(s.Inferred.DashboardLabel, "[N/A]")+" / "+
+			deref(s.Inferred.DashboardLabel2, "[N/A]")+st.dim("  (meter's D+/D- dashboard labels, recomputed)"))
+	} else {
+		_, _ = fmt.Fprintln(w, "  "+st.dim("label: unknown for this firmware"))
+	}
+	_, _ = fmt.Fprintln(w, "  "+st.dim("CC:    ")+s.Inferred.CC.Text+st.dim("  (inferred)"))
+	switch {
+	case s.FirmwareVersion != nil:
+		_, _ = fmt.Fprintln(w, "  "+st.dim("firmware "+*s.FirmwareVersion))
+	case s.FirmwareError != nil:
+		_, _ = fmt.Fprintln(w, "  "+st.dim("firmware unknown: "+*s.FirmwareError))
 	}
 }
 
@@ -107,8 +124,10 @@ type measureResult struct {
 	SchemaVersion   int          `json:"schema_version"`
 	Serial          string       `json:"serial"`
 	FirmwareVersion *string      `json:"firmware_version"`
+	FirmwareError   *string      `json:"firmware_error"`
 	Start           string       `json:"start"`
 	End             string       `json:"end"`
+	EndReason       string       `json:"end_reason"`
 	DurationS       float64      `json:"duration_s"`
 	IntegratedS     float64      `json:"integrated_s"`
 	IntervalS       float64      `json:"interval_s"`
@@ -125,7 +144,7 @@ type measureResult struct {
 
 // integrator accumulates energy and charge, holding each sample until the
 // next one arrives (and the last one until the end of the window), so the
-// integrated time equals the sampled window.
+// integrated time equals the sampled window. measure and watch share it.
 type integrator struct {
 	first, prevT time.Time
 	prevW, prevA float64
@@ -144,12 +163,20 @@ func (in *integrator) add(t time.Time, w, a float64) {
 	in.prevT, in.prevW, in.prevA, in.ok = t, w, a, true
 }
 
-func (in *integrator) finish(end time.Time) (wh, ah, seconds float64) {
+// at returns the totals up to t (the last sample held until t) without
+// changing the integrator.
+func (in integrator) at(t time.Time) (wh, ah, seconds float64) {
 	if !in.ok {
 		return 0, 0, 0
 	}
-	in.add(end, 0, 0)
-	return in.wh, in.ah, end.Sub(in.first).Seconds()
+	in.add(t, 0, 0)
+	return in.wh, in.ah, t.Sub(in.first).Seconds()
+}
+
+// fatalMidRun reports errors that end a sampling window early: the meter
+// went away, was taken by another program, or cannot be talked to safely.
+func fatalMidRun(err error) bool {
+	return errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) || errors.Is(err, km003c.ErrStuck)
 }
 
 func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
@@ -168,16 +195,21 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			return err
 		}
 		defer m.close()
+		m.detect(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 
 		var v, i, p, temp stat
 		var in integrator
 		var last *snapshot
-		var lastErr error
+		var lastErr, stop error
 		tr := &pdTracker{}
 		recs := []pdRecord{}
 		start := time.Now()
 		res := measureResult{SchemaVersion: schemaVersion, Serial: m.usb.Serial,
-			FirmwareVersion: strOrNil(m.FirmwareVersion()), Start: utcTime(start), IntervalS: interval.Seconds()}
+			FirmwareVersion: strOrNil(m.FirmwareVersion()), FirmwareError: m.firmwareError(),
+			Start: utcTime(start), IntervalS: interval.Seconds()}
 
 		deadline := time.NewTimer(*duration)
 		defer deadline.Stop()
@@ -195,13 +227,15 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			now := time.Now()
 			switch {
 			case ctx.Err() != nil:
-				return ctx.Err()
+				stop = ctx.Err()
+				break loop
 			case err != nil:
 				res.FailedSamples++
 				res.LastError = new(err.Error())
 				lastErr = err
-				if errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) || errors.Is(err, km003c.ErrStuck) {
-					return err
+				if fatalMidRun(err) {
+					stop = err
+					break loop
 				}
 			default:
 				in.add(now, a.FlowPower(), a.FlowA())
@@ -211,28 +245,24 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 				if a.TempValid() {
 					temp.add(a.TempC())
 				}
-				s := toSnapshot(a, now, m.usb.Serial, m.FirmwareVersion())
+				s := toSnapshot(a, now, m.usb.Serial, m.FirmwareVersion(), m.firmwareError())
 				last = &s
 				res.Samples++
-				if pd != nil {
-					for _, r := range pd.Records {
-						if rec, ok := tr.process(r); ok {
-							recs = append(recs, rec)
-						}
-					}
-				}
+				recs = append(recs, tr.packet(pd)...)
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				stop = ctx.Err()
+				break loop
 			case <-deadline.C:
 				break loop
 			case <-tick.C:
 			}
 		}
 		end := time.Now()
-		wh, ah, integrated := in.finish(end)
+		wh, ah, integrated := in.at(end)
 		res.End = utcTime(end)
+		res.EndReason = endReason(stop)
 		res.DurationS = round(end.Sub(start).Seconds(), 3)
 		res.IntegratedS = round(integrated, 3)
 		res.Stats = measureStats{VBusV: v.json(6), IBusA: i.json(6), PowerW: p.json(6), TempC: temp.json(3)}
@@ -244,19 +274,28 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 			res.PD = tr.summary(recs)
 		}
 		if res.Samples == 0 {
+			if stop != nil {
+				return stop
+			}
 			if lastErr == nil {
 				lastErr = km003c.ErrTimeout
 			}
 			return fmt.Errorf("measure: no samples collected (%d failed): %w", res.FailedSamples, lastErr)
 		}
+		// Print what was collected even when the window ended early (an
+		// agent harness timeout sends SIGTERM): end_reason says why.
+		var perr error
 		if g.jsonMode() {
-			if err := emitIndented(res); err != nil {
-				return err
-			}
+			perr = g.emitIndented(res)
 		} else {
-			printMeasureText(res)
+			printMeasureText(g.out(), g.style(), res)
 		}
-		if res.FailedSamples > 0 {
+		switch {
+		case stop != nil:
+			return stop
+		case perr != nil:
+			return perr
+		case res.FailedSamples > 0:
 			return partialErr{fmt.Sprintf("%d of %d samples failed (last: %s)",
 				res.FailedSamples, res.Samples+res.FailedSamples, deref(res.LastError, ""))}
 		}
@@ -264,34 +303,33 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 	}
 }
 
-func printMeasureText(r measureResult) {
-	st := style{on: colorOn()}
-	fmt.Printf("%s  %s  %.1fs  %d samples  %d failed  flow %s\n", st.bold("POWER-Z measure"),
-		r.Serial, r.DurationS, r.Samples, r.FailedSamples, r.Direction)
+func printMeasureText(w io.Writer, st style, r measureResult) {
+	_, _ = fmt.Fprintf(w, "%s  %s  %.1fs  %d samples  %d failed  flow %s  (%s)\n", st.bold("POWER-Z measure"),
+		r.Serial, r.DurationS, r.Samples, r.FailedSamples, r.Direction, r.EndReason)
 	row := func(name, unit string, s *statJSON) {
 		if s == nil {
 			return
 		}
-		fmt.Printf("  %-5s min %12.6f  mean %12.6f  max %12.6f  last %12.6f %s\n", name, s.Min, s.Mean, s.Max, s.Last, unit)
+		_, _ = fmt.Fprintf(w, "  %-5s min %12.6f  mean %12.6f  max %12.6f  last %12.6f %s\n", name, s.Min, s.Mean, s.Max, s.Last, unit)
 	}
 	row("VBUS", "V", r.Stats.VBusV)
 	row("IBUS", "A", r.Stats.IBusA)
 	row("PWR", "W", r.Stats.PowerW)
 	row("TEMP", "°C", r.Stats.TempC)
-	fmt.Printf("  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
+	_, _ = fmt.Fprintf(w, "  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
 	if r.PD != nil {
-		fmt.Printf("  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)
+		_, _ = fmt.Fprintf(w, "  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)
 		for _, p := range r.PD.SourceCapabilities {
-			fmt.Printf("    #%d %s\n", p.Index, p.Text)
+			_, _ = fmt.Fprintf(w, "    #%d %s\n", p.Index, p.Text)
 		}
 		switch {
 		case r.PD.Contract != nil:
-			fmt.Printf("  contract: %s\n", r.PD.Contract.Text)
+			_, _ = fmt.Fprintf(w, "  contract: %s\n", r.PD.Contract.Text)
 		case r.PD.LastRequest != nil:
-			fmt.Printf("  last request: %s\n", r.PD.LastRequest.Text)
+			_, _ = fmt.Fprintf(w, "  last request: %s\n", r.PD.LastRequest.Text)
 		}
 		if r.PD.Note != nil {
-			fmt.Println("  " + st.dim(*r.PD.Note))
+			_, _ = fmt.Fprintln(w, "  "+st.dim(*r.PD.Note))
 		}
 	}
 }
@@ -321,9 +359,9 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 		var write func(snapshot) error
 		switch f {
 		case "jsonl", "json":
-			write = func(s snapshot) error { return emit(s) }
+			write = func(s snapshot) error { return g.emit(s) }
 		case "csv":
-			w := csv.NewWriter(os.Stdout)
+			w := csv.NewWriter(g.out())
 			defer w.Flush()
 			if err := w.Write(csvColumns); err != nil {
 				return err
@@ -349,6 +387,8 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 			return err
 		}
 		defer m.close()
+		m.detect(ctx)
+		parent := ctx
 		if *duration > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, *duration)
@@ -364,7 +404,7 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 				}
 				return err
 			}
-			if err := write(toSnapshot(a, time.Now(), m.usb.Serial, m.FirmwareVersion())); err != nil {
+			if err := write(toSnapshot(a, time.Now(), m.usb.Serial, m.FirmwareVersion(), m.firmwareError())); err != nil {
 				if isBrokenPipe(err) {
 					return nil
 				}
@@ -380,8 +420,8 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 			}
 			break
 		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return ctx.Err()
+		if errors.Is(parent.Err(), context.Canceled) {
+			return parent.Err()
 		}
 		return nil
 	}
@@ -394,19 +434,21 @@ type pdEnd struct {
 	SchemaVersion      int     `json:"schema_version"`
 	Kind               string  `json:"kind"` // "summary"
 	Time               string  `json:"time"`
+	EndReason          string  `json:"end_reason"`
 	DurationS          float64 `json:"duration_s"`
 	Messages           int     `json:"messages"`
 	Events             int     `json:"events"`
+	Undecoded          int     `json:"undecoded"`
 	SourceCapabilities []pdo   `json:"source_capabilities"`
 	LastRequest        *rdo    `json:"last_request"`
 	Contract           *rdo    `json:"contract"`
 	Note               *string `json:"note"`
 }
 
-func newPDEnd(sum *pdSummary, now time.Time, durationS float64) pdEnd {
-	return pdEnd{SchemaVersion: schemaVersion, Kind: "summary", Time: utcTime(now), DurationS: round(durationS, 3),
-		Messages: sum.Messages, Events: sum.Events, SourceCapabilities: sum.SourceCapabilities,
-		LastRequest: sum.LastRequest, Contract: sum.Contract, Note: sum.Note}
+func newPDEnd(sum *pdSummary, now time.Time, durationS float64, reason string) pdEnd {
+	return pdEnd{SchemaVersion: schemaVersion, Kind: "summary", Time: utcTime(now), EndReason: reason,
+		DurationS: round(durationS, 3), Messages: sum.Messages, Events: sum.Events, Undecoded: sum.Undecoded,
+		SourceCapabilities: sum.SourceCapabilities, LastRequest: sum.LastRequest, Contract: sum.Contract, Note: sum.Note}
 }
 
 func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
@@ -421,6 +463,8 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 		if err := checkInterval("pd", *interval, 10*time.Millisecond); err != nil {
 			return err
 		}
+		// The PD stream does not depend on the firmware version, so no
+		// CONNECT or MemoryRead is sent: only GET_DATA for PD_PACKET.
 		m, err := open(ctx, g)
 		if err != nil {
 			return err
@@ -434,23 +478,32 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 		}
 		jsonOut := g.jsonMode()
 		if !jsonOut {
-			fmt.Fprintln(os.Stderr, "listening for USB-PD traffic (passive; Ctrl-C to stop)…")
+			_, _ = fmt.Fprintln(g.env.stderr, "listening for USB-PD traffic (passive; Ctrl-C to stop)…")
 		}
 		start := time.Now()
 		tr := &pdTracker{showGoodCRC: *goodCRC}
 		tick := time.NewTicker(*interval)
 		defer tick.Stop()
 		n := 0
-		finish := func() error {
+		// finish prints the summary; it runs however the capture ends.
+		finish := func(stop error) error {
 			sum := tr.summary(nil)
+			var err error
 			if jsonOut {
-				return emit(newPDEnd(sum, time.Now(), time.Since(start).Seconds()))
+				err = g.emit(newPDEnd(sum, time.Now(), time.Since(start).Seconds(), endReason(stop)))
+			} else {
+				_, _ = fmt.Fprintf(g.env.stderr, "%d messages, %d events (%s)\n", sum.Messages, sum.Events, endReason(stop))
+				if sum.Note != nil {
+					_, _ = fmt.Fprintln(g.env.stderr, *sum.Note)
+				}
 			}
-			fmt.Fprintf(os.Stderr, "%d messages, %d events\n", sum.Messages, sum.Events)
-			if sum.Note != nil {
-				fmt.Fprintln(os.Stderr, *sum.Note)
+			switch {
+			case stop != nil:
+				return stop
+			case isBrokenPipe(err):
+				return nil
 			}
-			return nil
+			return err
 		}
 		for {
 			pd, err := m.ReadPD(ctx)
@@ -458,17 +511,13 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 				if ctx.Err() != nil {
 					break
 				}
-				return err
+				return finish(err)
 			}
-			for _, r := range pd.Records {
-				rec, ok := tr.process(r)
-				if !ok {
-					continue
-				}
+			for _, rec := range tr.packet(&pd) {
 				if jsonOut {
-					err = emit(rec)
+					err = g.emit(rec)
 				} else {
-					_, err = fmt.Println(rec.text())
+					_, err = fmt.Fprintln(g.out(), rec.text())
 				}
 				if err != nil {
 					if isBrokenPipe(err) {
@@ -477,7 +526,7 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 					return err
 				}
 				if n++; *count > 0 && n >= *count {
-					return finish()
+					return finish(nil)
 				}
 			}
 			select {
@@ -488,9 +537,9 @@ func setupPD(fs *flag.FlagSet) func(context.Context, globals) error {
 			break
 		}
 		if errors.Is(parent.Err(), context.Canceled) {
-			return parent.Err()
+			return finish(parent.Err())
 		}
-		return finish()
+		return finish(nil)
 	}
 }
 
@@ -505,12 +554,12 @@ type infoResult struct {
 }
 
 type deviceJSON struct {
-	Model           string  `json:"model"`
-	FirmwareVersion string  `json:"firmware_version"`
-	FirmwareDate    string  `json:"firmware_date"`
-	HardwareVersion string  `json:"hardware_version"`
-	HardwareDate    string  `json:"hardware_date"`
-	Serial          string  `json:"serial"`
+	Model           *string `json:"model"`
+	FirmwareVersion *string `json:"firmware_version"`
+	FirmwareDate    *string `json:"firmware_date"`
+	HardwareVersion *string `json:"hardware_version"`
+	HardwareDate    *string `json:"hardware_date"`
+	Serial          *string `json:"serial"`
 	UUID            *string `json:"uuid"`
 	TailLayout      string  `json:"adc_tail_layout"`
 }
@@ -526,6 +575,14 @@ type settingsJSON struct {
 	ChecksumOK        bool   `json:"checksum_ok"`
 }
 
+// splitErrors lists the errors joined by errors.Join.
+func splitErrors(err error) []error {
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		return u.Unwrap()
+	}
+	return []error{err}
+}
+
 func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
 	return func(ctx context.Context, g globals) error {
 		m, err := open(ctx, g)
@@ -534,13 +591,21 @@ func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
 		}
 		defer m.close()
 		res := infoResult{SchemaVersion: schemaVersion, USB: m.usb, Errors: []string{}}
-		if info, err := m.ReadInfo(ctx); err != nil {
-			res.Errors = append(res.Errors, "device: "+err.Error())
-		} else {
+		info, err := m.ReadInfo(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			for _, e := range splitErrors(err) {
+				res.Errors = append(res.Errors, "device: "+e.Error())
+			}
+		}
+		if info != (km003c.DeviceInfo{}) {
 			res.Device = &deviceJSON{
-				Model: info.Model, FirmwareVersion: info.FirmwareVersion, FirmwareDate: isoDate(info.FirmwareDate),
-				HardwareVersion: info.HardwareVersion, HardwareDate: isoDate(info.HardwareDate),
-				Serial: info.Serial, UUID: strOrNil(info.UUID), TailLayout: m.Layout().String(),
+				Model: strOrNil(info.Model), FirmwareVersion: strOrNil(info.FirmwareVersion),
+				FirmwareDate: strOrNil(isoDate(info.FirmwareDate)), HardwareVersion: strOrNil(info.HardwareVersion),
+				HardwareDate: strOrNil(isoDate(info.HardwareDate)), Serial: strOrNil(info.Serial),
+				UUID: strOrNil(info.UUID), TailLayout: m.Layout().String(),
 			}
 		}
 		if set, err := m.ReadSettings(ctx); err != nil {
@@ -556,11 +621,11 @@ func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
 			return ctx.Err()
 		}
 		if g.jsonMode() {
-			if err := emitIndented(res); err != nil {
+			if err := g.emitIndented(res); err != nil {
 				return err
 			}
 		} else {
-			printInfoText(res)
+			printInfoText(g.out(), g.style(), res)
 		}
 		if len(res.Errors) > 0 {
 			return partialErr{strings.Join(res.Errors, "; ")}
@@ -569,36 +634,38 @@ func setupInfo(fs *flag.FlagSet) func(context.Context, globals) error {
 	}
 }
 
-func printInfoText(r infoResult) {
-	st := style{on: colorOn()}
+func printInfoText(w io.Writer, st style, r infoResult) {
 	kv := func(k, v string) {
 		if v != "" {
-			fmt.Printf("  %-18s %s\n", k, v)
+			_, _ = fmt.Fprintf(w, "  %-18s %s\n", k, v)
 		}
 	}
-	fmt.Println(st.bold("USB"))
+	_, _ = fmt.Fprintln(w, st.bold("USB"))
 	kv("Manufacturer", r.USB.Manufacturer)
 	kv("Product", r.USB.Product)
 	kv("USB serial", r.USB.Serial)
 	kv("Bus/address", fmt.Sprintf("%d/%d", r.USB.Bus, r.USB.Address))
 	if d := r.Device; d != nil {
-		fmt.Println(st.bold("Device"))
-		kv("Model", d.Model)
-		kv("Firmware", d.FirmwareVersion)
-		kv("Firmware date", d.FirmwareDate)
-		kv("Hardware/boot ver", d.HardwareVersion)
-		kv("Hardware date", d.HardwareDate)
-		kv("Serial", d.Serial)
+		_, _ = fmt.Fprintln(w, st.bold("Device"))
+		kv("Model", deref(d.Model, ""))
+		kv("Firmware", deref(d.FirmwareVersion, ""))
+		kv("Firmware date", deref(d.FirmwareDate, ""))
+		kv("Hardware/boot ver", deref(d.HardwareVersion, ""))
+		kv("Hardware date", deref(d.HardwareDate, ""))
+		kv("Serial", deref(d.Serial, ""))
 		kv("UUID", deref(d.UUID, ""))
 	}
 	if s := r.Settings; s != nil {
-		fmt.Println(st.bold("Settings"))
+		_, _ = fmt.Fprintln(w, st.bold("Settings"))
 		kv("Device name", s.DeviceName)
 		kv("Sample rate", fmt.Sprintf("%d SPS", s.SampleRateSPS))
 		kv("Brightness", fmt.Sprintf("%d %%", s.BrightnessPercent))
 		kv("Rotation code", strconv.Itoa(s.RotationCode))
 		kv("Auto-rotate", strconv.FormatBool(s.AutoRotate))
 		kv("Checksum", map[bool]string{true: "ok", false: "mismatch"}[s.ChecksumOK])
+	}
+	for _, e := range r.Errors {
+		_, _ = fmt.Fprintln(w, st.red("  error: "+e))
 	}
 }
 
@@ -612,19 +679,19 @@ type devicesResult struct {
 
 func setupDevices(fs *flag.FlagSet) func(context.Context, globals) error {
 	return func(_ context.Context, g globals) error {
-		devs, err := km003c.ListDevices()
+		devs, err := g.env.listUSB()
 		if err != nil {
 			return err
 		}
 		if g.jsonMode() {
-			return emitIndented(devicesResult{SchemaVersion: schemaVersion, Count: len(devs), Devices: devs})
+			return g.emitIndented(devicesResult{SchemaVersion: schemaVersion, Count: len(devs), Devices: devs})
 		}
 		if len(devs) == 0 {
-			fmt.Println("no POWER-Z KM003C connected")
-			return nil
+			_, err := fmt.Fprintln(g.out(), "no POWER-Z KM003C connected")
+			return err
 		}
 		for _, d := range devs {
-			fmt.Printf("%s  %s %s  bus %d address %d\n", d.Serial, d.Manufacturer, d.Product, d.Bus, d.Address)
+			_, _ = fmt.Fprintf(g.out(), "%s  %s %s  bus %d address %d\n", d.Serial, d.Manufacturer, d.Product, d.Bus, d.Address)
 		}
 		return nil
 	}

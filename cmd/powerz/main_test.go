@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -12,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 )
 
 func TestClassify(t *testing.T) {
@@ -26,6 +27,8 @@ func TestClassify(t *testing.T) {
 		{fmt.Errorf("x: %w", km003c.ErrBusy), "busy", exitBusy, true},
 		{fmt.Errorf("x: %w", km003c.ErrTimeout), "timeout", exitTimeout, true},
 		{fmt.Errorf("x: %w", km003c.ErrPermission), "permission_denied", exitPermission, false},
+		{fmt.Errorf("x: %w", km003c.ErrRejected), "error", exitError, false},
+		{fmt.Errorf("x: %w", km003c.ErrStuck), "error", exitError, false},
 		{context.Canceled, "interrupted", exitInterrupt, false},
 		{partialErr{"half"}, "partial", exitPartial, true},
 		{usageErr("bad"), "usage", exitUsage, false},
@@ -37,6 +40,24 @@ func TestClassify(t *testing.T) {
 			t.Errorf("classify(%v) = %+v, want %s/%d/%v with a hint", c.err, ce, c.code, c.exit, c.retryable)
 		}
 	}
+	if h := classify(km003c.ErrStuck).Hint; !strings.Contains(h, "unplug") {
+		t.Errorf("stuck hint %q does not say to reconnect the meter", h)
+	}
+}
+
+// noMeterEnv fails the test if anything tries to open the meter.
+func noMeterEnv(t *testing.T) (*env, *bytes.Buffer, *bytes.Buffer) {
+	var out, errb bytes.Buffer
+	return &env{stdout: &out, stderr: &errb,
+		openUSB: func(string) (km003c.Transport, km003c.USBDescription, error) {
+			t.Error("usage error path opened the meter")
+			return nil, km003c.USBDescription{}, km003c.ErrNotFound
+		},
+		listUSB: func() ([]km003c.USBDescription, error) {
+			t.Error("usage error path listed meters")
+			return nil, nil
+		},
+	}, &out, &errb
 }
 
 func TestUsageErrorsExitTwo(t *testing.T) {
@@ -50,10 +71,16 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"log", "-n", "-1"},
 		{"pd", "-interval", "0s"},
 		{"read", "-timeout", "50ms"},
+		{"read", "-wait", "-1s"},
 		{"measure", "-duration", "banana"},
+		{"watch"}, // not a terminal
 	} {
-		if got := run(append([]string{"-json"}, args...)); got != exitUsage {
+		e, out, errb := noMeterEnv(t)
+		if got := run(context.Background(), e, append([]string{"-json"}, args...)); got != exitUsage {
 			t.Errorf("run(%v) = %d, want %d", args, got, exitUsage)
+		}
+		if out.Len() != 0 || !strings.Contains(errb.String(), `"code":"usage"`) {
+			t.Errorf("run(%v): stdout %q stderr %q", args, out, errb)
 		}
 	}
 }
@@ -83,9 +110,9 @@ func TestFlagUsageHasNoBackquotes(t *testing.T) {
 	}
 }
 
-func loadADC(t *testing.T) km003c.ADC {
+func loadADC(t testing.TB) km003c.ADC {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "km003c", "testdata", "fw1.9.5", "bulk_W1_1_resp.hex"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "hardware", "km003c", "testdata", "fw1.9.5", "bulk_W1_1_resp.hex"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +130,7 @@ func loadADC(t *testing.T) km003c.ADC {
 func TestSnapshotValues(t *testing.T) {
 	a := loadADC(t)
 	a.ApplyTail(km003c.TailLayoutFor("1.9.5"))
-	s := toSnapshot(a, time.Unix(0, 0), "050002", "1.9.5")
+	s := toSnapshot(a, time.Unix(0, 0), "050002", "1.9.5", nil)
 	if s.VBusV < 0.004 || s.VBusV > 0.007 || s.TempC == nil || s.Temp2C != nil {
 		t.Errorf("values: %+v", s)
 	}
@@ -113,11 +140,22 @@ func TestSnapshotValues(t *testing.T) {
 	if s.Inferred.DashboardLabel != nil { // "[ N/A ]" on screen -> null
 		t.Errorf("dashboard label %q, want null", *s.Inferred.DashboardLabel)
 	}
+	if s.Inferred.DashboardClassifier == nil || *s.Inferred.DashboardClassifier != "1.9.5" {
+		t.Errorf("classifier %v, want 1.9.5", s.Inferred.DashboardClassifier)
+	}
 	if s.Time != "1970-01-01T00:00:00.000Z" {
 		t.Errorf("time %q, want UTC with milliseconds", s.Time)
 	}
 	if s.Direction != "none" || s.Inferred.CC.Attached != "none" {
 		t.Errorf("idle direction/cc: %s %+v", s.Direction, s.Inferred.CC)
+	}
+	// Unknown firmware: firmware-dependent fields and labels are null, and
+	// the classifier says the labels are unknown rather than [N/A].
+	a.ApplyTail(km003c.TailUnknown)
+	u := toSnapshot(a, time.Unix(0, 0), "050002", "", new("read block 0x00004420: timeout"))
+	if u.FirmwareVersion != nil || u.FirmwareError == nil || u.SampleRateSPS != nil || u.CC2AvgV != nil ||
+		u.Inferred.DashboardClassifier != nil || u.Inferred.DashboardLabel2 != nil || u.Raw.TailLayout != "unknown" {
+		t.Errorf("unknown-firmware snapshot %+v", u)
 	}
 }
 
@@ -127,9 +165,20 @@ func TestIntegrator(t *testing.T) {
 	for i := range 10 { // 2 W for 10 samples, 100 ms apart
 		in.add(t0.Add(time.Duration(i)*100*time.Millisecond), 2, 0.4)
 	}
-	wh, ah, s := in.finish(t0.Add(time.Second))
+	wh, ah, s := in.at(t0.Add(time.Second))
 	if s != 1 || wh != 2.0/3600 || ah != 0.4/3600 {
 		t.Errorf("integrated %v s, %v Wh, %v Ah; want 1 s, %v Wh", s, wh, ah, 2.0/3600)
+	}
+	// at does not consume: asking again gives the same totals.
+	if wh2, _, _ := in.at(t0.Add(time.Second)); wh2 != wh {
+		t.Errorf("at changed the integrator: %v then %v", wh, wh2)
+	}
+	// A failed sample in between holds the previous value (no gap dropped).
+	var gap integrator
+	gap.add(t0, 1, 0.2)
+	gap.add(t0.Add(10*time.Second), 1, 0.2)
+	if wh, _, _ := gap.at(t0.Add(10 * time.Second)); wh != 10.0/3600 {
+		t.Errorf("gap integrated to %v Wh, want %v", wh, 10.0/3600)
 	}
 }
 
@@ -141,45 +190,39 @@ func TestISODate(t *testing.T) {
 	}
 }
 
-func TestPDTrackerResolvesRequest(t *testing.T) {
+// feed runs one PD_PACKET payload through a tracker.
+func feed(t *testing.T, tr *pdTracker, records ...[]byte) []pdRecord {
+	t.Helper()
+	p := parsePD(t, pdPayload(records...))
+	return tr.packet(&p)
+}
+
+func TestPDTrackerNegotiation(t *testing.T) {
 	tr := &pdTracker{}
-	// Source_Capabilities: 5V 3A, 9V 3A.
-	caps := km003c.PDRecord{IsMessage: true, Raw: []byte{0}}
-	caps.Message.Header = 0x21A1 // data, 2 objects, SRC, rev 3.x, Source_Capabilities
-	caps.Message.Objects = []uint32{0x0001912C, 0x0002D12C}
-	rec, ok := tr.process(caps)
-	if !ok || len(rec.SourceCaps) != 2 || rec.SourceCaps[1].MaxVoltageV != 9 || rec.SourceCaps[1].MaxPowerW != 27 {
-		t.Fatalf("caps %+v", rec)
+	p := parsePD(t, negotiation())
+	recs := tr.packet(&p)
+	if len(recs) != 5 || recs[1].SourceCaps == nil || recs[1].SourceCaps[1].MaxVoltageV != 9 || recs[1].SourceCaps[1].MaxPowerW != 27 {
+		t.Fatalf("records %+v", recs)
 	}
-	req := km003c.PDRecord{IsMessage: true, Raw: []byte{0}}
-	req.Message.Header = 0x1082 // data, 1 object, SNK, rev 3.x, Request
-	req.Message.Objects = []uint32{2<<28 | 300<<10 | 300}
-	rec, _ = tr.process(req)
-	if rec.Request == nil || rec.Request.PDO == nil || rec.Request.PDO.MaxVoltageV != 9 ||
-		rec.Request.OperatingCurrentA == nil || *rec.Request.OperatingCurrentA != 3 {
-		t.Fatalf("request %+v", rec.Request)
+	req := recs[2].Request
+	if req == nil || req.PDO == nil || req.PDO.MaxVoltageV != 9 || req.OperatingCurrentA == nil || *req.OperatingCurrentA != 3 {
+		t.Fatalf("request %+v", req)
 	}
-	ready := km003c.PDRecord{IsMessage: true, Raw: []byte{0}}
-	ready.Message.Header = 0x01A6 // PS_RDY from source
-	tr.process(ready)
 	sum := tr.summary(nil)
-	if sum.Contract == nil || sum.Contract.ObjectPosition != 2 || len(sum.SourceCapabilities) != 2 || sum.Note != nil {
+	if sum.Contract == nil || sum.Contract.ObjectPosition != 2 || len(sum.SourceCapabilities) != 3 || sum.Note != nil {
 		t.Fatalf("summary %+v", sum)
 	}
 	// A long (undecoded) message record is reported as a message, renders as
 	// text without panicking, and does not end the contract.
-	long := km003c.PDRecord{IsMessage: true, Long: true, SOP: 2, Raw: []byte{0x25}}
-	rec, ok = tr.process(long)
-	if !ok || rec.Kind != "message" || rec.Event != "" || rec.text() == "" {
-		t.Fatalf("long record %+v", rec)
+	recs = feed(t, tr, pdLong(9_300, []byte{1, 2, 3}))
+	if len(recs) != 1 || recs[0].Kind != "message" || recs[0].Message != "long_message_undecoded" || recs[0].text() == "" {
+		t.Fatalf("long record %+v", recs)
 	}
 	if tr.summary(nil).Contract == nil {
 		t.Fatal("long record cleared the contract")
 	}
 	// GoodCRC is hidden by default.
-	good := km003c.PDRecord{IsMessage: true, Raw: []byte{0}}
-	good.Message.Header = 0x0041
-	if _, ok := tr.process(good); ok {
+	if recs := feed(t, tr, pdMsg(9_400, 0, hdrGoodCRC)); len(recs) != 0 {
 		t.Error("GoodCRC not filtered")
 	}
 	// An empty capture explains itself, and the explanation matches the data.
@@ -187,9 +230,114 @@ func TestPDTrackerResolvesRequest(t *testing.T) {
 		t.Errorf("empty summary %+v", n)
 	}
 	replug := &pdTracker{}
-	replug.process(km003c.PDRecord{Event: 2, EventParam: 2, Raw: []byte{0x45}})
-	replug.process(km003c.PDRecord{Event: 1, EventParam: 2, Raw: []byte{0x45}})
+	feed(t, replug, pdEvent(1, 0x22), pdEvent(2, 0x21))
 	if n := replug.summary(nil); n.Note == nil || *n.Note != noPDMessagesNote || n.Events != 2 {
 		t.Errorf("replug without PD: %+v", n)
+	}
+}
+
+// The contract is the Request the source accepted and then confirmed with
+// PS_RDY; nothing else becomes a contract.
+func TestPDTrackerContractNeedsAccept(t *testing.T) {
+	caps := pdMsg(1, 0, hdrSrcCaps|3<<12, pdoFixed5V3A, pdoFixed9V3A, pdoPPS3311V3A)
+	cases := []struct {
+		name     string
+		records  [][]byte
+		contract int // expected object position, 0 = none
+	}{
+		{"accepted", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrAccept), pdMsg(4, 0, hdrPSRdy)}, 2},
+		{"rejected then PS_RDY of a swap", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrReject), pdMsg(4, 0, hdrPSRdy)}, 0},
+		{"wait", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrWait), pdMsg(4, 0, hdrPSRdy)}, 0},
+		// The sink then swaps roles: that Accept and PS_RDY are not for the
+		// rejected Request.
+		{"rejected, then an accepted swap", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrReject),
+			pdMsg(4, 0, hdrAccept), pdMsg(5, 0, hdrPSRdy)}, 0},
+		{"PS_RDY without Accept", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(4, 0, hdrPSRdy)}, 0},
+		{"Accept on a cable SOP'", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 1, hdrAccept), pdMsg(4, 0, hdrPSRdy)}, 0},
+		{"renegotiated to PPS", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrAccept), pdMsg(4, 0, hdrPSRdy),
+			pdMsg(5, 0, hdrRequest, rdoPPS3), pdMsg(6, 0, hdrAccept), pdMsg(7, 0, hdrPSRdy)}, 3},
+		{"rejected renegotiation keeps the old contract", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrAccept), pdMsg(4, 0, hdrPSRdy),
+			pdMsg(5, 0, hdrRequest, rdoPPS3), pdMsg(6, 0, hdrReject)}, 2},
+		{"soft reset", [][]byte{caps, pdMsg(2, 0, hdrRequest, rdoFixed2), pdMsg(3, 0, hdrAccept), pdMsg(4, 0, hdrPSRdy), pdMsg(5, 0, hdrSoftReset)}, 0},
+	}
+	for _, c := range cases {
+		tr := &pdTracker{}
+		feed(t, tr, c.records...)
+		got := tr.summary(nil).Contract
+		switch {
+		case c.contract == 0 && got != nil:
+			t.Errorf("%s: contract %+v, want none", c.name, got)
+		case c.contract != 0 && (got == nil || got.ObjectPosition != c.contract):
+			t.Errorf("%s: contract %+v, want position %d", c.name, got, c.contract)
+		}
+	}
+}
+
+// Detach and hard reset end the negotiation, including the source's
+// capabilities: the next charger starts from scratch.
+func TestPDTrackerDetachClearsState(t *testing.T) {
+	for _, code := range []byte{0x22 /* detach CC2 */, 0x04 /* hard reset */} {
+		tr := &pdTracker{}
+		p := parsePD(t, negotiation())
+		tr.packet(&p)
+		feed(t, tr, pdEvent(10_000, code))
+		sum := tr.summary(nil)
+		if sum.Contract != nil || sum.LastRequest != nil || len(sum.SourceCapabilities) != 0 || tr.capsText() != "" {
+			t.Errorf("event 0x%02X left state behind: %+v", code, sum)
+		}
+	}
+}
+
+// An EPR_Request carries a copy of the PDO it selects; it is decoded against
+// that copy even when the EPR capabilities were not captured.
+func TestPDTrackerEPRRequestUsesItsPDOCopy(t *testing.T) {
+	tr := &pdTracker{}
+	recs := feed(t, tr, pdMsg(1, 0, hdrEPRReq, rdoAVS8, pdoEPRAVS))
+	r := recs[0].Request
+	if r == nil || r.PDO == nil || r.PDO.Type != "epr_avs" || r.ObjectPosition != 8 || !r.EPR {
+		t.Fatalf("EPR request %+v", r)
+	}
+	if r.VoltageV == nil || *r.VoltageV != 28 || r.OperatingCurrentA == nil || *r.OperatingCurrentA != 3 {
+		t.Fatalf("EPR AVS request decoded as %+v (want 28 V, 3 A)", r)
+	}
+}
+
+// Zero slots that pad EPR capabilities are not reported as PDOs, and a
+// Request for such a slot has no PDO.
+func TestPDTrackerSkipsPaddingSlots(t *testing.T) {
+	tr := &pdTracker{}
+	tr.srcCaps = nil
+	feed(t, tr, pdMsg(1, 0, hdrSrcCaps|3<<12, pdoFixed5V3A, 0, pdoFixed9V3A))
+	sum := tr.summary(nil)
+	if len(sum.SourceCapabilities) != 2 || sum.SourceCapabilities[1].Index != 3 {
+		t.Fatalf("capabilities %+v", sum.SourceCapabilities)
+	}
+	recs := feed(t, tr, pdMsg(2, 0, hdrRequest, 2<<28|100<<10|100))
+	if recs[0].Request == nil || recs[0].Request.PDO != nil {
+		t.Fatalf("request for a padding slot %+v", recs[0].Request)
+	}
+}
+
+// Reserved SOP values and bytes the parser cannot split are reported, not
+// dropped, and stay within the schema.
+func TestPDTrackerUnknownSOPAndUndecoded(t *testing.T) {
+	tr := &pdTracker{}
+	payload := pdPayload(pdMsg(1, 5, hdrAccept), []byte{0x81, 0xFF}) // truncated record
+	p := parsePD(t, payload)
+	if len(p.Trailing) == 0 {
+		t.Fatal("test payload has no trailing bytes")
+	}
+	recs := tr.packet(&p)
+	if len(recs) != 2 || recs[0].SOP != "unknown" || recs[1].Kind != "undecoded" || recs[1].RawHex == "" {
+		t.Fatalf("records %+v", recs)
+	}
+	if !strings.Contains(recs[1].text(), "UNDECODED") {
+		t.Errorf("text %q", recs[1].text())
+	}
+	if sum := tr.summary(recs); sum.Undecoded != 1 {
+		t.Errorf("undecoded count %d", sum.Undecoded)
+	}
+	for _, r := range recs {
+		checkShape(t, "pd_record", toAny(t, r))
 	}
 }

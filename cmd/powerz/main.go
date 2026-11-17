@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 	"golang.org/x/term"
 )
 
@@ -57,6 +57,32 @@ const (
 	exitInterrupt  = 130
 )
 
+// env is everything a command touches outside the process: the output
+// streams and the meter. Tests replace it.
+type env struct {
+	stdout, stderr io.Writer
+	// tty reports whether stdout is an interactive terminal.
+	tty bool
+	// openUSB opens the meter with the given USB serial ("" = first one).
+	openUSB func(serial string) (km003c.Transport, km003c.USBDescription, error)
+	// listUSB lists connected meters without opening them.
+	listUSB func() ([]km003c.USBDescription, error)
+}
+
+func osEnv() *env {
+	return &env{
+		stdout: os.Stdout, stderr: os.Stderr, tty: isTTY(os.Stdout),
+		openUSB: func(serial string) (km003c.Transport, km003c.USBDescription, error) {
+			t, err := km003c.OpenUSB(serial)
+			if err != nil {
+				return nil, km003c.USBDescription{}, err
+			}
+			return t, t.Description(), nil
+		},
+		listUSB: km003c.ListDevices,
+	}
+}
+
 type globals struct {
 	serial  string
 	trace   bool
@@ -64,6 +90,7 @@ type globals struct {
 	wait    time.Duration
 	json    bool
 	text    bool
+	env     *env
 }
 
 // addCommon registers the flags every command accepts.
@@ -84,13 +111,15 @@ func (g globals) jsonMode() bool {
 	case g.text:
 		return false
 	}
-	return !isTTY(os.Stdout)
+	return !g.env.tty
 }
 
-func isTTY(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
+func (g globals) out() io.Writer { return g.env.stdout }
 
-// colorOn reports whether ANSI styling may be used on stdout.
-func colorOn() bool { return isTTY(os.Stdout) && os.Getenv("NO_COLOR") == "" }
+// style returns the ANSI styling for stdout.
+func (g globals) style() style { return style{on: g.env.tty && os.Getenv("NO_COLOR") == ""} }
+
+func isTTY(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
 
 // cliError carries a stable error code for machine consumers.
 type cliError struct {
@@ -190,7 +219,7 @@ func classify(err error) *cliError {
 			Hint: "the JSON on stdout is valid but incomplete; see its errors / failed_samples / last_error fields"}
 	case errors.Is(err, context.Canceled):
 		return &cliError{Code: "interrupted", Message: "interrupted", exit: exitInterrupt,
-			Hint: "the command was stopped by SIGINT/SIGTERM before it completed"}
+			Hint: "stopped by SIGINT/SIGTERM; measure and pd still printed what they had collected (end_reason \"interrupted\"), log lines already printed are valid"}
 	case errors.Is(err, km003c.ErrNotFound):
 		return &cliError{Code: "not_found", Message: err.Error(), exit: exitNotFound,
 			Hint: "connect the KM003C's data port (the USB-C side marked HID) to this computer; `powerz devices` lists detected meters"}
@@ -203,23 +232,33 @@ func classify(err error) *cliError {
 	case errors.Is(err, km003c.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return &cliError{Code: "timeout", Message: err.Error(), exit: exitTimeout, Retryable: true,
 			Hint: "retry; if it persists, unplug and reconnect the meter"}
+	case errors.Is(err, km003c.ErrStuck):
+		return &cliError{Code: "error", Message: err.Error(), exit: exitError,
+			Hint: "the meter keeps sending data powerz cannot drain, so nothing was written to it; unplug and reconnect the meter"}
 	}
 	return &cliError{Code: "error", Message: err.Error(), exit: exitError,
 		Hint: "rerun with -trace to see the USB frames; if the meter misbehaves, unplug and reconnect it"}
 }
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Without this a closed stdout pipe (`powerz log | head -1`) kills the
+	// process before the meter's USB interface is released cleanly; with it,
+	// writes fail with EPIPE and the commands stop normally.
+	signal.Ignore(syscall.SIGPIPE)
+	code := run(ctx, osEnv(), os.Args[1:])
+	stop()
+	os.Exit(code)
 }
 
-func run(args []string) int {
-	g := globals{timeout: time.Second}
+func run(ctx context.Context, e *env, args []string) int {
+	g := globals{timeout: time.Second, env: e}
 	top := flag.NewFlagSet("powerz", flag.ContinueOnError)
 	top.SetOutput(io.Discard)
 	addCommon(top, &g)
 	if err := top.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Print(usageText)
+			_, _ = fmt.Fprint(e.stdout, usageText)
 			return exitOK
 		}
 		return report(g, withHint(usageErr("%v", err), flagHint("powerz", top, err)))
@@ -231,19 +270,12 @@ func run(args []string) int {
 		cmd, rest = rest[0], rest[1:]
 	}
 	if cmd == "" {
-		if isTTY(os.Stdout) && !g.json {
+		if e.tty && !g.json {
 			cmd = "watch"
 		} else {
 			cmd = "read"
 		}
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	// Without this a closed stdout pipe (`powerz log | head -1`) kills the
-	// process before the meter's USB interface is released cleanly; with it,
-	// writes fail with EPIPE and the commands stop normally.
-	signal.Ignore(syscall.SIGPIPE)
 
 	c, ok := commands[cmd]
 	if !ok {
@@ -259,7 +291,7 @@ func run(args []string) int {
 	run := c.setup(fs)
 	if err := fs.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			printCommandHelp(cmd, c, fs)
+			printCommandHelp(e.stdout, cmd, c, fs)
 			return exitOK
 		}
 		return report(g, withHint(usageErr("%s: %v", cmd, err), flagHint(cmd, fs, err)))
@@ -285,11 +317,11 @@ func report(g globals, err error) int {
 	ce := classify(err)
 	ce.ExitCode = ce.exit
 	if g.jsonMode() {
-		fmt.Fprintln(os.Stderr, string(errorJSON(ce)))
+		_, _ = fmt.Fprintln(g.env.stderr, string(errorJSON(ce)))
 	} else {
-		fmt.Fprintf(os.Stderr, "powerz: %s\n", ce.Message)
+		_, _ = fmt.Fprintf(g.env.stderr, "powerz: %s\n", ce.Message)
 		if ce.Hint != "" {
-			fmt.Fprintf(os.Stderr, "hint: %s\n", ce.Hint)
+			_, _ = fmt.Fprintf(g.env.stderr, "hint: %s\n", ce.Hint)
 		}
 	}
 	return ce.exit
@@ -305,21 +337,21 @@ func errorJSON(ce *cliError) []byte {
 }
 
 // emit writes one JSON value as a single line to stdout.
-func emit(v any) error {
+func (g globals) emit(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	_, err = os.Stdout.Write(append(b, '\n'))
+	_, err = g.out().Write(append(b, '\n'))
 	return err
 }
 
 // emitIndented writes one JSON document (pretty-printed on a terminal).
-func emitIndented(v any) error {
-	if !isTTY(os.Stdout) {
-		return emit(v)
+func (g globals) emitIndented(v any) error {
+	if !g.env.tty {
+		return g.emit(v)
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(g.out())
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
@@ -328,17 +360,39 @@ func emitIndented(v any) error {
 type meter struct {
 	*km003c.Device
 	usb km003c.USBDescription
+	// firmwareErr is why the firmware version is unknown, if it is.
+	firmwareErr error
 }
 
 // close releases the USB interface; errors on release are not actionable.
 func (m *meter) close() { _ = m.Close() }
 
+// detect reads the firmware version, which selects the decoding of the
+// firmware-dependent ADC fields. Failure is not fatal: those fields are then
+// null and firmwareErr says why.
+func (m *meter) detect(ctx context.Context) {
+	if _, err := m.DetectLayout(ctx); err != nil && ctx.Err() == nil {
+		m.firmwareErr = err
+	}
+}
+
+// firmwareError is the JSON form of firmwareErr.
+func (m *meter) firmwareError() *string {
+	if m.firmwareErr == nil {
+		return nil
+	}
+	return new(m.firmwareErr.Error())
+}
+
+// open opens the meter, retrying for up to -wait while another process holds
+// it. It sends nothing: commands that need the firmware version call detect.
 func open(ctx context.Context, g globals) (*meter, error) {
 	deadline := time.Now().Add(g.wait)
-	var t *km003c.USBTransport
+	var t km003c.Transport
+	var desc km003c.USBDescription
 	var err error
 	for {
-		t, err = km003c.OpenUSB(g.serial)
+		t, desc, err = g.env.openUSB(g.serial)
 		if err == nil || !errors.Is(err, km003c.ErrBusy) || time.Now().After(deadline) {
 			break
 		}
@@ -355,15 +409,10 @@ func open(ctx context.Context, g globals) (*meter, error) {
 	d.Timeout = g.timeout
 	if g.trace {
 		d.Trace = func(dir string, f []byte) {
-			fmt.Fprintf(os.Stderr, "%s %-9s %s\n", time.Now().Format("15:04:05.000"), dir, hexdump(f))
+			_, _ = fmt.Fprintf(g.env.stderr, "%s %-9s %s\n", time.Now().Format("15:04:05.000"), dir, hexdump(f))
 		}
 	}
-	// The ADC tail layout depends on the firmware version. Failure is not
-	// fatal: the firmware-dependent fields are then reported as null.
-	if _, err := d.DetectLayout(ctx); err != nil && g.trace {
-		fmt.Fprintln(os.Stderr, "powerz: firmware version unknown:", err)
-	}
-	return &meter{Device: d, usb: t.Description()}, nil
+	return &meter{Device: d, usb: desc}, nil
 }
 
 // command describes one subcommand. setup registers its flags and returns
@@ -425,6 +474,9 @@ For AI agents and scripts:
     {"schema_version":1,"error":{"code","exit_code","message","retryable","hint"}}
   * Exit codes: 0 ok, 1 error, 2 usage, 3 not_found, 4 busy, 5 timeout,
     6 permission_denied, 7 partial, 130 interrupted.
+  * A non-zero exit does not always mean stdout is empty: measure and pd
+    print what they collected when interrupted or when the meter fails
+    mid-run (end_reason), and log lines already printed stay valid.
   * Run one powerz process per meter at a time, or pass -wait 10s to queue.
   * Start with:  powerz schema   and   powerz measure -duration 10s
 
@@ -433,16 +485,16 @@ whitelist. powerz never changes settings, never triggers fast-charge
 protocols (it cannot raise VBUS) and never touches firmware.
 `
 
-func printCommandHelp(name string, c command, fs *flag.FlagSet) {
-	fmt.Printf("powerz %s - %s\n\nFlags:\n", name, c.summary)
-	fs.SetOutput(os.Stdout)
+func printCommandHelp(w io.Writer, name string, c command, fs *flag.FlagSet) {
+	_, _ = fmt.Fprintf(w, "powerz %s - %s\n\nFlags:\n", name, c.summary)
+	fs.SetOutput(w)
 	fs.PrintDefaults()
 }
 
 func setupHelp(fs *flag.FlagSet) func(context.Context, globals) error {
-	return func(context.Context, globals) error {
-		fmt.Print(usageText)
-		return nil
+	return func(_ context.Context, g globals) error {
+		_, err := fmt.Fprint(g.out(), usageText)
+		return err
 	}
 }
 
@@ -454,9 +506,9 @@ type versionResult struct {
 func setupVersion(fs *flag.FlagSet) func(context.Context, globals) error {
 	return func(_ context.Context, g globals) error {
 		if g.jsonMode() {
-			return emit(versionResult{SchemaVersion: schemaVersion, Version: version})
+			return g.emit(versionResult{SchemaVersion: schemaVersion, Version: version})
 		}
-		fmt.Println("powerz", version)
-		return nil
+		_, err := fmt.Fprintln(g.out(), "powerz", version)
+		return err
 	}
 }

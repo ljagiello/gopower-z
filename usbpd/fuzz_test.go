@@ -32,23 +32,49 @@ func FuzzParseMessage(f *testing.F) {
 	})
 }
 
+// lengthPrefixed frames messages as [len][message]... for the fuzzer.
+func lengthPrefixed(msgs ...[]byte) []byte {
+	var out []byte
+	for _, m := range msgs {
+		out = append(append(out, byte(len(m))), m...)
+	}
+	return out
+}
+
+// FuzzReassembler feeds a stream of messages ([len][message]...). A block is
+// only ever produced with the data size the chunks announced, and it never
+// exceeds the largest extended message.
 func FuzzReassembler(f *testing.F) {
-	block := make([]byte, 40)
-	f.Add(append(extMsg(17, 0, 40, true, block[:26]), extMsg(17, 1, 40, true, block[26:])...), uint8(32))
-	f.Add(extMsg(17, 0, 8, false, block[:8]), uint8(12))
-	f.Fuzz(func(t *testing.T, stream []byte, chunkLen uint8) {
+	block := make([]byte, 60)
+	for i := range block {
+		block[i] = byte(i)
+	}
+	f.Add(lengthPrefixed(extMsg(17, 0, 40, true, block[:26]), extMsg(17, 1, 40, true, block[26:40]))) // completes
+	f.Add(lengthPrefixed(extMsg(17, 0, 60, true, block[:26]), extMsg(17, 1, 60, true, block[26:52]),
+		extMsg(17, 2, 60, true, block[52:]))) // three chunks
+	f.Add(lengthPrefixed(extMsg(17, 0, 8, false, block[:8])))                                       // unchunked
+	f.Add(lengthPrefixed(extMsg(17, 1, 40, true, block[:26]), extMsg(17, 0, 40, true, block[:26]))) // out of order
+	f.Fuzz(func(t *testing.T, stream []byte) {
 		var r Reassembler
-		n := int(chunkLen%64) + 2
+		announced := 0 // data size announced by the current chunk 0
 		for len(stream) > 0 {
-			k := min(n, len(stream))
-			m, err := ParseMessage(stream[:k])
-			stream = stream[k:]
+			k := min(int(stream[0]), len(stream)-1)
+			msg := stream[1 : 1+k]
+			stream = stream[1+k:]
+			m, err := ParseMessage(msg)
 			if err != nil {
 				continue
 			}
+			if m.Header.Extended() && !m.Ext.RequestChunk() && m.Ext.Chunked() && m.Ext.ChunkNumber() == 0 {
+				announced = m.Ext.DataSize()
+			}
 			if out, ok := r.Add(m); ok {
-				if len(out) != m.Ext.DataSize() && !m.Ext.Chunked() {
-					t.Fatalf("unchunked block %d bytes, size %d", len(out), m.Ext.DataSize())
+				size := announced
+				if !m.Ext.Chunked() {
+					size = m.Ext.DataSize()
+				}
+				if len(out) != size || len(out) > 260 {
+					t.Fatalf("block of %d bytes, announced %d", len(out), size)
 				}
 				_ = Objects(out)
 			}

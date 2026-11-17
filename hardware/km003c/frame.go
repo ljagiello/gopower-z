@@ -119,9 +119,6 @@ type Header struct {
 	Word uint16
 }
 
-// AuthLevel returns bits 17-18 of a PUT_DATA header (the session auth level).
-func (h Header) AuthLevel() int { return int(h.Word>>1) & 3 }
-
 // Encrypted reports bit 16 of the header.
 func (h Header) Encrypted() bool { return h.Word&1 != 0 }
 

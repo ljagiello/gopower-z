@@ -38,8 +38,9 @@ func TestControlHeader(t *testing.T) {
 	}
 }
 
-// Reference ADC frame from open-powerz tests/vectors/adc_52.hex (firmware
-// 2.0.6, idle, nothing attached).
+// Reference ADC frame from open-powerz tests/vectors/adc_52.hex: firmware
+// 2.0.6 (status tail layout), idle, nothing attached. Not a capture from the
+// 1.9.5 meter in testdata.
 const refADC = `41 01 80 02  01 00 00 0B  64 10 00 00  A1 FF FF FF  91 10 00 00  B0 FF FF FF
 F5 10 00 00  00 00 00 00  BA 0E 25 03  26 01 D4 02  F2 02 30 7D  00 80 02 F0
 00 00 FF 00`
@@ -67,13 +68,26 @@ func TestParseADCFrame(t *testing.T) {
 	if len(a.Tail) != 8 {
 		t.Errorf("tail len %d", len(a.Tail))
 	}
+	// 2.0.6 status tail 00 80 02 F0 00 00 FF 00: second temperature absent,
+	// rate index 2 (50 SPS), accelerometer flat (0xF0), battery unknown.
+	a.ApplyTail(TailLayoutFor("2.0.6"))
+	if a.Layout != TailStatus || !a.HasStatus || a.HasLineAvg || a.Temp2Valid() ||
+		a.RateIndex != 2 || a.Accel != 0xF0 || a.BatteryPermille != 0 {
+		t.Errorf("2.0.6 tail decoded as %+v", a)
+	}
 }
 
 func TestParseADC40(t *testing.T) {
-	// Older firmware: 40-byte payload, size field 10 words.
+	// Older firmware: 40-byte payload, size field 10 words. A 4-byte tail is
+	// too short for either layout and must stay undecoded.
 	f := mustHex(t, "41 09 02 02 01 00 00 0A"+strings.Repeat(" 00", 40))
-	if _, err := ParseADCFrame(f); err != nil {
+	a, err := ParseADCFrame(f)
+	if err != nil {
 		t.Fatal(err)
+	}
+	a.ApplyTail(TailLineAverages)
+	if a.Layout != TailUnknown || a.Temp2Valid() || a.RateIndex != -1 {
+		t.Errorf("short tail decoded: %+v", a)
 	}
 }
 
@@ -84,37 +98,55 @@ func TestEmptyPutData(t *testing.T) {
 }
 
 func TestGuard(t *testing.T) {
-	ok := func(frame string, k TransportKind) {
+	ok := func(frame string) {
 		t.Helper()
-		if err := CheckRequest(mustHex(t, frame), k); err != nil {
-			t.Errorf("CheckRequest(%s, %v) = %v, want ok", frame, k, err)
+		if err := CheckRequest(mustHex(t, frame)); err != nil {
+			t.Errorf("CheckRequest(%s) = %v, want ok", frame, err)
 		}
 	}
-	bad := func(frame string, k TransportKind) {
+	bad := func(frame string) {
 		t.Helper()
-		if err := CheckRequest(mustHex(t, frame), k); err == nil {
-			t.Errorf("CheckRequest(%s, %v) allowed, want refusal", frame, k)
+		if err := CheckRequest(mustHex(t, frame)); err == nil {
+			t.Errorf("CheckRequest(%s) allowed, want refusal", frame)
 		}
 	}
-	ok("0c000200", Bulk)
-	ok("0c000200", HID)
-	ok("0c000200", CDC)
-	ok("0c011000", Bulk)
-	ok("0c012200", Bulk)
-	ok("02010000", Bulk)
-	bad("0c011000", HID)  // settings over HID hangs the meter
-	bad("0c012200", HID)  // >64-byte reply over HID
-	bad("0c012000", CDC)  // PD over CDC
-	bad("0c010400", Bulk) // ADC queue (consumes, needs auth)
-	bad("02010000", CDC)  // CONNECT on CDC starts a stream
-	bad("02010000", HID)
-	ok("03050000", Bulk)  // DISCONNECT ends the session
-	bad("03050000", CDC)  // stops a stream on CDC
-	bad("03050100", Bulk) // malformed
+	ok("0c000200")    // ADC
+	ok("0c011000")    // SETTINGS
+	ok("0c012000")    // PD
+	ok("0c012200")    // ADC + PD
+	ok("02010000")    // CONNECT
+	ok("03050000")    // DISCONNECT ends the session
+	bad("0c010400")   // ADC queue (consumes, needs auth)
+	bad("0c000300")   // ADC with the encrypted flag
+	bad("0c000000")   // GET_DATA without an attribute
+	bad("0c00")       // short frame
+	bad("")           // empty
+	bad("0c00020000") // GET_DATA with trailing bytes
+	bad("0201000000") // CONNECT with trailing bytes
+	bad("03050100")   // DISCONNECT with a word
 	for _, typ := range []byte{0x01, 0x04, 0x08, 0x09, 0x0A, 0x0E, 0x0F, 0x10, 0x11, 0x40, 0x42, 0x48, 0x4A, 0x4B, 0x4C, 0x4D} {
-		bad(hex.EncodeToString([]byte{typ, 1, 0, 0}), Bulk)
+		bad(hex.EncodeToString([]byte{typ, 1, 0, 0}))
 	}
-	bad("8c000200", Bulk) // extend bit
+	bad("8c000200") // extend bit
+}
+
+// The guard only allows the exact documented attribute masks and the
+// canonical MemoryRead encoding.
+func TestGuardExactWhitelist(t *testing.T) {
+	for _, att := range []Attribute{0x009, 0x018, 0x019, 0x003} {
+		h := ControlHeader(TypeGetData, 1, att)
+		if err := CheckRequest(h[:]); err == nil {
+			t.Errorf("attribute mask 0x%03X allowed", uint16(att))
+		}
+	}
+	// A MemoryRead with the right address/length but altered padding.
+	plain := memoryReadPlain(addrInfo, 64)
+	plain[20] = 0x00
+	enc, _ := encryptECB(key0, plain)
+	frame := append([]byte{byte(TypeMemoryRead), 1, 1, 1}, enc...)
+	if err := CheckRequest(frame); err == nil {
+		t.Error("non-canonical MemoryRead allowed")
+	}
 }
 
 func TestMemoryReadRequestGuard(t *testing.T) {
@@ -126,21 +158,18 @@ func TestMemoryReadRequestGuard(t *testing.T) {
 		if len(req) != 36 || req[0] != 0x44 || req[2] != 1 || req[3] != 1 {
 			t.Fatalf("bad frame % X", req)
 		}
-		if err := CheckRequest(req, Bulk); err != nil {
+		if err := CheckRequest(req); err != nil {
 			t.Errorf("addr 0x%X refused: %v", addr, err)
 		}
-		if err := CheckRequest(req, HID); err == nil {
-			t.Errorf("MemoryRead allowed over HID")
-		}
 	}
-	for _, addr := range []uint32{0x40010450, 0x0, 0x20000000} {
+	for _, addr := range []uint32{0x40010450, 0x0, 0x20000000, 0x03000D80} {
 		req, _ := MemoryReadRequest(4, addr, 64)
-		if err := CheckRequest(req, Bulk); err == nil {
+		if err := CheckRequest(req); err == nil {
 			t.Errorf("addr 0x%X allowed, want refusal", addr)
 		}
 	}
 	req, _ := MemoryReadRequest(4, addrInfo, 256)
-	if err := CheckRequest(req, Bulk); err == nil {
+	if err := CheckRequest(req); err == nil {
 		t.Errorf("oversized read allowed")
 	}
 }

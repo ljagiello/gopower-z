@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 )
 
 // The CLI turns untrusted meter data into JSON for agents: whatever the meter
-// or a sniffed charger sends, the output must stay valid JSON and rendering
-// must not panic.
+// or a sniffed charger sends, rendering must not panic and every object must
+// match the schema served by `powerz schema` (keys, types, nullability,
+// enums), not merely be valid JSON.
 
 func cliSeeds(f *testing.F) {
-	files, _ := filepath.Glob(filepath.Join("..", "..", "km003c", "testdata", "fw1.9.5", "*_resp.hex"))
+	files, _ := filepath.Glob(filepath.Join("..", "..", "hardware", "km003c", "testdata", "fw1.9.5", "*_resp.hex"))
 	for _, p := range files {
 		raw, err := os.ReadFile(p)
 		if err != nil {
@@ -29,9 +30,22 @@ func cliSeeds(f *testing.F) {
 		}
 		f.Add(b)
 	}
-	pd, _ := hex.DecodeString("1027000088130000" + "2C010000" + "4520270000" + "11" + "8B302700" + "00" + "A111" + "2C910100" +
-		"8B312700" + "00" + "8210" + "2C2C0120" + "86322700" + "00" + "A601")
-	f.Add(pd)
+	f.Add(negotiation())
+	f.Add(pdPayload(pdMsg(1, 5, hdrAccept), pdMsg(2, 0, hdrEPRReq, rdoAVS8, pdoEPRAVS), pdLong(3, []byte{1}), []byte{0x81}))
+}
+
+// shape decodes v from its JSON form and checks it against a definition.
+func shape(t *testing.T, def string, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("%s JSON: %v", def, err)
+	}
+	var out any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	checkShape(t, def, out)
 }
 
 func FuzzSnapshotJSON(f *testing.F) {
@@ -44,11 +58,7 @@ func FuzzSnapshotJSON(f *testing.F) {
 		for _, l := range []km003c.TailLayout{km003c.TailUnknown, km003c.TailLineAverages, km003c.TailStatus} {
 			b := a
 			b.ApplyTail(l)
-			s := toSnapshot(b, time.Unix(0, 0).UTC(), "000000", "1.9.5")
-			out, err := json.Marshal(s)
-			if err != nil || !json.Valid(out) {
-				t.Fatalf("snapshot JSON: %v %s", err, out)
-			}
+			shape(t, "snapshot", toSnapshot(b, time.Unix(0, 0).UTC(), "000000", "1.9.5", nil))
 		}
 	})
 }
@@ -62,22 +72,15 @@ func FuzzPDTracker(f *testing.F) {
 		}
 		for _, show := range []bool{false, true} {
 			tr := &pdTracker{showGoodCRC: show}
-			var recs []pdRecord
-			for _, r := range pd.Records {
-				rec, ok := tr.process(r)
-				if !ok {
-					continue
-				}
+			recs := tr.packet(&pd)
+			for _, rec := range recs {
 				_ = rec.text()
-				recs = append(recs, rec)
-				if out, err := json.Marshal(rec); err != nil || !json.Valid(out) {
-					t.Fatalf("record JSON: %v", err)
-				}
+				shape(t, "pd_record", rec)
 			}
 			_ = tr.capsText()
-			if out, err := json.Marshal(tr.summary(recs)); err != nil || !json.Valid(out) {
-				t.Fatalf("summary JSON: %v", err)
-			}
+			sum := tr.summary(recs)
+			shape(t, "pd_summary", sum)
+			shape(t, "pd_end", newPDEnd(sum, time.Unix(0, 0), 1, "completed"))
 		}
 	})
 }

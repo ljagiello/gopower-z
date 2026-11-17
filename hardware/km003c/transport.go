@@ -5,15 +5,16 @@ import (
 	"errors"
 )
 
-// Transport moves raw frames to and from the meter. Write sends one request;
-// Read returns one reply transfer (bulk: one transfer terminated by a short
-// packet; HID: one 64-byte report). Read must return ErrTimeout when nothing
-// arrives before the context deadline, context.Canceled when the context was
-// cancelled, and (n, ErrIncomplete) when a transfer was cut off after some
-// data arrived. Transports are not safe for direct use: Device enforces the
-// request whitelist and the drain discipline the meter requires.
+// Transport moves raw frames to and from the meter's bulk interface. Write
+// sends one request; Read returns one reply transfer (terminated by a short
+// packet). Read must return:
+//   - ErrTimeout when nothing arrives before the context deadline,
+//   - context.Canceled when the context was cancelled,
+//   - (n, ErrIncomplete) when a transfer was cut off after some data arrived.
+//
+// Transports are not meant for direct use: Device enforces the request
+// whitelist and the drain discipline the meter requires.
 type Transport interface {
-	Kind() TransportKind
 	Write(ctx context.Context, p []byte) error
 	Read(ctx context.Context, p []byte) (int, error)
 	Close() error
@@ -36,4 +37,7 @@ var (
 	ErrPermission = errors.New("km003c: permission denied opening the meter")
 	// ErrRejected means the meter answered a request with REJECT.
 	ErrRejected = errors.New("km003c: request rejected by the meter")
+	// ErrStuck means the meter keeps sending data that cannot be drained, so
+	// no request can be written safely.
+	ErrStuck = errors.New("km003c: meter keeps sending unexpected data; unplug and reconnect it")
 )

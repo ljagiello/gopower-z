@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 	"golang.org/x/term"
 )
 
@@ -17,7 +17,7 @@ type session struct {
 	start      time.Time
 	last       time.Time
 	v, i, p    stat
-	wh, ah     float64 // signed energy / charge
+	energy     integrator // same rule as measure
 	history    []float64
 	pd         pdTracker
 	pdLines    []string
@@ -34,13 +34,8 @@ func (s *session) reset() {
 func (s *session) add(now time.Time, a km003c.ADC) {
 	if s.start.IsZero() {
 		s.start = now
-	} else {
-		dt := now.Sub(s.last).Hours()
-		if dt > 0 && dt < 1.0/3600*5 { // ignore gaps > 5 s
-			s.wh += a.FlowPower() * dt
-			s.ah += a.FlowA() * dt
-		}
 	}
+	s.energy.add(now, a.FlowPower(), a.FlowA())
 	s.last = now
 	s.v.add(a.VBus())
 	s.i.add(a.FlowA())
@@ -53,14 +48,7 @@ func (s *session) add(now time.Time, a km003c.ADC) {
 }
 
 func (s *session) addPD(pd *km003c.PDPacket) {
-	if pd == nil {
-		return
-	}
-	for _, r := range pd.Records {
-		rec, ok := s.pd.process(r)
-		if !ok {
-			continue
-		}
+	for _, rec := range s.pd.packet(pd) {
 		s.pdLines = append(s.pdLines, strings.Split(rec.text(), "\n")...)
 	}
 	if len(s.pdLines) > 200 {
@@ -80,7 +68,7 @@ func setupWatch(fs *flag.FlagSet) func(context.Context, globals) error {
 }
 
 func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool) error {
-	if !isTTY(os.Stdout) || !isTTY(os.Stdin) {
+	if !g.env.tty || !isTTY(os.Stdin) {
 		return usageErr("watch needs an interactive terminal; use `powerz measure -duration 10s` or `powerz log -duration 10s` instead")
 	}
 
@@ -90,9 +78,11 @@ func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool)
 	}
 	defer m.close()
 
-	info, infoErr := m.ReadInfo(ctx)
-	if infoErr != nil {
-		info = km003c.DeviceInfo{Model: "KM003C"}
+	// ReadInfo also selects the firmware-dependent ADC decoding. A partial
+	// result still names what could be read.
+	info, _ := m.ReadInfo(ctx)
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	// Raw keyboard input for single-key commands.
@@ -143,7 +133,7 @@ func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool)
 		}
 
 		w, h, _ := term.GetSize(int(out.Fd()))
-		_, _ = fmt.Fprint(out, render(st, s, lastADC, info, infoErr, m.usb, w, h))
+		_, _ = fmt.Fprint(out, render(st, s, lastADC, info, m.usb, w, h))
 
 		select {
 		case <-ctx.Done():
@@ -162,7 +152,7 @@ func runWatch(ctx context.Context, g globals, interval time.Duration, noPD bool)
 	}
 }
 
-func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo, infoErr error,
+func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo,
 	usb km003c.USBDescription, w, h int) string {
 	if w <= 0 {
 		w = 80
@@ -211,9 +201,10 @@ func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo, infoErr
 	if !s.start.IsZero() {
 		el = s.last.Sub(s.start).Round(time.Second)
 	}
+	wh, ah, _ := s.energy.at(s.last)
 	line("  %s %-14s %s %-14s %s %-10s %s %s",
-		st.dim("energy"), fmt.Sprintf("%.4f Wh", nz(s.wh, 5e-5)),
-		st.dim("charge"), fmt.Sprintf("%.2f mAh", nz(s.ah*1000, 5e-3)),
+		st.dim("energy"), fmt.Sprintf("%.4f Wh", nz(wh, 5e-5)),
+		st.dim("charge"), fmt.Sprintf("%.2f mAh", nz(ah*1000, 5e-3)),
 		st.dim("time"), el.String(),
 		st.dim("avg P"), fmt.Sprintf("%.3f W", nz(s.p.avg(), 5e-4)))
 	temp := st.red("invalid")
@@ -226,7 +217,10 @@ func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo, infoErr
 	line("")
 	line("  %s %s   %s %s   %s", st.cyan("CC1"), fmt.Sprintf("%.4f V", a.CC1V()),
 		st.purple("CC2"), fmt.Sprintf("%.4f V", a.CC2V()), st.dim(ccHint(a.CC1V(), a.CC2V())))
-	l1, l2 := km003c.DashboardLabels(*a)
+	l1, l2, ok := km003c.DashboardLabels(*a)
+	if !ok {
+		l1, l2 = "unknown for this firmware", ""
+	}
 	line("  %s %s   %s %s   %s %s", st.green("D+ "), fmt.Sprintf("%.4f V", a.DPV()),
 		st.yellow("D- "), fmt.Sprintf("%.4f V", a.DMV()), st.bold("Protocol "+l1), st.dim(l2))
 	line("")
@@ -259,7 +253,6 @@ func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo, infoErr
 		footer += " · last error: " + s.lastErr
 	}
 	fmt.Fprintf(&b, "\x1b[%d;1H%s\x1b[K", h, st.dim(truncate(footer, w-1)))
-	_ = infoErr
 	return b.String()
 }
 

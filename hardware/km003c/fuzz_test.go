@@ -17,7 +17,14 @@ import (
 // requests, and that the Device stays within the whitelist and terminates on
 // any reply stream.
 //
-// Run one target with: go test -run='^$' -fuzz='^FuzzParsePutData$' ./km003c
+// Run one target with:
+//
+//	go test -run='^$' -fuzz='^FuzzParsePutData$' ./hardware/km003c
+//
+// FuzzTailLayoutFor, FuzzParsePutData, FuzzParseADC and FuzzMemoryRead mainly
+// look for panics and out-of-bounds reads: their remaining checks hold by
+// construction. FuzzCheckRequest, FuzzParsePDPacket and FuzzDeviceReplies
+// check real properties (exact whitelist, byte accounting, no stall).
 
 // seedFrames returns every captured frame from testdata as fuzz seeds.
 func seedFrames(f *testing.F) [][]byte {
@@ -77,9 +84,9 @@ func FuzzParseADC(f *testing.F) {
 		for _, l := range []TailLayout{TailUnknown, TailLineAverages, TailStatus} {
 			b := a
 			b.ApplyTail(l)
-			l1, l2 := DashboardLabels(b)
-			if l1 == "" || l2 == "" {
-				t.Fatalf("empty dashboard label for layout %v", l)
+			l1, l2, ok := DashboardLabels(b)
+			if ok != (b.Layout != TailUnknown) || ok == (l1 == "") || ok == (l2 == "") {
+				t.Fatalf("labels %q %q ok=%v for layout %v", l1, l2, ok, b.Layout)
 			}
 			if b.RateIndex < -1 || b.RateIndex > 3 {
 				t.Fatalf("rate index %d", b.RateIndex)
@@ -174,14 +181,10 @@ func FuzzTailLayoutFor(f *testing.F) {
 }
 
 // canonicalRequests lists every frame the whitelist must accept for a given
-// transaction id and transport, built independently of CheckRequest.
-func canonicalRequests(t *testing.T, id uint8, k TransportKind) [][]byte {
+// transaction id, built independently of CheckRequest.
+func canonicalRequests(t *testing.T, id uint8) [][]byte {
 	var out [][]byte
 	add := func(h [4]byte) { out = append(out, append([]byte(nil), h[:]...)) }
-	if k != Bulk {
-		add(ControlHeader(TypeGetData, id, AttADC))
-		return out
-	}
 	for _, att := range []Attribute{AttADC, AttSettings, AttPDPacket, AttADC | AttPDPacket} {
 		add(ControlHeader(TypeGetData, id, att))
 	}
@@ -204,51 +207,42 @@ func FuzzCheckRequest(f *testing.F) {
 		if len(b) == 65 { // hidapi buffer
 			b = b[1:]
 		}
-		f.Add(b, uint8(0))
-		f.Add(b, uint8(1))
+		f.Add(b)
 	}
 	for _, typ := range []byte{0x01, 0x03, 0x04, 0x08, 0x09, 0x0A, 0x0E, 0x10, 0x42, 0x44, 0x48, 0x4A, 0x4C, 0x4D, 0x8C} {
-		f.Add([]byte{typ, 1, 0, 0}, uint8(0))
+		f.Add([]byte{typ, 1, 0, 0})
 	}
-	f.Fuzz(func(t *testing.T, frame []byte, kind uint8) {
-		k := TransportKind(kind % 3)
-		err := CheckRequest(frame, k)
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		err := CheckRequest(frame)
 		allowed := false
 		if len(frame) >= 2 {
-			for _, c := range canonicalRequests(t, frame[1], k) {
+			for _, c := range canonicalRequests(t, frame[1]) {
 				if bytes.Equal(c, frame) {
 					allowed = true
 				}
 			}
 		}
 		if (err == nil) != allowed {
-			t.Fatalf("CheckRequest(% X, %v) = %v, canonical = %v", frame, k, err, allowed)
+			t.Fatalf("CheckRequest(% X) = %v, canonical = %v", frame, err, allowed)
 		}
 	})
 }
 
-// fuzzTransport replays a fuzz-generated IN stream and records every write.
+// fuzzTransport replays a fuzz-generated IN stream instantly and checks
+// every write against the whitelist.
 type fuzzTransport struct {
 	t       *testing.T
 	in      [][]byte
 	writes  int
-	kind    TransportKind
 	partial bool
 }
 
-func (f *fuzzTransport) Kind() TransportKind { return f.kind }
-func (f *fuzzTransport) Close() error        { return nil }
+func (f *fuzzTransport) Close() error { return nil }
 
 func (f *fuzzTransport) Write(_ context.Context, p []byte) error {
 	f.writes++
-	frame := p
-	if f.kind == HID && len(p) == 64 {
-		frame = p[:4] // padded output report; the guard saw the 4-byte frame
-	}
-	if f.kind != HID {
-		if err := CheckRequest(frame, f.kind); err != nil {
-			f.t.Fatalf("non-whitelisted frame reached the transport: % X (%v)", p, err)
-		}
+	if err := CheckRequest(p); err != nil {
+		f.t.Fatalf("non-whitelisted frame reached the transport: % X (%v)", p, err)
 	}
 	return nil
 }
@@ -299,13 +293,10 @@ func FuzzDeviceReplies(f *testing.F) {
 	f.Add(stream, uint8(0))
 	f.Add([]byte{4, 0x05, 0x01, 0, 0, 20, 0xC4, 0x02, 0x01, 0x01, 0x20, 0x04, 0, 0, 0x40, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0}, uint8(1))
 	f.Fuzz(func(t *testing.T, data []byte, mode uint8) {
-		ft := &fuzzTransport{t: t, in: splitStream(data), kind: Bulk, partial: mode&1 != 0}
-		if mode&2 != 0 {
-			ft.kind = HID
-		}
+		ft := &fuzzTransport{t: t, in: splitStream(data), partial: mode&1 != 0}
 		d := NewDevice(ft)
 		d.Timeout = 5 * time.Millisecond
-		d.infoSpacing = 0
+		d.memSpacing = 0
 		ctx := context.Background()
 		_, _ = d.DetectLayout(ctx)
 		_, _ = d.ReadADC(ctx)

@@ -3,13 +3,16 @@ package km003c
 // DashboardLabels reproduces the two D+/D− protocol labels the meter shows on
 // its dashboard, using the algorithm of the meter's own firmware generation:
 //
-//   - firmware <= 2.0.0 (TailLineAverages): 1.9.5 FUN_0001fb44 (same
+//   - firmware 1.7.9-2.0.0 (TailLineAverages): 1.9.5 FUN_0001fb44 (same
 //     classifier in 1.7.9-1.9.9), inputs VBUS, IBUS (mA) and the D+/D−
 //     50-sample averages reported in the ADC tail;
-//   - firmware >= 2.0.1 or unknown: 2.0.7 FUN_00022098 / FUN_00021bd4
+//   - firmware 2.0.1-2.0.7 (TailStatus): 2.0.7 FUN_00022098 / FUN_00021bd4
 //     (identical in 2.0.1-2.0.7), inputs VBUS and D+/D−. That firmware uses
 //     D+/D− averages it no longer reports over USB, so the instantaneous
 //     D+/D− values are used instead.
+//
+// For any other firmware (or an unknown version) the classifier is unknown
+// and ok is false; the labels are then "".
 //
 // The firmware compares the raw (uncalibrated) VBUS, powerz the calibrated
 // value, so a reading within a few mV of a threshold, or (2.0.x) while the
@@ -19,20 +22,26 @@ package km003c
 // See docs/firmware.html §10. When the meter has identified a proprietary
 // session (VOOC/SVOOC/VFCP/UFCS) it shows that instead; that state is not
 // exposed over USB, so these functions return the voltage-based labels only.
-func DashboardLabels(a ADC) (line1, line2 string) {
+func DashboardLabels(a ADC) (line1, line2 string, ok bool) {
 	v := int(a.VBusUV / 1000)
-	if a.Layout == TailLineAverages && a.HasLineAvg {
+	switch {
+	case a.Layout == TailLineAverages && a.HasLineAvg:
 		// IBUS mA as the firmware's u16: negative currents compare as large.
 		i := int(uint16(int16(a.IBusUA / 1000)))
 		dp, dm := int(a.DPAvgMV), int(a.DMAvgMV)
-		return label1v195(v, i, dp, dm), label2v195(v, i, dp, dm)
+		return label1v195(v, i, dp, dm), label2v195(v, i, dp, dm), true
+	case a.Layout == TailStatus:
+		dp := int(a.DP) / 10
+		dm := int(a.DM) / 10
+		return label1v207(v, dp, dm), label2v207(v, dp, dm), true
 	}
-	dp := int(a.DP) / 10
-	dm := int(a.DM) / 10
-	return label1v207(v, dp, dm), label2v207(v, dp, dm)
+	return "", "", false
 }
 
-const labelNA = "[ N/A ]"
+// LabelNA is the label the meter shows when no D+/D− signature matches.
+const LabelNA = "[ N/A ]"
+
+const labelNA = LabelNA
 
 func in(x, lo, hi int) bool { return x >= lo && x <= hi }
 

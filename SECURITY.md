@@ -9,7 +9,7 @@ not as public issues.
 Useful reports include:
 
 - any way to make powerz send a frame outside its read-only whitelist
-  (`km003c/guard.go`);
+  (`hardware/km003c/guard.go`);
 - crashes or hangs caused by malformed data from a device;
 - vulnerabilities in dependencies that affect powerz.
 

@@ -46,6 +46,7 @@ func farr(name, items string, desc string) fieldDoc {
 var (
 	directions   = []string{"receptacle_to_plug", "plug_to_receptacle", "none"}
 	tailLayouts  = []string{"line-averages", "status", "unknown"}
+	endReasons   = []string{"completed", "interrupted", "error"}
 	errorCodes   = []string{"usage", "not_found", "busy", "timeout", "permission_denied", "partial", "interrupted", "error"}
 	pdEventNames = []string{"none", "attach", "detach", "bad_message_id", "hard_reset", "cable_reset", "receive_error", "monitor_type", "big_message", "unknown"}
 )
@@ -66,7 +67,8 @@ var definitions = map[string][]fieldDoc{
 		fd("schema_version", tInt, false, "output schema version; bumped when a field is renamed or removed"),
 		fd("time", tStr, false, "host time of the reading, UTC, ISO 8601 with milliseconds"),
 		fd("serial", tStr, false, "USB serial number of the meter"),
-		fd("firmware_version", tStr, true, "meter application firmware (selects firmware-dependent decoding); null if it could not be read"),
+		fd("firmware_version", tStr, true, "meter application firmware (selects firmware-dependent decoding); null if it could not be read (see firmware_error)"),
+		fd("firmware_error", tStr, true, "why firmware_version is null (the read failed); the firmware-dependent fields are then null. null otherwise"),
 		fd("vbus_v", tNum, false, "bus voltage, volts (resolution 1 µV)"),
 		fd("ibus_a", tNum, false, "bus current, amperes (resolution 1 µA); positive = flowing from the meter's female receptacle to its male plug (normal set-up: source on the receptacle), negative = reverse; same sign as the meter's screen"),
 		fd("power_w", tNum, false, "vbus_v * ibus_a, watts; positive = delivered receptacle -> plug"),
@@ -87,8 +89,9 @@ var definitions = map[string][]fieldDoc{
 		fd("sample_rate_sps", tInt, true, "sample rate configured on the meter: 2, 10, 50 or 1000; null if unknown"),
 		fd("sink_battery_percent", tNum, true, "battery level of the sink learned by the meter from USB-PD traffic (firmware >= 2.0.1); null if unknown"),
 		fd("inferred", tObj, false, "values computed by powerz, not reported by the meter"),
-		fd("inferred.dashboard_label", tStr, true, "the meter's first D+/D- protocol label (DCP, DCP 1.5A, Apple 2.4A, QC2.0 9V, QC3.0 | QC3+, FCP | AFC, VOOC, ...), recomputed with the meter firmware's algorithm; a D+/D- voltage signature, not a confirmed protocol session; null where the screen shows [N/A]"),
-		fd("inferred.dashboard_label_2", tStr, true, "the meter's second D+/D- label (SFCP 9V, FCP | SCP | AFC, VOOC, ...); null where the screen shows [N/A]"),
+		fd("inferred.dashboard_label", tStr, true, "the meter's first D+/D- protocol label (DCP, DCP 1.5A, Apple 2.4A, QC2.0 9V, QC3.0 | QC3+, FCP | AFC, VOOC, ...), recomputed with the meter firmware's algorithm; a D+/D- voltage signature, not a confirmed protocol session; null where the screen shows [N/A], and null when dashboard_classifier is null"),
+		fd("inferred.dashboard_label_2", tStr, true, "the meter's second D+/D- label (SFCP 9V, FCP | SCP | AFC, VOOC, ...); null where the screen shows [N/A], and null when dashboard_classifier is null"),
+		fenum("inferred.dashboard_classifier", true, "which firmware's label algorithm produced the labels: 1.9.5 (firmware 1.7.9-2.0.0) or 2.0.7 (2.0.1-2.0.7); null when the firmware is unknown or outside that range, in which case the labels are unknown rather than [N/A]", "1.9.5", "2.0.7"),
 		fd("inferred.cc", tObj, false, "Type-C connection inferred from the CC voltages"),
 		fenum("inferred.cc.attached", false, "CC line carrying the Type-C connection (open: pulled up, no sink)", "cc1", "cc2", "both", "none", "open", "unknown"),
 		fenum("inferred.cc.advertisement", false, "source current advertisement", "default_usb", "1.5A", "3.0A", "none", "unknown"),
@@ -98,7 +101,7 @@ var definitions = map[string][]fieldDoc{
 		fd("raw.ibus_ua", tInt, false, "the meter's raw signed current, µA (negative = receptacle -> plug)"),
 		fd("raw.vbus_uncal_avg_uv", tInt, false, "uncalibrated VBUS average, µV"),
 		fd("raw.ibus_uncal_avg_ua", tInt, false, "uncalibrated current average, µA, raw sign"),
-		fenum("raw.tail_layout", false, "how ADC bytes 0x24..0x2B were decoded: line-averages (firmware <= 2.0.0), status (>= 2.0.1)", tailLayouts...),
+		fenum("raw.tail_layout", false, "how ADC bytes 0x24..0x2B were decoded: line-averages (firmware 1.7.9-2.0.0), status (2.0.1-2.0.7), unknown (firmware unknown or outside the analysed range: those fields are null)", tailLayouts...),
 		fd("raw.tail_hex", tStr, false, "ADC payload bytes 0x24..0x2B, hex"),
 		fd("raw.accel_status", tInt, true, "accelerometer status/orientation byte (firmware >= 2.0.1)"),
 	},
@@ -112,13 +115,15 @@ var definitions = map[string][]fieldDoc{
 		fd("schema_version", tInt, false, "output schema version"),
 		fd("serial", tStr, false, "USB serial number of the meter"),
 		fd("firmware_version", tStr, true, "meter application firmware; null if unknown"),
+		fd("firmware_error", tStr, true, "why firmware_version is null, otherwise null"),
 		fd("start", tStr, false, "start of the window, UTC ISO 8601"),
 		fd("end", tStr, false, "end of the window, UTC ISO 8601"),
+		fenum("end_reason", false, "completed: ran for -duration (exit 0, or 7 if samples failed); interrupted: stopped by SIGINT/SIGTERM (exit 130); error: the meter went away, was taken by another program or could not be drained (exit with that error's code). The object is printed in every case once a sample was collected", endReasons...),
 		fd("duration_s", tNum, false, "wall-clock length of the window, seconds"),
 		fd("integrated_s", tNum, false, "time span covered by energy_wh / charge_mah (first sample to end), seconds"),
 		fd("interval_s", tNum, false, "requested sampling interval, seconds"),
 		fd("samples", tInt, false, "successful readings"),
-		fd("failed_samples", tInt, false, "failed readings (exit status 7 if > 0)"),
+		fd("failed_samples", tInt, false, "failed readings (exit status 7 if > 0 and end_reason is completed)"),
 		fd("last_error", tStr, true, "message of the last failed reading, or null"),
 		fenum("direction", false, "dominant flow direction of the mean current (|mean| < 1 mA is none)", directions...),
 		fd("stats", tObj, false, "statistics over the successful samples"),
@@ -134,9 +139,10 @@ var definitions = map[string][]fieldDoc{
 	"pd_summary": {
 		fd("messages", tInt, false, "captured USB-PD messages (GoodCRC excluded)"),
 		fd("events", tInt, false, "captured connection events (attach, detach, hard reset, ...)"),
-		fref("source_capabilities", tArr, "pdo", false, "PDOs most recently advertised by the source ([] if none seen)"),
-		fref("last_request", tObj, "rdo", true, "last sink Request seen, or null"),
-		fref("contract", tObj, "rdo", true, "last Request acknowledged by PS_RDY (the active contract), or null"),
+		fd("undecoded", tInt, false, "records of PD bytes that could not be parsed (kind undecoded); normally 0"),
+		fref("source_capabilities", tArr, "pdo", false, "PDOs most recently advertised by the source since the last attach ([] if none seen; cleared on detach and hard reset)"),
+		fref("last_request", tObj, "rdo", true, "last sink Request seen (whether or not it was accepted), or null"),
+		fref("contract", tObj, "rdo", true, "the active contract: the last Request the source accepted (Accept) and confirmed (PS_RDY); cleared on detach, hard and soft reset; null if no complete negotiation was captured"),
 		fd("note", tStr, true, "explanation when nothing was captured (no negotiation during the window is normal), otherwise null"),
 		fref("records", tArr, "pd_record", true, "every captured record in order (measure); null in the summary line of `pd`, whose records were streamed"),
 	},
@@ -144,9 +150,11 @@ var definitions = map[string][]fieldDoc{
 		fd("schema_version", tInt, false, "output schema version"),
 		fenum("kind", false, "marks the last line of `pd` output", "summary"),
 		fd("time", tStr, false, "host time, UTC ISO 8601"),
+		fenum("end_reason", false, "completed: -duration or -n reached (exit 0); interrupted: SIGINT/SIGTERM (exit 130); error: reading failed (exit with that error's code). This line is printed in every case", endReasons...),
 		fd("duration_s", tNum, false, "length of the capture, seconds"),
 		fd("messages", tInt, false, "as in pd_summary"),
 		fd("events", tInt, false, "as in pd_summary"),
+		fd("undecoded", tInt, false, "as in pd_summary"),
 		fref("source_capabilities", tArr, "pdo", false, "as in pd_summary"),
 		fref("last_request", tObj, "rdo", true, "as in pd_summary"),
 		fref("contract", tObj, "rdo", true, "as in pd_summary"),
@@ -156,8 +164,8 @@ var definitions = map[string][]fieldDoc{
 		fd("schema_version", tInt, false, "output schema version"),
 		fd("time", tStr, false, "host time the record was read, UTC ISO 8601"),
 		fd("meter_time_ms", tInt, false, "meter uptime when the record was captured, milliseconds"),
-		fenum("kind", false, "record type", "message", "event"),
-		fenum("sop", true, "SOP packet type (messages)", "SOP", "SOP'", "SOP''", "SOP'_Dbg", "SOP''_Dbg"),
+		fenum("kind", false, "record type; undecoded: bytes the meter delivered that could not be split into records (kept in raw_hex, since reading drained them from the meter)", "message", "event", "undecoded"),
+		fenum("sop", true, "SOP packet type (messages); unknown for the reserved values 5-7", "SOP", "SOP'", "SOP''", "SOP'_Dbg", "SOP''_Dbg", "unknown"),
 		fd("message", tStr, true, "USB-PD message name, e.g. Source_Capabilities, Request, Accept, PS_RDY; long_message_undecoded for unverified long records"),
 		fenum("class", true, "message class (messages)", "control", "data", "extended"),
 		fenum("power_role", true, "port power role (SOP messages)", "source", "sink"),
@@ -199,13 +207,13 @@ var definitions = map[string][]fieldDoc{
 	"info": {
 		fd("schema_version", tInt, false, "output schema version"),
 		fref("usb", tObj, "usb", false, "USB descriptors"),
-		fd("device", tObj, true, "meter identity read from its memory; null if unavailable (exit status 7)"),
-		fd("device.model", tStr, false, "e.g. KM003C"),
-		fd("device.firmware_version", tStr, false, "application firmware, e.g. 1.9.5"),
-		fd("device.firmware_date", tStr, false, "firmware build date, YYYY-MM-DD"),
-		fd("device.hardware_version", tStr, false, "hardware/bootloader version, e.g. 2.2"),
-		fd("device.hardware_date", tStr, false, "hardware/bootloader date, YYYY-MM-DD"),
-		fd("device.serial", tStr, false, "factory serial number"),
+		fd("device", tObj, true, "meter identity read from three memory blocks; null if none could be read. A block that fails leaves its fields null and adds an entry to errors (exit status 7)"),
+		fd("device.model", tStr, true, "e.g. KM003C"),
+		fd("device.firmware_version", tStr, true, "application firmware, e.g. 1.9.5"),
+		fd("device.firmware_date", tStr, true, "firmware build date, YYYY-MM-DD"),
+		fd("device.hardware_version", tStr, true, "hardware/bootloader version, e.g. 2.2"),
+		fd("device.hardware_date", tStr, true, "hardware/bootloader date, YYYY-MM-DD"),
+		fd("device.serial", tStr, true, "factory serial number"),
 		fd("device.uuid", tStr, true, "factory unique id (32 hex characters), null if absent"),
 		fenum("device.adc_tail_layout", false, "firmware-dependent ADC decoding in use", tailLayouts...),
 		fd("settings", tObj, true, "meter settings; null if unavailable (exit status 7)"),
@@ -312,7 +320,9 @@ func buildSchema() map[string]any {
 		notes   []string
 	}
 	specs := map[string]spec{
-		"read": {out("json_object", "", "snapshot"), true, "powerz read -json", []string{}},
+		"read": {out("json_object", "", "snapshot"), true, "powerz read -json", []string{
+			"Reads the firmware version first (CONNECT plus one MemoryRead), which selects the decoding of firmware-dependent fields.",
+		}},
 		"measure": {out("json_object", "", "measure"), true, "powerz measure -duration 10s -json", []string{
 			"Preferred command for agents: how much power/energy the attached device draws, and what the charger offered and negotiated.",
 			"The meter samples at its configured rate (info: settings.sample_rate_sps); polling faster only repeats values.",
@@ -323,6 +333,7 @@ func buildSchema() map[string]any {
 		"pd": {out("json_lines", "one pd_record per captured record, then one pd_end summary line (kind=summary)", "pd_record", "pd_end"), false,
 			"powerz pd -duration 20s -json", []string{
 				"Passive capture: the meter sniffs traffic between the charger and the device plugged through it; powerz never sends PD messages.",
+				"Sends only GET_DATA for the PD buffer: no CONNECT session and no memory reads.",
 				"Reading drains the meter's PD buffer, so only one consumer sees each record.",
 				"An empty capture is normal when nothing negotiated during the window; the summary line's note says so.",
 				"Always pass -duration from automation (-n alone waits for traffic).",
@@ -376,6 +387,7 @@ func buildSchema() map[string]any {
 			"errors are one JSON object on stderr: {\"schema_version\":1,\"error\":{\"code\",\"exit_code\",\"message\",\"retryable\",\"hint\"}}",
 			"fields under inferred are computed by powerz, not reported by the meter",
 			"only one powerz process may use a meter at a time; concurrent calls fail with code busy unless -wait is given",
+			"a non-zero exit does not always mean empty stdout: measure prints its object and pd its summary line when they end early (end_reason interrupted or error), and log lines already printed stay valid; read stdout before discarding it",
 		},
 		"common_flags": common,
 		"commands":     cmds,
@@ -384,12 +396,12 @@ func buildSchema() map[string]any {
 			{"exit_code": exitOK, "code": "ok", "retryable": false, "meaning": "success"},
 			{"exit_code": exitError, "code": "error", "retryable": false, "meaning": "I/O or protocol failure"},
 			{"exit_code": exitUsage, "code": "usage", "retryable": false, "meaning": "bad command, flag or argument"},
-			{"exit_code": exitNotFound, "code": "not_found", "retryable": false, "meaning": "no meter connected (or none with -serial)"},
-			{"exit_code": exitBusy, "code": "busy", "retryable": true, "meaning": "another program holds the meter; retry or use -wait"},
+			{"exit_code": exitNotFound, "code": "not_found", "retryable": false, "meaning": "no meter connected (or none with -serial); if it disappeared mid-run, measure/pd printed what they had (end_reason error)"},
+			{"exit_code": exitBusy, "code": "busy", "retryable": true, "meaning": "another program holds the meter; retry or use -wait; if it was taken mid-run, measure/pd printed what they had (end_reason error)"},
 			{"exit_code": exitTimeout, "code": "timeout", "retryable": true, "meaning": "the meter did not answer in time"},
 			{"exit_code": exitPermission, "code": "permission_denied", "retryable": false, "meaning": "the OS denied USB access"},
 			{"exit_code": exitPartial, "code": "partial", "retryable": true, "meaning": "output was printed but some requested data is missing"},
-			{"exit_code": exitInterrupt, "code": "interrupted", "retryable": false, "meaning": "SIGINT/SIGTERM"},
+			{"exit_code": exitInterrupt, "code": "interrupted", "retryable": false, "meaning": "SIGINT/SIGTERM; measure/pd printed what they had collected (end_reason interrupted)"},
 		},
 		"verified": []string{
 			"on firmware 1.9.5 with a 0.44 A load: current direction, the D+/D- dashboard labels ([N/A] / VOOC) and VBUS/IBUS/CC/D+/D- against the meter's screen",
@@ -398,13 +410,15 @@ func buildSchema() map[string]any {
 			"USB-PD decoding is tested against the USB-PD specification and synthetic messages; it has not yet been checked against a live negotiation.",
 			"Protocols the meter detects by sniffing (AFC/FCP/SCP/UFCS/VOOC sessions) are not exposed over USB; inferred.dashboard_label* is the meter's D+/D- voltage signature.",
 			"Linux support is built and unit-tested in CI but has not been exercised with a meter attached.",
+			"pd opens no CONNECT session; firmware analysis shows 1.9.5 records PD traffic regardless, but attach/detach capture by pd itself has not yet been observed live (measure, which opens a session, has).",
+			"Firmware outside 1.7.9-2.0.7 is not guessed: firmware-dependent fields and dashboard labels are null until that firmware is analysed.",
 		},
 		"safety": "Every frame sent to the meter is checked against a read-only whitelist (GET_DATA for ADC/settings/PD, CONNECT/DISCONNECT, and MemoryRead of three fixed info blocks). powerz never writes settings, never triggers fast-charge protocols (cannot change VBUS), never authenticates and never touches firmware.",
 	}
 }
 
 func setupSchema(fs *flag.FlagSet) func(context.Context, globals) error {
-	return func(context.Context, globals) error {
-		return emitIndented(buildSchema())
+	return func(_ context.Context, g globals) error {
+		return g.emitIndented(buildSchema())
 	}
 }

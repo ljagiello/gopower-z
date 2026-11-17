@@ -149,15 +149,3 @@ func ParsePDPacket(p []byte) (PDPacket, error) {
 	}
 	return out, nil
 }
-
-// PDRequest builds a GET_DATA request for the PD event stream.
-func PDRequest(id uint8) []byte {
-	h := ControlHeader(TypeGetData, id, AttPDPacket)
-	return h[:]
-}
-
-// ADCAndPDRequest requests an ADC snapshot and the PD stream in one frame.
-func ADCAndPDRequest(id uint8) []byte {
-	h := ControlHeader(TypeGetData, id, AttADC|AttPDPacket)
-	return h[:]
-}

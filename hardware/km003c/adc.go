@@ -67,39 +67,48 @@ func (l TailLayout) String() string {
 }
 
 // TailLayoutFor returns the tail layout used by an application firmware
-// version such as "1.9.5" or "2.0.7".
+// version such as "1.9.5" or "2.0.7". Versions outside the analysed range
+// (1.7.9 to 2.0.7) give TailUnknown rather than a guess: a later firmware may
+// move these bytes again.
 func TailLayoutFor(version string) TailLayout {
 	var a, b, c int
-	if n, _ := fmt.Sscanf(version, "%d.%d.%d", &a, &b, &c); n != 3 {
+	if n, _ := fmt.Sscanf(version, "%d.%d.%d", &a, &b, &c); n != 3 || a < 0 || b < 0 || c < 0 {
 		return TailUnknown
 	}
 	v := a*10000 + b*100 + c
 	switch {
+	case v < tailFirstAnalysed || v > tailLastAnalysed:
+		return TailUnknown
 	case v <= tailLastLineAverages:
 		return TailLineAverages
-	case v >= tailFirstStatus:
-		return TailStatus
 	}
-	return TailUnknown
+	return TailStatus
 }
 
 // Version boundaries (major*10000 + minor*100 + patch), from analysis of every
-// official image (docs/firmware.html §8): 1.9.5 (also captured), 1.9.7, 1.9.9
-// and 2.0.0 use line averages; every build from 2.0.1 to 2.0.7 uses the status
+// official image (docs/firmware.html §8): 1.7.9 to 2.0.0 use line averages
+// (1.9.5 also captured); every build from 2.0.1 to 2.0.7 uses the status
 // layout.
 const (
+	tailFirstAnalysed    = 10709
 	tailLastLineAverages = 20000
-	tailFirstStatus      = 20001
+	tailLastAnalysed     = 20007
 )
 
-// ApplyTail decodes the firmware-dependent tail bytes.
+// ApplyTail decodes the firmware-dependent tail bytes. A tail shorter than 8
+// bytes (firmware that sends a 40-byte payload) is left undecoded and the
+// layout reported as TailUnknown.
 func (a *ADC) ApplyTail(l TailLayout) {
-	a.Layout = l
+	a.Layout = TailUnknown
 	a.RateIndex = -1
+	a.Temp2Raw = 0
+	a.HasLineAvg, a.CC2AvgMV, a.DPAvgMV, a.DMAvgMV = false, 0, 0, 0
+	a.HasStatus, a.Accel, a.BatteryPermille = false, 0, 0
 	t := a.Tail
 	if l == TailUnknown || len(t) < 8 {
 		return
 	}
+	a.Layout = l
 	le := binary.LittleEndian
 	a.Temp2Raw = int16(le.Uint16(t[0:]))
 	switch l {
@@ -123,12 +132,6 @@ func (a ADC) Temp2Valid() bool { return a.Layout != TailUnknown && a.Temp2Raw !=
 
 // Temp2C returns the second temperature channel in °C.
 func (a ADC) Temp2C() float64 { return float64(a.Temp2Raw) / 128 }
-
-// Request for a single ADC snapshot.
-func ADCRequest(id uint8) []byte {
-	h := ControlHeader(TypeGetData, id, AttADC)
-	return h[:]
-}
 
 // ParseADC decodes an ADC section payload.
 func ParseADC(p []byte) (ADC, error) {

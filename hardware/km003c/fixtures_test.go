@@ -10,7 +10,9 @@ import (
 )
 
 // Frames captured from a real KM003C (application firmware 1.9.5, hardware
-// 2.2) with nothing attached; see testdata/fw1.9.5/INDEX.txt.
+// 2.2) with nothing attached; see testdata/fw1.9.5/INDEX.txt. The HID and CDC
+// captures carry the same ADC frame as bulk and are kept as parser inputs;
+// this package itself only uses the bulk interface.
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "fw1.9.5", name+".hex"))
@@ -27,15 +29,15 @@ func fixture(t *testing.T, name string) []byte {
 func TestFixtureRequestsMatchEncoder(t *testing.T) {
 	cases := []struct {
 		file string
-		want []byte
+		want [4]byte
 	}{
-		{"bulk_W1_1_req", ADCRequest(1)},
-		{"bulk_W3_1_req", PDRequest(7)},
-		{"bulk_W4_1_req", ADCAndPDRequest(10)},
-		{"cdc_W1_1_req", ADCRequest(18)},
+		{"bulk_W1_1_req", ControlHeader(TypeGetData, 1, AttADC)},
+		{"bulk_W3_1_req", ControlHeader(TypeGetData, 7, AttPDPacket)},
+		{"bulk_W4_1_req", ControlHeader(TypeGetData, 10, AttADC|AttPDPacket)},
+		{"cdc_W1_1_req", ControlHeader(TypeGetData, 18, AttADC)},
 	}
 	for _, c := range cases {
-		if got := fixture(t, c.file); !bytes.Equal(got, c.want) {
+		if got := fixture(t, c.file); !bytes.Equal(got, c.want[:]) {
 			t.Errorf("%s: captured % X, encoder % X", c.file, got, c.want)
 		}
 	}
@@ -49,7 +51,8 @@ func TestFixtureRequestsMatchEncoder(t *testing.T) {
 	}
 	// HID buffers carry hidapi's leading report-ID byte.
 	hid := fixture(t, "hid_W1_1_req")
-	if len(hid) != 65 || hid[0] != 0 || !bytes.Equal(hid[1:5], ADCRequest(15)) {
+	adc := ControlHeader(TypeGetData, 15, AttADC)
+	if len(hid) != 65 || hid[0] != 0 || !bytes.Equal(hid[1:5], adc[:]) {
 		t.Errorf("hid request % X", hid)
 	}
 }
@@ -69,7 +72,7 @@ func TestFixtureADC(t *testing.T) {
 		if frame[1] != req[1] {
 			t.Errorf("%s: reply id %d != request id %d", f, frame[1], req[1])
 		}
-		if err := CheckRequest(req, HID); err != nil {
+		if err := CheckRequest(req); err != nil {
 			t.Errorf("%s: captured request refused by guard: %v", f, err)
 		}
 		a, err := ParseADCFrame(frame)

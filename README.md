@@ -21,6 +21,12 @@ powerz pd -duration 30s       # decoded USB Power Delivery traffic
 powerz schema                 # machine-readable reference for agents
 ```
 
+Prebuilt binaries are attached to
+[GitHub Releases](https://github.com/ljagiello/gopower-z/releases) for macOS
+(arm64, x86_64; libusb is built in) and Linux (arm64, x86_64; glibc 2.28 or
+newer, plus the libusb 1.0 runtime package, e.g. `libusb-1.0-0` on
+Debian/Ubuntu or `libusbx` on RHEL 8/9). See `INSTALL.txt` in the archive.
+
 powerz only ever sends a small whitelist of read requests. It cannot change
 meter settings, trigger fast-charge protocols (so it cannot raise VBUS), or
 touch firmware.

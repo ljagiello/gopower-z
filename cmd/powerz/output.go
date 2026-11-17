@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 )
 
 // utcTime formats host timestamps for JSON: UTC, fixed millisecond precision,
@@ -19,6 +19,7 @@ type snapshot struct {
 	Time            string   `json:"time"`
 	Serial          string   `json:"serial"`
 	FirmwareVersion *string  `json:"firmware_version"`
+	FirmwareError   *string  `json:"firmware_error"`
 	VBusV           float64  `json:"vbus_v"`
 	IBusA           float64  `json:"ibus_a"`
 	PowerW          float64  `json:"power_w"`
@@ -47,10 +48,14 @@ type inferred struct {
 	// DashboardLabel and DashboardLabel2 are the meter's two D+/D- protocol
 	// labels (a D+/D- voltage signature, not a confirmed protocol session),
 	// recomputed with the meter firmware's algorithm; null where the screen
-	// shows "[N/A]".
+	// shows "[N/A]", or when DashboardClassifier is null.
 	DashboardLabel  *string `json:"dashboard_label"`
 	DashboardLabel2 *string `json:"dashboard_label_2"`
-	CC              ccInfo  `json:"cc"`
+	// DashboardClassifier names the firmware whose label algorithm was used
+	// ("1.9.5" for firmware 1.7.9-2.0.0, "2.0.7" for 2.0.1-2.0.7); null when
+	// the firmware is unknown or outside that range, so no labels exist.
+	DashboardClassifier *string `json:"dashboard_classifier"`
+	CC                  ccInfo  `json:"cc"`
 }
 
 type rawADC struct {
@@ -75,10 +80,22 @@ func round(v float64, decimals int) float64 {
 
 // label converts a dashboard label to JSON: null for the "[ N/A ]" sentinel.
 func label(s string) *string {
-	if s == "[ N/A ]" || s == "" {
+	if s == km003c.LabelNA || s == "" {
 		return nil
 	}
 	return &s
+}
+
+// classifierName is the firmware whose dashboard-label algorithm applies to
+// a tail layout, or nil.
+func classifierName(l km003c.TailLayout) *string {
+	switch l {
+	case km003c.TailLineAverages:
+		return new("1.9.5")
+	case km003c.TailStatus:
+		return new("2.0.7")
+	}
+	return nil
 }
 
 func strOrNil(s string) *string {
@@ -88,13 +105,21 @@ func strOrNil(s string) *string {
 	return &s
 }
 
-func toSnapshot(a km003c.ADC, t time.Time, serial, firmware string) snapshot {
-	l1, l2 := km003c.DashboardLabels(a)
+// toSnapshot converts one reading. firmwareErr explains a missing firmware
+// version (nil when it is known or was not needed).
+func toSnapshot(a km003c.ADC, t time.Time, serial, firmware string, firmwareErr *string) snapshot {
+	l1, l2, ok := km003c.DashboardLabels(a)
+	inf := inferred{CC: ccInfer(a.CC1V(), a.CC2V())}
+	if ok {
+		inf.DashboardLabel, inf.DashboardLabel2 = label(l1), label(l2)
+		inf.DashboardClassifier = classifierName(a.Layout)
+	}
 	s := snapshot{
 		SchemaVersion:   schemaVersion,
 		Time:            utcTime(t),
 		Serial:          serial,
 		FirmwareVersion: strOrNil(firmware),
+		FirmwareError:   firmwareErr,
 		VBusV:           round(a.VBus(), 6),
 		IBusA:           round(a.FlowA(), 6),
 		PowerW:          round(a.FlowPower(), 6),
@@ -107,7 +132,7 @@ func toSnapshot(a km003c.ADC, t time.Time, serial, firmware string) snapshot {
 		DPV:             round(a.DPV(), 4),
 		DMV:             round(a.DMV(), 4),
 		VDDV:            round(a.VDDV(), 4),
-		Inferred:        inferred{DashboardLabel: label(l1), DashboardLabel2: label(l2), CC: ccInfer(a.CC1V(), a.CC2V())},
+		Inferred:        inf,
 		Raw: rawADC{IBusUA: a.IBusUA, VBusUncalAvgUV: a.VBusRawUV, IBusUncalAvgUA: a.IBusRawUA,
 			TailLayout: a.Layout.String(), TailHex: hexdump(a.Tail)},
 	}

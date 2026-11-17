@@ -56,3 +56,17 @@ hid_W1_2_req.hex                      65   16                       request as s
 hid_W1_2_resp.hex                     64   16  True        2.41 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
 hid_W1_3_req.hex                      65   17                       request as sent
 hid_W1_3_resp.hex                     64   17  True        2.29 ms  response as received (one IN transfer / one input report / all tty bytes in the read window)
+
+Provenance notes added after the capture:
+
+* bulk_W6_3_respdata.hex, bulk_W6_3_plain.hex: the OTP block carries the meter's factory UUID.
+  For privacy the UUID was replaced with the placeholder 0123456789ABCDEF0123456789ABCDEF
+  and the data block re-encrypted with key0 (AES-128-ECB), so the ciphertext is derived, not
+  as received. The serial number 050002 and every other byte are as captured. W6_1 and W6_2
+  are unmodified, so tests that decrypt them check the decoder against real ciphertext.
+
+* live_pd_events_1..3.hex (added 2026-11-16, firmware 1.9.5): three ADC+PD replies (GET_DATA
+  attribute 0x011, issued by powerz measure) captured while the charger was unplugged and
+  replugged twice under a 0.44 A load. They hold detach/attach event records (0x45 + code
+  0x22/0x21) and no PD messages: the charger did not use USB-PD. One frame per file, same hex
+  format as above.

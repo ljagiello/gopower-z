@@ -183,13 +183,10 @@ func (t *USBTransport) claim() error {
 // Description returns the USB string descriptors read at open.
 func (t *USBTransport) Description() USBDescription { return t.desc }
 
-// Kind implements Transport.
-func (t *USBTransport) Kind() TransportKind { return Bulk }
-
 // Write implements Transport.
 func (t *USBTransport) Write(ctx context.Context, p []byte) error {
 	// Defence in depth: Device already checks every frame.
-	if err := CheckRequest(p, Bulk); err != nil {
+	if err := CheckRequest(p); err != nil {
 		return err
 	}
 	n, err := t.out.WriteContext(ctx, p)
@@ -206,15 +203,23 @@ func (t *USBTransport) Write(ctx context.Context, p []byte) error {
 // some data arrived is returned as (n, ErrIncomplete).
 func (t *USBTransport) Read(ctx context.Context, p []byte) (int, error) {
 	n, err := t.in.ReadContext(ctx, p)
+	return readResult(n, err, ctx.Err())
+}
+
+// readResult maps the outcome of a bulk IN transfer onto the Transport
+// contract: data cut off by the deadline is (n, ErrIncomplete), cancellation
+// is context.Canceled, and an expired deadline or a transfer libusb gave up
+// on is ErrTimeout.
+func readResult(n int, err, ctxErr error) (int, error) {
 	switch {
 	case err == nil:
 		return n, nil
 	case n > 0:
 		return n, ErrIncomplete
-	case errors.Is(ctx.Err(), context.Canceled):
+	case errors.Is(ctxErr, context.Canceled):
 		return 0, context.Canceled
 	case errors.Is(err, gousb.TransferCancelled), errors.Is(err, gousb.TransferTimedOut),
-		errors.Is(err, context.DeadlineExceeded), ctx.Err() != nil:
+		errors.Is(err, context.DeadlineExceeded), ctxErr != nil:
 		return 0, ErrTimeout
 	}
 	return 0, mapUSBError("bulk read", err)

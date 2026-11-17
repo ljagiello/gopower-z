@@ -29,9 +29,10 @@ type Device struct {
 	// layout selects how ADC tail bytes are decoded (see DetectLayout).
 	layout   TailLayout
 	firmware string
-	// infoSpacing separates the MemoryReads of ReadInfo (the verified probe
-	// spacing); tests shorten it.
-	infoSpacing time.Duration
+	// memSpacing is the minimum gap between two MemoryReads (the spacing of
+	// the verified probe sequence); lastMem is when the last one was sent.
+	memSpacing time.Duration
+	lastMem    time.Time
 
 	// Timeout bounds each request/reply exchange (draining happens before
 	// the timeout starts).
@@ -40,14 +41,10 @@ type Device struct {
 	Trace func(dir string, frame []byte)
 }
 
-// ErrStuck is returned when the meter keeps sending data that cannot be
-// drained, so no request can be written safely.
-var ErrStuck = errors.New("km003c: meter keeps sending unexpected data; unplug and reconnect it")
-
 // NewDevice wraps an open transport. Stale replies left on the IN endpoint by
 // a previous session are drained before the first request.
 func NewDevice(t Transport) *Device {
-	return &Device{t: t, Timeout: time.Second, dirty: true, infoSpacing: 300 * time.Millisecond}
+	return &Device{t: t, Timeout: time.Second, dirty: true, memSpacing: 300 * time.Millisecond}
 }
 
 // Close ends the session and closes the transport. If CONNECT was sent, it
@@ -117,22 +114,26 @@ func (d *Device) drain() bool {
 	return false
 }
 
+// idle reports whether the link has been quiet long enough that the meter may
+// have dropped the session and queued an unsolicited DISCONNECT.
+func (d *Device) idle() bool {
+	return !d.lastIO.IsZero() && time.Since(d.lastIO) > idleDrainAfter
+}
+
 // prepare makes sure nothing is queued before a request is written. It runs
 // before the exchange deadline starts, so draining never eats into it.
 func (d *Device) prepare(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	idle := !d.lastIO.IsZero() && time.Since(d.lastIO) > idleDrainAfter
-	if d.dirty || idle {
+	// After an idle gap the meter may also have ended the session; connect
+	// checks for that itself before a MemoryRead.
+	if d.dirty || d.idle() {
 		if !d.drain() {
 			d.dirty = true
 			return ErrStuck
 		}
 		d.dirty = false
-	}
-	if idle {
-		d.connected = false // the meter may have dropped the session
 	}
 	return nil
 }
@@ -144,7 +145,7 @@ func (d *Device) nextID() uint8 {
 
 // send checks a frame against the whitelist and writes it.
 func (d *Device) send(ctx context.Context, frame []byte) error {
-	if err := CheckRequest(frame, d.t.Kind()); err != nil {
+	if err := CheckRequest(frame); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -153,14 +154,8 @@ func (d *Device) send(ctx context.Context, frame []byte) error {
 	if d.Trace != nil {
 		d.Trace("tx", frame)
 	}
-	out := frame
-	if d.t.Kind() == HID {
-		// HID output reports are always 64 bytes, zero padded.
-		out = make([]byte, 64)
-		copy(out, frame)
-	}
 	d.lastIO = time.Now()
-	if err := d.t.Write(ctx, out); err != nil {
+	if err := d.t.Write(ctx, frame); err != nil {
 		d.dirty = true // a cancelled write may still have reached the meter
 		return err
 	}
@@ -187,10 +182,10 @@ func (d *Device) read(ctx context.Context, buf []byte) ([]byte, error) {
 }
 
 // exchange sends a request and waits for the reply of one of the wanted
-// types that echoes the request's transaction id. Frames with another id are
-// stale replies to earlier requests; they are consumed and skipped. If only
-// stale frames of a wanted type arrive, the last one is returned and the
-// endpoint stays marked dirty.
+// types that echoes the request's transaction id (the meter echoes it on
+// every reply; verified 20/20 on firmware 1.9.5). Frames with another id are
+// stale replies to earlier requests; they are consumed and skipped, never
+// returned.
 func (d *Device) exchange(ctx context.Context, req []byte, want ...MsgType) ([]byte, error) {
 	if err := d.prepare(ctx); err != nil {
 		return nil, err
@@ -202,25 +197,15 @@ func (d *Device) exchange(ctx context.Context, req []byte, want ...MsgType) ([]b
 	}
 	id := req[1]
 	buf := make([]byte, 4096)
-	var fallback []byte
 	for {
 		frame, err := d.read(ctx, buf)
 		if err != nil {
-			d.dirty = true
-			if fallback != nil && errors.Is(err, ErrTimeout) {
-				return fallback, nil
-			}
+			d.dirty = true // the reply may still arrive
 			return nil, err
 		}
 		h, err := ParseHeader(frame)
-		if err != nil {
-			continue // zero-length packet
-		}
-		if h.ID != id {
-			if slices.Contains(want, h.Type) {
-				fallback = append([]byte(nil), frame...)
-			}
-			continue
+		if err != nil || h.ID != id {
+			continue // zero-length packet or stale reply
 		}
 		if slices.Contains(want, h.Type) {
 			return append([]byte(nil), frame...), nil
@@ -244,9 +229,6 @@ func (d *Device) getData(ctx context.Context, att Attribute) ([]Section, error) 
 				continue
 			}
 			return nil, err
-		}
-		if d.t.Kind() == HID && len(frame) > 64 {
-			frame = frame[:64]
 		}
 		_, secs, err := ParsePutData(frame)
 		if errors.Is(err, ErrEmpty) {
@@ -286,7 +268,7 @@ func (d *Device) ReadADC(ctx context.Context) (a ADC, err error) {
 }
 
 // ReadADCAndPD reads an ADC snapshot together with the pending PD events in a
-// single exchange (bulk only). The PD event FIFO on the device is drained.
+// single exchange. The PD event FIFO on the device is drained.
 func (d *Device) ReadADCAndPD(ctx context.Context) (a ADC, pd *PDPacket, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -313,7 +295,8 @@ func (d *Device) ReadADCAndPD(ctx context.Context) (a ADC, pd *PDPacket, err err
 	return a, nil, nil
 }
 
-// ReadPD reads the pending PD events (bulk only).
+// ReadPD reads the pending PD events. The PD event FIFO on the device is
+// drained.
 func (d *Device) ReadPD(ctx context.Context) (p PDPacket, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -329,7 +312,7 @@ func (d *Device) ReadPD(ctx context.Context) (p PDPacket, err error) {
 	return ParsePDPacket(s.Payload)
 }
 
-// ReadSettings reads the device settings block (bulk only).
+// ReadSettings reads the device settings block.
 func (d *Device) ReadSettings(ctx context.Context) (st Settings, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -345,10 +328,16 @@ func (d *Device) ReadSettings(ctx context.Context) (st Settings, err error) {
 	return ParseSettings(s.Payload)
 }
 
+// connect opens a CONNECT session unless one is known to be open. After an
+// idle gap the meter may have ended the session (5 s after the last command on
+// firmware 1.9.5), so it is opened again. A CONNECT sent while the session is
+// in fact still open only lengthens the meter's session timeout, and Close
+// ends the session with DISCONNECT either way.
 func (d *Device) connect(ctx context.Context) error {
-	if d.connected {
+	if d.connected && !d.idle() {
 		return nil
 	}
+	d.connected = false
 	var err error
 	for range 3 {
 		h := ControlHeader(TypeConnect, d.nextID(), 0)
@@ -375,6 +364,15 @@ func (d *Device) memoryRead(ctx context.Context, addr, length uint32) (out []byt
 	if err != nil {
 		return nil, err
 	}
+	// Keep the verified spacing between MemoryReads, also across calls
+	// (DetectLayout followed by ReadInfo).
+	if wait := d.memSpacing - time.Since(d.lastMem); !d.lastMem.IsZero() && wait > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
 	if err := d.prepare(ctx); err != nil {
 		return nil, err
 	}
@@ -385,6 +383,7 @@ func (d *Device) memoryRead(ctx context.Context, addr, length uint32) (out []byt
 			d.dirty = true // confirmation, data or ZLP may still be queued
 		}
 	}()
+	d.lastMem = time.Now()
 	if err := d.send(ctx, req); err != nil {
 		return nil, err
 	}
@@ -455,16 +454,15 @@ func (d *Device) consumeZLP() bool {
 	return false
 }
 
-// ReadInfo reads model, firmware version and serial number (bulk only). It
-// sends CONNECT once per session, then three MemoryReads of fixed 64-byte
-// information blocks.
+// ReadInfo reads model, firmware version and serial number. It sends CONNECT
+// once per session, then three MemoryReads of fixed 64-byte information
+// blocks. A block that cannot be read does not discard the others: the
+// fields of every block that was read are returned together with an error
+// that joins one error per failed block.
 func (d *Device) ReadInfo(ctx context.Context) (info DeviceInfo, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	defer d.markDirtyOn(&err)
-	if d.t.Kind() != Bulk {
-		return info, fmt.Errorf("km003c: device info is only available over the bulk interface")
-	}
 	if err := d.connect(ctx); err != nil {
 		return info, err
 	}
@@ -476,23 +474,22 @@ func (d *Device) ReadInfo(ctx context.Context) (info DeviceInfo, err error) {
 		{addrFirmware, ParseFirmwareBlock},
 		{addrOTP, ParseOTPBlock},
 	}
-	for i, b := range blocks {
-		if i > 0 {
-			// Same spacing as the verified probe sequence.
-			select {
-			case <-ctx.Done():
-				return info, ctx.Err()
-			case <-time.After(d.infoSpacing):
-			}
-		}
+	var errs []error
+	for _, b := range blocks {
 		data, err := d.memoryRead(ctx, b.addr, 64)
+		if ctx.Err() != nil {
+			return info, ctx.Err()
+		}
 		if err != nil {
-			return info, fmt.Errorf("read block 0x%08X: %w", b.addr, err)
+			errs = append(errs, fmt.Errorf("read block 0x%08X: %w", b.addr, err))
+			continue
 		}
 		b.parse(data, &info)
 	}
-	d.setFirmware(info.FirmwareVersion)
-	return info, nil
+	if info.FirmwareVersion != "" {
+		d.setFirmware(info.FirmwareVersion)
+	}
+	return info, errors.Join(errs...)
 }
 
 func (d *Device) setFirmware(v string) {
@@ -501,18 +498,15 @@ func (d *Device) setFirmware(v string) {
 }
 
 // DetectLayout reads the application firmware version (CONNECT plus one
-// MemoryRead, bulk only) and selects the matching ADC tail layout for
-// subsequent reads. It returns the firmware version. Without it, the
-// firmware-dependent ADC tail bytes are left undecoded.
+// MemoryRead) and selects the matching ADC tail layout for subsequent reads.
+// It returns the firmware version. Without it, the firmware-dependent ADC
+// tail bytes are left undecoded.
 func (d *Device) DetectLayout(ctx context.Context) (v string, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	defer d.markDirtyOn(&err)
 	if d.firmware != "" {
 		return d.firmware, nil
-	}
-	if d.t.Kind() != Bulk {
-		return "", fmt.Errorf("km003c: firmware version is only available over the bulk interface")
 	}
 	if err := d.connect(ctx); err != nil {
 		return "", err
@@ -523,6 +517,9 @@ func (d *Device) DetectLayout(ctx context.Context) (v string, err error) {
 	}
 	var info DeviceInfo
 	ParseFirmwareBlock(data, &info)
+	if info.FirmwareVersion == "" {
+		return "", fmt.Errorf("km003c: firmware block carries no version")
+	}
 	d.setFirmware(info.FirmwareVersion)
 	return d.firmware, nil
 }

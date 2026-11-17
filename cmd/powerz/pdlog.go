@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 	"github.com/ljagiello/gopower-z/usbpd"
 )
 
@@ -59,17 +59,18 @@ type rdo struct {
 	OperatingPowerW    *float64 `json:"operating_power_w"`
 	CapabilityMismatch bool     `json:"capability_mismatch"`
 	EPR                bool     `json:"epr"`
-	PDO                *pdo     `json:"pdo"` // the source PDO it selects, if seen
+	PDO                *pdo     `json:"pdo"` // the source PDO it selects, if known
 	RawHex             string   `json:"raw_hex"`
 	Text               string   `json:"text"`
 }
 
-// pdRecord is the JSON form of one captured PD message or event.
+// pdRecord is the JSON form of one captured PD message or event, or of PD
+// bytes the meter delivered that could not be parsed.
 type pdRecord struct {
 	SchemaVersion int    `json:"schema_version"`
 	Time          string `json:"time"` // host time the record was read
 	MeterTimeMS   uint32 `json:"meter_time_ms"`
-	Kind          string `json:"kind"` // "message" or "event"
+	Kind          string `json:"kind"` // "message", "event" or "undecoded"
 	// message fields
 	SOP          string   `json:"sop,omitempty"`
 	Message      string   `json:"message,omitempty"`
@@ -134,17 +135,58 @@ func (r pdRecord) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o)
 }
 
-// pdTracker decodes PD records, remembering the most recent source
-// capabilities so requests can be resolved to the PDO they select.
+// sopName names a record's SOP packet type; the reserved values 5-7 are
+// "unknown".
+func sopName(s km003c.SOP) string {
+	if s > 4 {
+		return "unknown"
+	}
+	return s.String()
+}
+
+// pdTracker decodes PD records and follows the negotiation: the source's
+// capabilities, the sink's Request, the source's Accept and finally PS_RDY,
+// which makes the accepted Request the active contract.
 type pdTracker struct {
 	showGoodCRC bool
 	srcCaps     []usbpd.PDO
-	lastReq     *rdo
-	contract    *rdo // request confirmed by PS_RDY
+	lastReq     *rdo // last Request seen (whatever its outcome)
+	pending     *rdo // Request awaiting Accept
+	accepted    *rdo // Request accepted, awaiting PS_RDY
+	contract    *rdo // accepted Request confirmed by PS_RDY
 	messages    int
 	events      int
-	attaches    int               // attach/detach events
+	attaches    int // attach/detach events
+	undecoded   int
 	ext         usbpd.Reassembler // chunked extended messages
+}
+
+// reset forgets the negotiation (detach or hard reset: the next source starts
+// from scratch).
+func (t *pdTracker) reset() {
+	t.srcCaps, t.lastReq, t.pending, t.accepted, t.contract = nil, nil, nil, nil, nil
+	t.ext = usbpd.Reassembler{}
+}
+
+// packet decodes every record of a PD_PACKET section. Bytes the parser could
+// not split into records are kept as one "undecoded" record: reading the
+// packet drained them from the meter, so this is their only copy.
+func (t *pdTracker) packet(p *km003c.PDPacket) []pdRecord {
+	if p == nil {
+		return nil
+	}
+	var out []pdRecord
+	for _, r := range p.Records {
+		if rec, ok := t.process(r); ok {
+			out = append(out, rec)
+		}
+	}
+	if len(p.Trailing) > 0 {
+		t.undecoded++
+		out = append(out, pdRecord{SchemaVersion: schemaVersion, Time: utcTime(time.Now()),
+			MeterTimeMS: p.Status.TimestampMS, Kind: "undecoded", RawHex: hexdump(p.Trailing)})
+	}
+	return out
 }
 
 func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
@@ -161,8 +203,8 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 		} else {
 			out.Param = int(r.EventParam)
 		}
-		if r.Event == 2 || r.Event == 4 { // detach or hard reset ends the contract
-			t.contract, t.lastReq = nil, nil
+		if r.Event == 2 || r.Event == 4 { // detach or hard reset
+			t.reset()
 		}
 		return out, true
 	}
@@ -171,7 +213,7 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 		// touching the negotiation state.
 		t.messages++
 		out.Kind = "message"
-		out.SOP = r.SOP.String()
+		out.SOP = sopName(r.SOP)
 		out.Message = "long_message_undecoded"
 		out.FromMeter = r.FromMeter
 		return out, true
@@ -184,7 +226,7 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 	t.messages++
 	id := h.MessageID()
 	out.Kind = "message"
-	out.SOP = r.SOP.String()
+	out.SOP = sopName(r.SOP)
 	out.Message = h.Name()
 	out.SpecRevision = h.Rev()
 	out.MessageID = &id
@@ -203,6 +245,9 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 	}
 	for _, o := range m.Objects {
 		out.ObjectsHex = append(out.ObjectsHex, fmt.Sprintf("%08X", o))
+	}
+	if r.SOP != 0 {
+		return out, true // cable (SOP'/SOP'') traffic does not negotiate power
 	}
 	switch out.Message {
 	case "Source_Capabilities", "EPR_Source_Capabilities":
@@ -233,23 +278,37 @@ func (t *pdTracker) process(r km003c.PDRecord) (pdRecord, bool) {
 		}
 	case "Request", "EPR_Request":
 		if len(m.Objects) > 0 {
-			out.Request = t.decodeRequest(m.Objects[0])
-			t.lastReq = out.Request
+			out.Request = t.decodeRequest(m)
+			t.lastReq, t.pending, t.accepted = out.Request, out.Request, nil
 		}
+	case "Accept":
+		if t.pending != nil {
+			t.accepted, t.pending = t.pending, nil
+		}
+	case "Reject", "Wait":
+		t.pending = nil
 	case "PS_RDY":
-		if t.lastReq != nil {
-			t.contract = t.lastReq
+		if t.accepted != nil {
+			t.contract, t.accepted = t.accepted, nil
 		}
-	case "Hard_Reset", "Soft_Reset":
-		t.contract = nil
+	case "Soft_Reset":
+		t.pending, t.accepted, t.contract = nil, nil, nil
 	}
 	return out, true
 }
 
-func (t *pdTracker) decodeRequest(v uint32) *rdo {
+// decodeRequest decodes a Request or EPR_Request. An EPR_Request carries a
+// copy of the PDO it selects as its second object, so it is decoded against
+// that copy even when the EPR capabilities were not captured.
+func (t *pdTracker) decodeRequest(m usbpd.Message) *rdo {
+	v := m.Objects[0]
 	pos := int(v>>28) & 0xF
 	var ref *usbpd.PDO
-	if pos >= 1 && pos <= len(t.srcCaps) {
+	switch {
+	case m.Header.Name() == "EPR_Request" && len(m.Objects) >= 2:
+		p := usbpd.DecodeSourcePDO(m.Objects[1])
+		ref = &p
+	case pos >= 1 && pos <= len(t.srcCaps) && t.srcCaps[pos-1].Raw != 0:
 		ref = &t.srcCaps[pos-1]
 	}
 	r := usbpd.DecodeRDO(v, ref)
@@ -272,9 +331,10 @@ func (t *pdTracker) decodeRequest(v uint32) *rdo {
 type pdSummary struct {
 	Messages           int        `json:"messages"`
 	Events             int        `json:"events"`
+	Undecoded          int        `json:"undecoded"`
 	SourceCapabilities []pdo      `json:"source_capabilities"`
 	LastRequest        *rdo       `json:"last_request"`
-	Contract           *rdo       `json:"contract"` // last request acknowledged with PS_RDY
+	Contract           *rdo       `json:"contract"` // Request accepted and confirmed with PS_RDY
 	Note               *string    `json:"note"`
 	Records            []pdRecord `json:"records"`
 }
@@ -294,7 +354,7 @@ func (t *pdTracker) summary(records []pdRecord) *pdSummary {
 		records = []pdRecord{}
 	}
 	s := &pdSummary{
-		Messages: t.messages, Events: t.events, SourceCapabilities: []pdo{},
+		Messages: t.messages, Events: t.events, Undecoded: t.undecoded, SourceCapabilities: []pdo{},
 		LastRequest: t.lastReq, Contract: t.contract, Records: records,
 	}
 	for i, p := range t.srcCaps {
@@ -314,9 +374,12 @@ func (t *pdTracker) summary(records []pdRecord) *pdSummary {
 }
 
 func (t *pdTracker) capsText() string {
-	parts := make([]string, len(t.srcCaps))
-	for i, p := range t.srcCaps {
-		parts[i] = p.String()
+	parts := make([]string, 0, len(t.srcCaps))
+	for _, p := range t.srcCaps {
+		if p.Kind == usbpd.PDOUnknown && p.Raw == 0 {
+			continue
+		}
+		parts = append(parts, p.String())
 	}
 	return strings.Join(parts, " | ")
 }
@@ -324,7 +387,8 @@ func (t *pdTracker) capsText() string {
 // text renders a record as human-readable line(s).
 func (r pdRecord) text() string {
 	ts := fmt.Sprintf("%10.3fs", float64(r.MeterTimeMS)/1000)
-	if r.Kind == "event" {
+	switch r.Kind {
+	case "event":
 		s := ts + "  EVENT " + r.Event
 		if r.CC != 0 {
 			s += fmt.Sprintf(" CC%d", r.CC)
@@ -332,6 +396,8 @@ func (r pdRecord) text() string {
 			s += fmt.Sprintf(" (param %d)", r.Param)
 		}
 		return s
+	case "undecoded":
+		return ts + "  UNDECODED " + r.RawHex
 	}
 	role := "   "
 	switch r.PowerRole {

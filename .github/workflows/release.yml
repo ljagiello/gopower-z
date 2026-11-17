@@ -1,29 +1,270 @@
 name: Release
 
-# Push a tag like v0.1.0 to build binaries on native runners (cgo + libusb),
-# attach them to a GitHub release and publish build-provenance attestations.
+# Release process (yamaha-cli's, without GoReleaser):
+#
+#   Actions > Release > Run workflow on main, bump = patch|minor|major
+#     version     next tag from .github/scripts/next-version.sh
+#     build-*     test, build and verify every platform
+#     assemble    checksums.txt and grouped release notes
+#     publish     attest, push the annotated tag, create the GitHub release
+#
+#   Pushing a v* tag by hand runs the same jobs without creating a tag.
+#   The dry-run input, and pull requests that change this file or
+#   next-version.sh, run everything up to assemble and publish nothing.
+#
+# Every platform is built and verified before the tag exists, so a failed
+# build never leaves a tag without a release. GoReleaser is not used:
+# powerz needs cgo + libusb built on each platform, and merging binaries
+# from several runners is a GoReleaser Pro feature.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to bump
+        type: choice
+        required: true
+        options: [patch, minor, major]
+      dry-run:
+        description: Build and verify everything; create no tag and publish nothing
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/scripts/next-version.sh
 
 permissions:
   contents: read
 
+# One release at a time, and never cancel one in progress (a half-published
+# release is worse than a queued one). Pull request dry runs get their own
+# group so they cannot displace a queued release.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('release-dry-run-{0}', github.ref) || 'release' }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash # bash -eo pipefail, also inside the Linux container
+
 jobs:
-  build:
-    name: build (${{ matrix.goos }}-${{ matrix.goarch }})
+  version:
+    name: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # next-version.sh reads every tag
+          persist-credentials: false
+
+      # tag: the release tag (would-be tag on dry runs).
+      # version: what the binaries report; dry runs append -next, like a
+      # GoReleaser snapshot.
+      - name: Pick the version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          release='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          case $GITHUB_EVENT_NAME in
+            push)
+              tag=$GITHUB_REF_NAME
+              if [[ ! $tag =~ $release ]]; then
+                echo "::error::$tag is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE"
+                exit 1
+              fi
+              version=$tag publish=true
+              ;;
+            workflow_dispatch)
+              if [ "$GITHUB_REF" != refs/heads/main ]; then
+                echo "::error::Releases are cut from main, not $GITHUB_REF"
+                exit 1
+              fi
+              tag=$(.github/scripts/next-version.sh "$BUMP")
+              if [ "$DRY_RUN" = true ]; then
+                version=$tag-next publish=false
+              else
+                version=$tag publish=true
+              fi
+              ;;
+            pull_request)
+              tag=$(.github/scripts/next-version.sh patch)
+              version=$tag-next publish=false
+              ;;
+            *)
+              echo "::error::unexpected event $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          prerelease=false
+          if [[ $tag == *-* ]]; then prerelease=true; fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "publish=$publish"
+            echo "prerelease=$prerelease"
+          } >>"$GITHUB_OUTPUT"
+          if [ "$publish" = true ]; then
+            echo "Releasing $tag from $GITHUB_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Dry run: would release $tag from $GITHUB_SHA (binaries report $version)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Linux binaries are built on AlmaLinux 8 (glibc 2.28), so they run on
+  # Debian 10+, Ubuntu 20.04+, RHEL/AlmaLinux/Rocky 8+ and current Fedora.
+  # libusb stays a shared library on Linux (a static one needs libudev), so
+  # users need the libusb 1.0 runtime package (libusb-1.0.so.0):
+  #   Debian/Ubuntu: libusb-1.0-0   RHEL/AlmaLinux/Rocky 8-9: libusbx
+  #   Fedora, RHEL 10: libusb1      Arch: libusb   openSUSE: libusb-1_0-0
+  # INSTALL.txt in the archive says the same.
+  build-linux:
+    name: build (linux-${{ matrix.goarch }})
+    needs: version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, goos: linux, goarch: amd64 }
-          - { os: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
-          - { os: macos-latest, goos: darwin, goarch: arm64 }
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
+          - { runner: ubuntu-24.04, goarch: amd64, arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, goarch: arm64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    container:
+      image: almalinux:8.10@sha256:768bedc30fe0a536adb0a65d2eddb7caad364e514fbddd0ae9e026975f590342
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET_GOARCH: ${{ matrix.goarch }}
+      ARCH: ${{ matrix.arch }}
+      CGO_ENABLED: "1"
+      # Highest glibc symbol version the binaries may require: AlmaLinux 8's.
+      GLIBC_MAX: "2.28"
+    steps:
+      - name: Install build tools
+        run: dnf -y --setopt=install_weak_deps=False install gcc pkgconf-pkg-config libusbx-devel git-core binutils
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # release builds never restore a cache
+
+      # The checkout belongs to the runner user, the container runs as root;
+      # without this, git refuses the repository and go build cannot stamp
+      # VCS information.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - run: go test -count=1 ./...
+
+      - name: Build
+        run: |
+          test "$(go env GOARCH)" = "$TARGET_GOARCH"
+          mkdir -p "$RUNNER_TEMP/out"
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$RUNNER_TEMP/out/powerz" ./cmd/powerz
+
+      - name: Check required glibc
+        run: |
+          bin=$RUNNER_TEMP/out/powerz
+          have=$(getconf GNU_LIBC_VERSION | awk '{print $2}')
+          need=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)
+          echo "build image glibc: $have, allowed: $GLIBC_MAX, required by powerz: $need"
+          objdump -p "$bin" | grep NEEDED
+          if [ "$have" != "$GLIBC_MAX" ]; then
+            echo "::error::build image has glibc $have; GLIBC_MAX and the documented minimum say $GLIBC_MAX"
+            exit 1
+          fi
+          if [ -z "$need" ] || [ "$(printf '%s\n' "$need" "$GLIBC_MAX" | sort -V | tail -n 1)" != "$GLIBC_MAX" ]; then
+            echo "::error::powerz requires glibc ${need:-(none found)}, more than $GLIBC_MAX"
+            exit 1
+          fi
+
+      - name: Smoke test
+        run: |
+          "$RUNNER_TEMP/out/powerz" version -json
+          "$RUNNER_TEMP/out/powerz" schema >/dev/null
+
+      - name: Package
+        run: |
+          name=powerz_${VERSION#v}_linux_$ARCH
+          stage=$RUNNER_TEMP/stage
+          mkdir -p "$stage" "$RUNNER_TEMP/dist"
+          cp "$RUNNER_TEMP/out/powerz" LICENSE README.md "$stage/"
+          cp -R docs "$stage/docs"
+          cat >"$stage/INSTALL.txt" <<EOF
+          powerz $VERSION for Linux ($ARCH)
+
+          Requirements
+            glibc 2.28 or newer: Debian 10+, Ubuntu 20.04+,
+            RHEL/AlmaLinux/Rocky 8+, current Fedora.
+
+            The libusb 1.0 shared library (libusb-1.0.so.0):
+              Debian, Ubuntu:                sudo apt install libusb-1.0-0
+              RHEL, AlmaLinux, Rocky 8 or 9: sudo dnf install libusbx
+              Fedora, RHEL 10:               sudo dnf install libusb1
+              Arch Linux:                    sudo pacman -S libusb
+              openSUSE:                      sudo zypper install libusb-1_0-0
+
+            Access to the meter (USB 5fc9:0063) through a udev rule;
+            without it powerz exits with code 6 (permission_denied).
+            See docs/cli.html.
+
+          Install
+            sudo install -m 0755 powerz /usr/local/bin/powerz
+            powerz version
+
+          Documentation: docs/index.html
+          EOF
+          tar -C "$stage" -czf "$RUNNER_TEMP/dist/$name.tar.gz" powerz LICENSE README.md INSTALL.txt docs
+          tar -tzvf "$RUNNER_TEMP/dist/$name.tar.gz"
+          # $RUNNER_TEMP is the container's path; runner.temp may be the host's.
+          echo "ARCHIVE=$RUNNER_TEMP/dist/$name.tar.gz" >>"$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: powerz-linux-${{ matrix.goarch }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Both darwin binaries come from the Apple Silicon runner. amd64 is a cgo
+  # cross-compile; its tests and smoke test run under Rosetta 2, which the
+  # macOS arm64 runner images install. libusb is built from its release
+  # tarball as a static library for the same minimum macOS as Go, so the
+  # binaries need neither Homebrew nor libusb.
+  build-macos:
+    name: build (darwin-${{ matrix.goarch }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goarch: arm64, arch: arm64, host: aarch64-apple-darwin }
+          - { goarch: amd64, arch: x86_64, host: x86_64-apple-darwin }
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET_GOARCH: ${{ matrix.goarch }}
+      ARCH: ${{ matrix.arch }}
+      LIBUSB_HOST: ${{ matrix.host }}
+      LIBUSB_VERSION: "1.0.30"
+      # Same as Homebrew's libusb formula; the tarball is signed by the
+      # libusb release key (C68187379B23DE9EFC46651E2C80FF56C6830A0E).
+      LIBUSB_SHA256: fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf
+      # Go 1.27 binaries require macOS 13 (cmd/link). Without this, clang
+      # targets the runner's macOS and the binary refuses older systems.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,57 +273,296 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false # release builds never restore a cache
 
-      - name: Install libusb (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev pkg-config
+      # configure finds every function the SDK declares, including ones
+      # newer than MACOSX_DEPLOYMENT_TARGET: with the macOS 27 SDK, libusb
+      # calls pipe2() (macOS 27+), which is weak-linked and crashes
+      # libusb_init on macOS 13-26. ac_cv_func_pipe2=no keeps libusb on
+      # pipe() + fcntl(); -Werror=unguarded-availability fails the build on
+      # any other such call.
+      - name: Build static libusb
+        run: |
+          tarball=$RUNNER_TEMP/libusb-$LIBUSB_VERSION.tar.bz2
+          src=$RUNNER_TEMP/libusb-src
+          prefix=$RUNNER_TEMP/libusb
+          curl -fsSL --retry 3 -o "$tarball" "https://github.com/libusb/libusb/releases/download/v$LIBUSB_VERSION/libusb-$LIBUSB_VERSION.tar.bz2"
+          echo "$LIBUSB_SHA256  $tarball" | shasum -a 256 -c -
+          mkdir -p "$src"
+          tar -xjf "$tarball" -C "$src" --strip-components=1
+          cd "$src"
+          ./configure --host="$LIBUSB_HOST" --prefix="$prefix" --enable-static --disable-shared \
+            --disable-dependency-tracking CC="clang -arch $ARCH" \
+            CFLAGS="-O2 -Werror=unguarded-availability" ac_cv_func_pipe2=no >/dev/null
+          make -j"$(sysctl -n hw.ncpu)" >/dev/null
+          make install >/dev/null
+          lib=$prefix/lib/libusb-1.0.a
+          archs=$(lipo -archs "$lib")
+          minos=$(otool -l "$lib" | awk '$1 == "minos" {print $2}' | sort -u | paste -sd ' ' -)
+          echo "$lib: $archs, minimum macOS $minos"
+          if [ "$archs" != "$ARCH" ] || [ "$minos" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+            echo "::error::libusb was built for $archs / macOS $minos, want $ARCH / macOS $MACOSX_DEPLOYMENT_TARGET"
+            exit 1
+          fi
 
-      - name: Install libusb (macOS)
-        if: runner.os == 'macOS'
-        run: brew install libusb pkgconf
+      # cgo runs `pkg-config --libs` without --static, which drops the
+      # frameworks libusb needs (Libs.private). This private libusb-1.0.pc
+      # names the static archive by path and adds them. PKG_CONFIG_LIBDIR
+      # replaces pkg-config's search path, so no other libusb can be found.
+      - name: Point cgo at the static libusb
+        run: |
+          prefix=$RUNNER_TEMP/libusb
+          pcdir=$RUNNER_TEMP/pkgconfig
+          private=$(sed -n 's/^Libs\.private:[[:space:]]*//p' "$prefix/lib/pkgconfig/libusb-1.0.pc")
+          if [ -z "$private" ]; then
+            echo "::error::libusb-1.0.pc has no Libs.private"
+            exit 1
+          fi
+          mkdir -p "$pcdir"
+          cat >"$pcdir/libusb-1.0.pc" <<EOF
+          Name: libusb-1.0
+          Description: libusb $LIBUSB_VERSION, static, $ARCH, macOS $MACOSX_DEPLOYMENT_TARGET
+          Version: $LIBUSB_VERSION
+          Libs: $prefix/lib/libusb-1.0.a $private
+          Cflags: -I$prefix/include/libusb-1.0
+          EOF
+          PKG_CONFIG_LIBDIR=$pcdir pkg-config --cflags --libs libusb-1.0
+          {
+            echo "PKG_CONFIG_LIBDIR=$pcdir"
+            echo "CGO_ENABLED=1"
+            echo "GOARCH=$TARGET_GOARCH"
+            echo "CC=clang -arch $ARCH"
+          } >>"$GITHUB_ENV"
 
       - run: go test -count=1 ./...
 
       - name: Build
-        env:
-          VERSION: ${{ github.ref_name }}
         run: |
-          name="powerz_${VERSION#v}_${{ matrix.goos }}_${{ matrix.goarch }}"
-          mkdir -p "dist/$name"
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/$name/powerz" ./cmd/powerz
-          cp LICENSE "dist/$name/"
-          cp -R docs "dist/$name/docs"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          echo "ARCHIVE=dist/$name.tar.gz" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/out"
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$RUNNER_TEMP/out/powerz" ./cmd/powerz
 
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: ${{ env.ARCHIVE }}
+      - name: Check the binary is self-contained
+        run: |
+          bin=$RUNNER_TEMP/out/powerz
+          deps=$(otool -L "$bin" | tail -n +2)
+          printf '%s\n' "$deps"
+          if [ -z "$deps" ]; then
+            echo "::error::otool -L listed no libraries"
+            exit 1
+          fi
+          if grep -Ei 'libusb|/opt/homebrew|/usr/local' <<<"$deps"; then
+            echo "::error::powerz links the libraries above dynamically"
+            exit 1
+          fi
+          if grep -Ev '^[[:space:]]+/(usr/lib|System/Library)/' <<<"$deps"; then
+            echo "::error::powerz links the libraries above, which are not part of macOS"
+            exit 1
+          fi
+          # A weak import is a function newer than the minimum macOS: it is
+          # NULL there and powerz crashes when calling it.
+          weak=$(nm -m "$bin" | grep -F '(undefined) weak external' || true)
+          if [ -n "$weak" ]; then
+            printf '%s\n' "$weak"
+            echo "::error::powerz weak-imports the symbols above, which older macOS lacks"
+            exit 1
+          fi
+          archs=$(lipo -archs "$bin")
+          minos=$(vtool -show-build "$bin" | awk '$1 == "minos" {print $2}')
+          echo "architecture: $archs, minimum macOS: $minos"
+          if [ "$archs" != "$ARCH" ] || [ "$minos" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+            echo "::error::want $ARCH and macOS $MACOSX_DEPLOYMENT_TARGET"
+            exit 1
+          fi
+
+      - name: Smoke test
+        run: |
+          "$RUNNER_TEMP/out/powerz" version -json
+          "$RUNNER_TEMP/out/powerz" schema >/dev/null
+
+      - name: Package
+        run: |
+          name=powerz_${VERSION#v}_darwin_$ARCH
+          stage=$RUNNER_TEMP/stage
+          mkdir -p "$stage" "$RUNNER_TEMP/dist"
+          cp "$RUNNER_TEMP/out/powerz" LICENSE README.md "$stage/"
+          cp "$RUNNER_TEMP/libusb-src/COPYING" "$stage/LICENSE-libusb.txt"
+          cp -R docs "$stage/docs"
+          cat >"$stage/INSTALL.txt" <<EOF
+          powerz $VERSION for macOS ($ARCH)
+
+          Requirements
+            macOS $MACOSX_DEPLOYMENT_TARGET or newer. Nothing else: libusb is built in, so
+            neither Homebrew nor libusb has to be installed.
+
+          Install
+            sudo install -m 0755 powerz /usr/local/bin/powerz
+            powerz version
+
+            If macOS blocks a binary downloaded with a browser:
+              xattr -d com.apple.quarantine /usr/local/bin/powerz
+
+          libusb $LIBUSB_VERSION is linked statically. It is licensed under the
+          GNU LGPL 2.1 or later (LICENSE-libusb.txt); its source is at
+          https://github.com/libusb/libusb/releases/tag/v$LIBUSB_VERSION
+          and powerz can be rebuilt against another libusb from its source.
+
+          Documentation: docs/index.html
+          EOF
+          # No AppleDouble files or xattr headers: GNU tar warns about them.
+          tar --no-mac-metadata --no-xattrs -C "$stage" -czf "$RUNNER_TEMP/dist/$name.tar.gz" \
+            powerz LICENSE LICENSE-libusb.txt README.md INSTALL.txt docs
+          tar -tzvf "$RUNNER_TEMP/dist/$name.tar.gz"
+          echo "ARCHIVE=$RUNNER_TEMP/dist/$name.tar.gz" >>"$GITHUB_ENV"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          name: powerz-darwin-${{ matrix.goarch }}
           path: ${{ env.ARCHIVE }}
           if-no-files-found: error
+          retention-days: 7
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  # Runs on dry runs too, so checksums and notes are exercised before a
+  # real release. Read-only.
+  assemble:
+    name: checksums and release notes
+    needs: [version, build-linux, build-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # release notes read the history since the previous tag
+          persist-credentials: false
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: dist
+          pattern: powerz-*
+          path: ${{ runner.temp }}/release/assets
           merge-multiple: true
 
       - name: Checksums
-        run: cd dist && sha256sum -- *.tar.gz > SHA256SUMS
+        working-directory: ${{ runner.temp }}/release/assets
+        run: |
+          shopt -s nullglob
+          archives=(powerz_*.tar.gz)
+          if [ "${#archives[@]}" -ne 4 ]; then
+            echo "::error::expected 4 archives, got ${#archives[@]}: ${archives[*]}"
+            exit 1
+          fi
+          sha256sum -- "${archives[@]}" >checksums.txt
+          cat checksums.txt
+
+      # Grouped like yamaha-cli's GoReleaser changelog: Features (feat:),
+      # Bug fixes (fix:), Other; docs:, test:, chore:, ci: and merge
+      # commits left out. Commits since the previous v*.*.* tag, oldest
+      # first.
+      - name: Release notes
+        run: |
+          notes=$RUNNER_TEMP/release/notes.txt
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$GITHUB_SHA^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then range=$prev..$GITHUB_SHA; else range=$GITHUB_SHA; fi
+          log=$(git log --reverse --no-merges --format='%h%x09%s' "$range")
+          skip_re='^(docs|test|chore|ci)(\([^)]*\))?!?:'
+          feat_re='^feat(\([^)]*\))?!?:'
+          fix_re='^fix(\([^)]*\))?!?:'
+          features=() fixes=() other=()
+          while IFS=$'\t' read -r sha subject; do
+            if [ -z "$sha" ] || [[ $subject =~ $skip_re ]] || [[ $subject == "Merge pull request"* ]]; then
+              continue
+            elif [[ $subject =~ $feat_re ]]; then
+              features+=("* $sha $subject")
+            elif [[ $subject =~ $fix_re ]]; then
+              fixes+=("* $sha $subject")
+            else
+              other+=("* $sha $subject")
+            fi
+          done <<<"$log"
+          section() {
+            local title=$1
+            shift
+            if [ "$#" -gt 0 ]; then printf '\n### %s\n\n' "$title"; printf '%s\n' "$@"; fi
+          }
+          {
+            echo "## Changelog"
+            section Features "${features[@]}"
+            section "Bug fixes" "${fixes[@]}"
+            section Other "${other[@]}"
+            if [ -n "$prev" ]; then
+              printf '\n**Full Changelog**: %s/%s/compare/%s...%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$prev" "$TAG"
+            fi
+          } >"$notes"
+          {
+            echo "# $TAG (${prev:-first release})"
+            cat "$notes"
+            printf '\n### checksums.txt\n\n```\n'
+            cat "$RUNNER_TEMP/release/assets/checksums.txt"
+            printf '```\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish ${{ needs.version.outputs.tag }}
+    needs: [version, assemble]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the tag, create the release
+      id-token: write # attest-build-provenance: Sigstore signing identity
+      attestations: write # attest-build-provenance: store the attestation
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: ${{ runner.temp }}/release
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release/assets/*.tar.gz
+
+      # Dispatch runs tag the commit they built. A tag pushed with
+      # GITHUB_TOKEN starts no workflow run, so this run is the only one
+      # that publishes it. Re-running this job after the tag was pushed
+      # skips the push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          persist-credentials: true # git push below; only trusted code runs in this job
+
+      - name: Tag ${{ needs.version.outputs.tag }}
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          remote=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}" |
+            awk -v ref="refs/tags/$TAG" '$2 == ref {tag = $1} $2 == ref "^{}" {commit = $1} END {print (commit != "" ? commit : tag)}')
+          if [ -n "$remote" ]; then
+            if [ "$remote" != "$GITHUB_SHA" ]; then
+              echo "::error::$TAG already exists and points at $remote, not $GITHUB_SHA"
+              exit 1
+            fi
+            echo "$TAG already points at $GITHUB_SHA"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            tag -a "$TAG" -m "Release $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag
+          flags=(--repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/release/notes.txt" --verify-tag)
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" "${flags[@]}" "$RUNNER_TEMP"/release/assets/*
+          echo "Released $TAG" | tee -a "$GITHUB_STEP_SUMMARY"

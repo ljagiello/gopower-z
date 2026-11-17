@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ljagiello/gopower-z/km003c"
+	"github.com/ljagiello/gopower-z/hardware/km003c"
 )
 
 // The schema is the machine contract agents rely on. These tests marshal the
@@ -128,37 +128,27 @@ func checkShape(t *testing.T, def string, v any) {
 	}
 }
 
-// samplePD runs realistic PD traffic through the tracker: capabilities, a
-// request, PS_RDY, an attach event and a long record.
+// samplePD runs realistic PD traffic, framed as the meter frames it, through
+// the parser and the tracker: attach, capabilities (fixed, PPS, battery),
+// two requests, Accept, PS_RDY, an EPR request, a long record, a reserved
+// SOP, a receive-error event and unparseable trailing bytes.
 func samplePD(t *testing.T) (*pdTracker, []pdRecord) {
 	t.Helper()
 	tr := &pdTracker{}
-	var recs []pdRecord
-	add := func(r km003c.PDRecord) {
-		if rec, ok := tr.process(r); ok {
-			recs = append(recs, rec)
-		}
-	}
-	add(km003c.PDRecord{Event: 1, EventParam: 2, Raw: []byte{0x45, 0, 0, 0, 0, 0x21}})
-	caps := km003c.PDRecord{IsMessage: true, Raw: []byte{0x8B}}
-	caps.Message.Header = 0x31A1 // Source_Capabilities, 3 objects
-	caps.Message.Objects = []uint32{0x0001912C, 0x0002D12C, 0xC0000000 | 210<<17 | 33<<8 | 60}
-	caps.Message.Objects = append(caps.Message.Objects, 3<<30|2<<28|300<<10|225)
-	add(caps)
-	req := km003c.PDRecord{IsMessage: true, Raw: []byte{0x8B}}
-	req.Message.Header = 0x1082
-	req.Message.Objects = []uint32{2<<28 | 300<<10 | 300}
-	add(req)
-	pps := km003c.PDRecord{IsMessage: true, Raw: []byte{0x8B}}
-	pps.Message.Header = 0x1082
-	pps.Message.Objects = []uint32{3<<28 | 450<<9 | 40}
-	add(pps)
-	ready := km003c.PDRecord{IsMessage: true, Raw: []byte{0x86}}
-	ready.Message.Header = 0x01A6
-	add(ready)
-	add(km003c.PDRecord{IsMessage: true, Long: true, SOP: 0, Raw: []byte{0x25}})
-	add(km003c.PDRecord{Event: 6, EventParam: 3, Raw: []byte{0x45, 0, 0, 0, 0, 0x36}})
-	return tr, recs
+	p := parsePD(t, pdPayload(
+		pdEvent(1, 0x21),
+		pdMsg(2, 0, hdrSrcCaps|4<<12, pdoFixed5V3A, pdoFixed9V3A, pdoPPS3311V3A, 1<<30|200<<20|100<<10|60),
+		pdMsg(3, 0, hdrRequest, rdoFixed2),
+		pdMsg(4, 0, hdrRequest, rdoPPS3),
+		pdMsg(5, 0, hdrAccept),
+		pdMsg(6, 0, hdrPSRdy),
+		pdMsg(7, 0, hdrEPRReq, rdoAVS8, pdoEPRAVS),
+		pdLong(8, []byte{0xAA, 0xBB}),
+		pdMsg(9, 6, hdrAccept),
+		pdEvent(10, 0x36),
+		[]byte{0x9F, 0x00},
+	))
+	return tr, tr.packet(&p)
 }
 
 func TestSchemaContract(t *testing.T) {
@@ -169,13 +159,17 @@ func TestSchemaContract(t *testing.T) {
 		b := a
 		b.ApplyTail(l)
 		b.IBusUA = -442_099
-		checkShape(t, "snapshot", toAny(t, toSnapshot(b, now, "050002", map[bool]string{true: "", false: "1.9.5"}[l == km003c.TailUnknown])))
+		fw, fwErr := "1.9.5", (*string)(nil)
+		if l == km003c.TailUnknown {
+			fw, fwErr = "", new("km003c: read timeout")
+		}
+		checkShape(t, "snapshot", toAny(t, toSnapshot(b, now, "050002", fw, fwErr)))
 	}
 	// A loaded reading with a dashboard label.
 	loaded := km003c.ADC{VBusUV: 5_021_015, IBusUA: -442_099, DP: 29797, DM: 726, CC2: 16237,
 		Tail: []byte{0x00, 0x80, 0x56, 0x06, 0xA9, 0x0B, 0x3F, 0x00}, TempRaw: 3600}
 	loaded.ApplyTail(km003c.TailLineAverages)
-	snap := toSnapshot(loaded, now, "050002", "1.9.5")
+	snap := toSnapshot(loaded, now, "050002", "1.9.5", nil)
 	if snap.Inferred.DashboardLabel2 == nil || *snap.Inferred.DashboardLabel2 != "VOOC" ||
 		snap.Inferred.CC.AdvertisedCurrentA == nil || *snap.Inferred.CC.AdvertisedCurrentA != 3.0 ||
 		snap.Direction != "receptacle_to_plug" || snap.IBusA != 0.442099 {
@@ -188,8 +182,15 @@ func TestSchemaContract(t *testing.T) {
 		checkShape(t, "pd_record", toAny(t, r))
 	}
 	sum := tr.summary(recs)
-	if sum.Contract == nil || len(sum.SourceCapabilities) != 4 {
-		t.Fatalf("sample PD summary %+v", sum)
+	if sum.Contract == nil || len(sum.SourceCapabilities) != 4 || sum.Undecoded != 1 || len(recs) != 11 {
+		t.Fatalf("sample PD summary %+v (%d records)", sum, len(recs))
+	}
+	kinds := map[string]bool{}
+	for _, r := range recs {
+		kinds[r.Kind] = true
+	}
+	if !kinds["message"] || !kinds["event"] || !kinds["undecoded"] {
+		t.Fatalf("sample does not cover every record kind: %v", kinds)
 	}
 	var v, i, p, temp stat
 	for k := range 5 {
@@ -199,24 +200,27 @@ func TestSchemaContract(t *testing.T) {
 		temp.add(28)
 	}
 	m := measureResult{SchemaVersion: schemaVersion, Serial: "050002", FirmwareVersion: new("1.9.5"),
-		Start: utcTime(now), End: utcTime(now.Add(10 * time.Second)), DurationS: 10, IntegratedS: 9.9,
+		Start: utcTime(now), End: utcTime(now.Add(10 * time.Second)), EndReason: "completed", DurationS: 10, IntegratedS: 9.9,
 		IntervalS: 0.1, Samples: 100, FailedSamples: 1, LastError: new("timeout"), Direction: "receptacle_to_plug",
 		Stats:    measureStats{VBusV: v.json(6), IBusA: i.json(6), PowerW: p.json(6), TempC: temp.json(3)},
 		EnergyWh: 0.006, ChargeMAh: 1.2, Last: &snap, PD: sum}
 	checkShape(t, "measure", toAny(t, m))
 	empty := measureResult{SchemaVersion: schemaVersion, Serial: "050002", Stats: measureStats{},
+		FirmwareError: new("km003c: read timeout"), EndReason: "interrupted",
 		Direction: "none", PD: (&pdTracker{}).summary(nil)}
 	checkShape(t, "measure", toAny(t, empty))
 
-	checkShape(t, "pd_end", toAny(t, newPDEnd(tr.summary(nil), now, 20)))
-	checkShape(t, "pd_end", toAny(t, newPDEnd((&pdTracker{}).summary(nil), now, 3)))
+	checkShape(t, "pd_end", toAny(t, newPDEnd(tr.summary(nil), now, 20, "completed")))
+	checkShape(t, "pd_end", toAny(t, newPDEnd((&pdTracker{}).summary(nil), now, 3, "interrupted")))
 
 	usb := km003c.USBDescription{Manufacturer: "ChargerLab", Product: "POWER-Z KM003C", Serial: "050002", Bus: 2, Address: 20}
 	checkShape(t, "info", toAny(t, infoResult{SchemaVersion: schemaVersion, USB: usb, Errors: []string{},
-		Device: &deviceJSON{Model: "KM003C", FirmwareVersion: "1.9.5", FirmwareDate: "2025-01-07", HardwareVersion: "2.2",
-			HardwareDate: "2024-09-23", Serial: "050002", UUID: new("0123456789ABCDEF0123456789ABCDEF"), TailLayout: "line-averages"},
+		Device: &deviceJSON{Model: new("KM003C"), FirmwareVersion: new("1.9.5"), FirmwareDate: new("2025-01-07"), HardwareVersion: new("2.2"),
+			HardwareDate: new("2024-09-23"), Serial: new("050002"), UUID: new("0123456789ABCDEF0123456789ABCDEF"), TailLayout: "line-averages"},
 		Settings: &settingsJSON{DeviceName: "POWER-Z", SampleRateSPS: 50, BrightnessPercent: 49, RotationCode: 2}}))
 	checkShape(t, "info", toAny(t, infoResult{SchemaVersion: schemaVersion, USB: usb, Errors: []string{"device: timeout"}}))
+	checkShape(t, "info", toAny(t, infoResult{SchemaVersion: schemaVersion, USB: usb, Errors: []string{"device: read block 0x03000C00: x"},
+		Device: &deviceJSON{Model: new("KM003C"), FirmwareVersion: new("1.9.5"), TailLayout: "line-averages"}}))
 	checkShape(t, "devices", toAny(t, devicesResult{SchemaVersion: schemaVersion, Count: 1, Devices: []km003c.USBDescription{usb}}))
 	checkShape(t, "version", toAny(t, versionResult{SchemaVersion: schemaVersion, Version: "dev"}))
 
