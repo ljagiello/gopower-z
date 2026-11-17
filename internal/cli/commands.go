@@ -188,14 +188,15 @@ func measureReadings(duration, interval time.Duration) (int, error) {
 	return int(n + 1), nil
 }
 
-// measureBin resolves --bin: 0 picks the automatic width; otherwise it must
-// be at least --interval and give at most maxBins bins over --duration.
+// measureBin checks --bin: 0 (automatic, chosen when the window ends, from
+// the time actually measured) is returned as is; otherwise it must be at
+// least --interval and give at most maxBins bins over --duration.
 func measureBin(duration, interval, bin time.Duration) (time.Duration, error) {
 	switch {
 	case bin < 0:
 		return 0, usageErr("measure: --bin must not be negative")
 	case bin == 0:
-		return autoBin(duration, interval), nil
+		return 0, nil
 	case bin < interval:
 		return 0, usageErr("measure: --bin %s is shorter than --interval %s", bin, interval)
 	}
@@ -213,7 +214,7 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 	duration := fs.Duration("duration", 5*time.Second, "how long to sample")
 	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval, at least 20ms (the meter's own sample rate bounds how often values change)")
 	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract, records)")
-	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output (0 = automatic: at least 5 polling intervals per bin, at most %d bins)", maxAutoBins))
+	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output (0 = automatic, from the time measured: at least 5 polling intervals per bin, at most %d bins)", maxAutoBins))
 	return func(ctx context.Context, g globals) error {
 		if *duration <= 0 {
 			return usageErr("measure: --duration must be positive (e.g. 10s)")
@@ -303,6 +304,11 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		// A completed window ends a little after --duration (the last read and
 		// the timer); analysing that tail as its own bin would add a sliver.
 		window := math.Min(end.Sub(start).Seconds(), duration.Seconds())
+		if binW == 0 {
+			// Automatic width from the time actually measured, so a long window
+			// that ended early (SIGTERM, the meter went away) keeps its shape.
+			binW = autoBin(time.Duration(window*float64(time.Second)), *interval)
+		}
 		res.analysis = analyze(samples, window, binW.Seconds())
 		res.Direction = string(km003c.FlowNone)
 		if res.Stats.IBusA != nil {
@@ -384,7 +390,7 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 				cols = append(cols, sum/float64(n))
 			}
 		}
-		_, _ = fmt.Fprintf(w, "  IBUS per %gs  %s\n", r.BinS*float64(group), sparkline(cols, sparkWidth))
+		_, _ = fmt.Fprintf(w, "  IBUS per %gs  %s\n", round(r.BinS*float64(group), 6), sparkline(cols, sparkWidth))
 	}
 	if r.PD != nil {
 		_, _ = fmt.Fprintf(w, "  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)

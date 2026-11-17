@@ -213,9 +213,17 @@ func TestCLIMeasureStep(t *testing.T) {
 	checkShape(t, "measure", m)
 	bins := m["bins"].([]any)
 	first, last := bins[0].(map[string]any), bins[len(bins)-1].(map[string]any)
+	for k, b := range bins {
+		if ts := b.(map[string]any)["t_s"]; ts != round(float64(k)*0.1, 6) {
+			t.Errorf("bin %d starts at %v", k, ts)
+		}
+	}
 	want := func(b map[string]any, field string, v float64) {
 		t.Helper()
-		r := b[field].(map[string]any)
+		r, ok := b[field].(map[string]any)
+		if !ok {
+			t.Fatalf("bin at %v s has no %s: %v", b["t_s"], field, b)
+		}
 		if r["min"] != v || r["mean"] != v || r["max"] != v {
 			t.Errorf("bin at %v s: %s %v, want %v", b["t_s"], field, r, v)
 		}
@@ -252,19 +260,22 @@ func TestCLIMeasureInvalidTemperature(t *testing.T) {
 	}
 }
 
-// direction describes the mean current of the window, not the last reading.
+// direction describes the mean current of the window: here the median and
+// the last reading point the other way.
 func TestCLIMeasureDirectionFromMean(t *testing.T) {
 	c := newCLI(t)
-	for range 12 {
-		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, -0.2, 5.076, 3584))
+	for range 4 {
+		c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, -1.0, 5.076, 3584))
 	}
 	c.fm.ADCSeq = append(c.fm.ADCSeq, adcPayload(t, 0.05, 5.076, 3584))
 	if code := c.run(context.Background(), "measure", "--duration", "300ms", "--interval", "20ms", "--pd=false"); code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	m := c.one()
-	if m["direction"] != "plug_to_receptacle" || m["last"].(map[string]any)["direction"] != "receptacle_to_plug" {
-		t.Errorf("direction %v, last direction %v", m["direction"], m["last"].(map[string]any)["direction"])
+	ibus := m["stats"].(map[string]any)["ibus_a"].(map[string]any)
+	if m["direction"] != "plug_to_receptacle" || ibus["p50"] != 0.05 || ibus["mean"].(float64) >= 0 ||
+		m["last"].(map[string]any)["direction"] != "receptacle_to_plug" {
+		t.Errorf("direction %v, ibus %v, last direction %v", m["direction"], ibus, m["last"].(map[string]any)["direction"])
 	}
 }
 
@@ -370,13 +381,14 @@ func TestCLIMeasureBins(t *testing.T) {
 	if last := bins[3].(map[string]any); last["samples"].(float64) < 2 {
 		t.Errorf("last bin %v", last)
 	}
-	// Automatic bins span at least 5 polling intervals: 1 s at 200 ms.
+	// Automatic bins span at least 5 polling intervals: 1 s at 120 ms
+	// (0.5 s would be the width at the default interval).
 	c = newCLI(t)
-	if code := c.run(context.Background(), "measure", "--duration", "1s", "--interval", "200ms", "--pd=false"); code != exitOK {
+	if code := c.run(context.Background(), "measure", "--duration", "300ms", "--interval", "120ms", "--pd=false"); code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
 	}
 	if m := c.one(); m["bin_s"] != 1.0 {
-		t.Errorf("bin_s %v at a 200 ms interval, want 1", m["bin_s"])
+		t.Errorf("bin_s %v at a 120 ms interval, want 1", m["bin_s"])
 	}
 	for _, args := range [][]string{
 		{"--bin", "-1s"},
@@ -384,10 +396,31 @@ func TestCLIMeasureBins(t *testing.T) {
 		{"--bin", "20ms", "--interval", "20ms", "--duration", "1m"},
 		{"--duration", "28h", "--interval", "100ms"},
 	} {
+		// If a limit stopped being checked, measure would run for the full
+		// --duration; the deadline makes that a quick failure, not a hang.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		c := newCLI(t)
-		if code := c.run(context.Background(), append([]string{"measure"}, args...)...); code != exitUsage || c.errCode() != "usage" || c.opens != 0 {
+		code := c.run(ctx, append([]string{"measure"}, args...)...)
+		cancel()
+		if code != exitUsage || c.errCode() != "usage" || c.opens != 0 {
 			t.Errorf("%v: exit %d, opens %d, stderr %s", args, code, c.opens, c.stderr.String())
 		}
+	}
+}
+
+// The automatic width comes from the time actually measured: a 1 h window
+// stopped after about a second gets fine bins, not one 30 s bin.
+func TestCLIMeasureAutoBinFromMeasuredTime(t *testing.T) {
+	c := newCLI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(1200*time.Millisecond, cancel)
+	if code := c.run(ctx, "measure", "--duration", "1h", "--interval", "20ms", "--pd=false"); code != exitInterrupt {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	checkShape(t, "measure", m)
+	if m["bin_s"] != 0.5 || len(m["bins"].([]any)) < 2 {
+		t.Errorf("bin_s %v, %d bins", m["bin_s"], len(m["bins"].([]any)))
 	}
 }
 
@@ -400,7 +433,7 @@ func TestMeasureBinAndReadingLimits(t *testing.T) {
 		{20 * time.Second, 20 * ms, 20 * ms, 20 * ms, true}, // exactly 1000 bins, bin == interval
 		{20*time.Second + ms, 20 * ms, 20 * ms, 0, false},   // 1001 bins
 		{time.Second, 20 * ms, 19 * ms, 0, false},           // shorter than the interval
-		{time.Second, 20 * ms, 0, 500 * ms, true},           // automatic
+		{time.Second, 20 * ms, 0, 0, true},                  // automatic: chosen when the window ends
 		{time.Second, 20 * ms, -ms, 0, false},
 	} {
 		got, err := measureBin(c.duration, c.interval, c.bin)
@@ -460,8 +493,56 @@ func TestMeasureText(t *testing.T) {
 	if got := b.String(); got != want {
 		t.Errorf("text output:\n%s\nwant:\n%s", got, want)
 	}
-	// Many bins are averaged down to the sparkline width, weighted by their
-	// samples, not cut.
+	spark := func(r measureResult) string {
+		var b strings.Builder
+		printMeasureText(&b, style{}, r)
+		for line := range strings.SplitSeq(b.String(), "\n") {
+			if strings.HasPrefix(line, "  IBUS per ") {
+				return line
+			}
+		}
+		return ""
+	}
+	// The label is rounded: 3 x 0.1 s is not printed as 0.30000000000000004.
+	var tenths measureResult
+	tenths.BinS = 0.1
+	for k := range 300 {
+		tenths.Bins = append(tenths.Bins, binJSON{TS: float64(k) / 10, Samples: 5, IBusA: &rangeJSON{Mean: float64(k)}})
+	}
+	if line := spark(tenths); !strings.HasPrefix(line, "  IBUS per 0.3s  ") {
+		t.Errorf("label %q", line)
+	}
+	// A leading empty bin (the first reads failed) is a gap, and does not
+	// flatten the rest of the line.
+	var lead measureResult
+	lead.BinS = 20
+	lead.Bins = []binJSON{{TS: 0}, {TS: 20, Samples: 200, IBusA: &rangeJSON{Mean: 0.13}}, {TS: 40, Samples: 200, IBusA: &rangeJSON{Mean: 0.44}}}
+	if line := spark(lead); line != "  IBUS per 20s   ▁█" {
+		t.Errorf("leading gap: %q", line)
+	}
+	// 240 bins become 120 columns of 2, each the sample-weighted mean of its
+	// pair, so the whole window shows: 0 in the first half, 8 in the second,
+	// and one pair (1 reading at 0, 99 at 8) near the top.
+	var pairs measureResult
+	pairs.BinS = 1
+	for k := range 240 {
+		b := binJSON{TS: float64(k), Samples: 10, IBusA: &rangeJSON{Mean: 0}}
+		if k >= 120 {
+			b.IBusA.Mean = 8
+		}
+		if k == 118 {
+			b.Samples = 1
+		}
+		if k == 119 {
+			b.Samples, b.IBusA.Mean = 99, 8
+		}
+		pairs.Bins = append(pairs.Bins, b)
+	}
+	cols := []rune(strings.TrimPrefix(spark(pairs), "  IBUS per 2s  "))
+	if len(cols) != 120 || cols[0] != '▁' || cols[58] != '▁' || cols[59] != '▇' || cols[60] != '█' || cols[119] != '█' {
+		t.Errorf("grouped sparkline %q", string(cols))
+	}
+	// Many bins are averaged down to the sparkline width, not cut.
 	var many measureResult
 	many.BinS = 1
 	for k := range 1000 {

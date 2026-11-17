@@ -21,7 +21,7 @@ go install github.com/ljagiello/gopower-z/cmd/powerz@latest
 # live dashboard (or one JSON reading when piped)
 powerz
 
-# min/mean/max V·A·W, Wh, mAh, USB-PD contract
+# min/mean/max, percentiles and time bins of V·A·W, Wh, mAh, USB-PD contract
 powerz measure --duration 10s
 
 # model, firmware, serial, settings

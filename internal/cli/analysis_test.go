@@ -21,6 +21,12 @@ func TestDescribe(t *testing.T) {
 		s.Stdev != round(math.Sqrt(5.0/3), 6) {
 		t.Errorf("[4 1 3 2]: %+v", s)
 	}
+	// Skewed, so mean (4), median (2.5) and midrange (5.5) all differ.
+	s = describe([]float64{1, 2, 3, 10}, 6)
+	if s.Mean != 4 || s.P50 != 2.5 || s.Min != 1 || s.Max != 10 || s.Last != 10 || s.P5 != 1.15 || s.P95 != 8.95 ||
+		s.Stdev != round(math.Sqrt(50.0/3), 6) {
+		t.Errorf("[1 2 3 10]: %+v", s)
+	}
 	if s := describe([]float64{0.25}, 6); s.Stdev != 0 || s.P5 != 0.25 || s.P95 != 0.25 {
 		t.Errorf("one value: %+v", s)
 	}
@@ -81,6 +87,17 @@ func TestBins(t *testing.T) {
 	}
 	if n != len(ss) || a.Bins[10].Samples != 3 {
 		t.Errorf("bins hold %d samples (last bin %d), want %d", n, a.Bins[10].Samples, len(ss))
+	}
+	// Bins that are not 1 s wide start at k * bin_s, without float noise.
+	tenths := analyze(ss[:10], 1, 0.1)
+	for k, b := range tenths.Bins {
+		if want := []float64{0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9}[k]; b.TS != want || b.Samples != 1 {
+			t.Errorf("0.1 s bin %d: t_s %v with %d samples, want %v with 1", k, b.TS, b.Samples, want)
+		}
+	}
+	// 2.1 / 0.3 is 7.000000000000001 in floating point; it is still 7 bins.
+	if n := len(analyze(ss[:21], 2.1, 0.3).Bins); n != 7 {
+		t.Errorf("2.1 s in 0.3 s bins: %d bins, want 7", n)
 	}
 	// A run of failed readings leaves an empty bin with null values.
 	var gap []sample
@@ -150,6 +167,7 @@ func TestAutoBin(t *testing.T) {
 		{time.Minute, 120 * time.Millisecond, time.Second}, // 0.5 s would be under 5 intervals
 		{48 * time.Hour, 100 * time.Millisecond, 1800 * time.Second},
 		{200 * 24 * time.Hour, time.Second, 144000 * time.Second}, // past the ladder: window / 120
+		{100 * time.Hour, 6 * time.Hour, 30 * time.Hour},          // past the ladder, still 5 intervals
 	} {
 		if got := autoBin(c.window, c.interval); got != c.want {
 			t.Errorf("autoBin(%v, %v) = %v, want %v", c.window, c.interval, got, c.want)

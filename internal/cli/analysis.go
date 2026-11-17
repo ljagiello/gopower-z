@@ -78,7 +78,8 @@ const (
 
 // autoBin picks the bin width for a window: the smallest of a fixed ladder
 // that spans at least five polling intervals and gives at most maxAutoBins
-// bins.
+// bins. Past the ladder (windows over 120 days) it uses window/maxAutoBins,
+// still at least five intervals.
 func autoBin(window, interval time.Duration) time.Duration {
 	ladder := []float64{0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400}
 	for _, s := range ladder {
@@ -87,7 +88,7 @@ func autoBin(window, interval time.Duration) time.Duration {
 			return bin
 		}
 	}
-	return time.Duration(math.Ceil(window.Seconds()/maxAutoBins)) * time.Second
+	return max(time.Duration(math.Ceil(window.Seconds()/maxAutoBins))*time.Second, 5*interval)
 }
 
 // analyze summarises the samples (in time order) of a window of the given
@@ -99,7 +100,7 @@ func analyze(ss []sample, window, binS float64) analysis {
 			temps = append(temps, s.Temp)
 		}
 	}
-	a := analysis{BinS: round(binS, 3), Bins: []binJSON{}}
+	a := analysis{BinS: round(binS, 6), Bins: []binJSON{}}
 	a.Stats = measureStats{
 		VBusV:  describe(values(ss, func(s sample) float64 { return s.V }), 6),
 		IBusA:  describe(values(ss, func(s sample) float64 { return s.I }), 6),
@@ -121,7 +122,7 @@ func analyze(ss []sample, window, binS float64) analysis {
 			hi++
 		}
 		run := ss[lo:hi]
-		bin := binJSON{TS: round(float64(b)*binS, 3), Samples: len(run)}
+		bin := binJSON{TS: round(float64(b)*binS, 6), Samples: len(run)}
 		if len(run) > 0 {
 			bin.VBusV = binRange(run, func(s sample) float64 { return s.V })
 			bin.IBusA = binRange(run, func(s sample) float64 { return s.I })
@@ -148,21 +149,22 @@ func binRange(run []sample, f func(sample) float64) *rangeJSON {
 }
 
 // describe computes the statistics of the values xs (in time order); nil
-// when xs is empty.
+// when xs is empty. It sorts xs in place: callers pass a slice of their own
+// (values() makes one), which saves a copy at a million readings.
 func describe(xs []float64, decimals int) *statJSON {
 	n := len(xs)
 	if n == 0 {
 		return nil
 	}
+	last := xs[n-1]
 	mean, sd := gstat.MeanStdDev(xs, nil) // sample (n-1) standard deviation
 	if n == 1 {
 		sd = 0 // gonum gives NaN for a single value
 	}
-	sorted := slices.Clone(xs)
-	slices.Sort(sorted)
+	slices.Sort(xs)
 	r := func(v float64) float64 { return round(v, decimals) }
-	return &statJSON{Min: r(sorted[0]), Mean: r(mean), Max: r(sorted[n-1]), Last: r(xs[n-1]), Stdev: r(sd),
-		P5: r(quantile(sorted, 0.05)), P50: r(quantile(sorted, 0.5)), P95: r(quantile(sorted, 0.95))}
+	return &statJSON{Min: r(xs[0]), Mean: r(mean), Max: r(xs[n-1]), Last: r(last), Stdev: r(sd),
+		P5: r(quantile(xs, 0.05)), P50: r(quantile(xs, 0.5)), P95: r(quantile(xs, 0.95))}
 }
 
 // quantile interpolates linearly between order statistics of sorted input:
