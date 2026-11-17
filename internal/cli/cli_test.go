@@ -419,6 +419,9 @@ func TestMeasureBinAndReadingLimits(t *testing.T) {
 	if n, _ := measureReadings(300*ms, 20*ms); n != 16 {
 		t.Errorf("300 ms at 20 ms: %d readings, want 16", n)
 	}
+	if n, _ := measureReadings(310*ms, 20*ms); n != 17 { // a partial interval still holds a reading
+		t.Errorf("310 ms at 20 ms: %d readings, want 17", n)
+	}
 }
 
 // The text layout, line by line, from a hand-built result with round

@@ -147,6 +147,7 @@ func TestAutoBin(t *testing.T) {
 		{10 * time.Minute, 100 * time.Millisecond, 5 * time.Second},
 		{time.Hour, 100 * time.Millisecond, 30 * time.Second},
 		{time.Minute, time.Second, 5 * time.Second},
+		{time.Minute, 120 * time.Millisecond, time.Second}, // 0.5 s would be under 5 intervals
 		{48 * time.Hour, 100 * time.Millisecond, 1800 * time.Second},
 		{200 * 24 * time.Hour, time.Second, 144000 * time.Second}, // past the ladder: window / 120
 	} {
