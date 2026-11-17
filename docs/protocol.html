@@ -1409,7 +1409,7 @@ F5 10 00 00  00 00 00 00  BA 0E 25 03  26 01 D4 02  F2 02 30 7D  00 80 02 F0
 <ul>
 <li><code>len &gt;= 8</code>.</li>
 <li><code>b[0] &amp; 0x7F == 0x41</code>. If it is <code>0x03</code> (DISCONNECT) or <code>0x06</code> (REJECT), retry once.</li>
-<li><code>b[1] == id</code>. Warn only on a mismatch (§14 C6).</li>
+<li><code>b[1] == id</code>. If the id differs, the frame is stale: skip it and keep reading until the timeout. Then drain EP 0x81 before the next write (§14 C6, resolved on fw 1.9.5).</li>
 <li><code>ext := LE32(b[4:8])</code>, <code>ext &amp; 0x7FFF == 1</code>, and <code>size := ext &gt;&gt; 22</code> is at least 36.</li>
 <li><code>len &gt;= 8 + size</code>.</li>
 <li>A 4-byte <code>41 id ..</code> reply means empty: retry.</li>
@@ -1838,6 +1838,18 @@ F5 10 00 00  00 00 00 00  BA 0E 25 03  26 01 D4 02  F2 02 30 7D  00 80 02 F0
 <li>Do not read while AdcQueue streaming is active <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/device.rs#L1155-L1162">device.rs:1155-1162</a></span>.</li>
 </ul>
 <p><strong>Known addresses: the whitelist.</strong> Do not read any other address. Third parties report that other peripheral addresses crash the meter <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L520-L521">protocol.md:520-521, 1241</a></span>.</p>
+<p><strong>The firmware itself does not restrict addresses; the client-side whitelist is the only protection.</strong></p>
+<ul>
+<li>The MemoryRead handler checks only three things: magic = <code>0xFFFFFFFF</code>, size &lt; <code>0x3D0901</code>, and address &lt; <code>0x983D0901</code>.</li>
+<li>There is no lower bound and no allow-list, so peripheral registers can be read. Reading some registers has side effects, such as FIFOs and clear-on-read status registers.</li>
+<li>Sources: <a href="firmware.html#memread">firmware analysis §11</a> (1.9.5 through 2.0.7, identical logic), and <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L172-L200">handlers.md:172-200</a></span> (1.9.9).</li>
+</ul>
+<p><strong>Check the confirmation against the request.</strong> The confirmation echoes the address and length. The client must reject a <code>C4</code> confirmation whose address or length differs from what was requested, and must not read the following data as the requested block.</p>
+<ul>
+<li>One case where they differ: the firmware may redirect reads inside the OTP window 0x03000C00–0x03000D7F to 0x03000D80 (<a href="firmware.html#memread">firmware analysis §11</a>).</li>
+<li>R performs the same check <span class="cite src"><span class="kind">source</span> R <a href="https://github.com/okhsunrog/km003c-rs/blob/c063388ecab1a169326de1b57e650a3a45fc94f6/km003c-lib/src/memory.rs#L143-L148">memory.rs:143-148</a></span>.</li>
+<li>After a rejected confirmation, drain EP 0x81 before writing again: the ciphertext and the zero-length packet will still arrive (see the hazard box at the top).</li>
+</ul>
 <div class="table-wrap"><table class="cols3">
 <thead>
 <tr>
@@ -2131,7 +2143,7 @@ F5 10 00 00  00 00 00 00  BA 0E 25 03  26 01 D4 02  F2 02 30 7D  00 80 02 F0
 <tr><td>C3: IBUS sign</td><td>One reading with a load in a known direction</td><td><span class="status">pending</span> Only about 0 A has been measured so far.</td><td>—</td></tr>
 <tr><td>C4: temperature encoding</td><td>Compare raw/128 with the on-screen temperature</td><td><span class="status ok">verified (fw 1.9.5)</span> raw/128 matches the screen (raw 3366 = 26.30 °C). Negative temperatures and the 0x8000 sentinel were not exercised.</td><td><a href="../km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">bulk_W1_1_resp.hex</a></td></tr>
 <tr><td>C5: obj and permi bits</td><td>Record bytes 2–3 of ADC replies of different lengths</td><td><span class="status ok">verified (fw 1.9.5)</span> obj = <code>len/4 − 3</code> for 20, 52, 68 and 188-byte replies, and permi = 0 without auth. The vendor PDF example (obj 8 for a 48-byte frame) is still unexplained.</td><td><a href="../km003c/testdata/fw1.9.5/bulk_W3_1_resp.hex">W3_1</a>, <a href="../km003c/testdata/fw1.9.5/bulk_W1_1_resp.hex">W1_1</a>, <a href="../km003c/testdata/fw1.9.5/bulk_W4_1_resp.hex">W4_1</a>, <a href="../km003c/testdata/fw1.9.5/bulk_W2_1_resp.hex">W2_1</a></td></tr>
-<tr><td>C6: id echo</td><td>Send ADC requests with varying ids</td><td><span class="status ok">verified (fw 1.9.5)</span> Echoed on 20 of 20 requests (ids 1–20) over bulk, HID and CDC, including CONNECT and MemoryRead.</td><td><a href="../km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a></td></tr>
+<tr><td>C6: id echo</td><td>Send ADC requests with varying ids</td><td><span class="status ok">resolved (fw 1.9.5)</span> Echoed on 20 of 20 requests (ids 1–20) over bulk, HID and CDC, including CONNECT and the MemoryRead confirmation. Recommendation changed to <strong>match on type and id</strong> (see C6 below).</td><td><a href="../km003c/testdata/fw1.9.5/INDEX.txt">INDEX.txt</a></td></tr>
 <tr><td>C7: level-0 gating</td><td>AdcQueue poll <code>0C id 04 00</code> at L0 (read-only, drains the queue)</td><td><span class="status np">not probed</span></td><td>—</td></tr>
 <tr><td>C8: PD over HID</td><td>Do not probe (a reply over 64 bytes can reboot the meter)</td><td><span class="status np">not probed</span> (by design)</td><td>—</td></tr>
 <tr><td>C11: MemoryRead chunk limit</td><td>Not needed; info blocks are 64 B</td><td><span class="status np">not probed</span> Only 64-byte reads were made; each returned one 64-byte data transfer plus a ZLP.</td><td><a href="../km003c/testdata/fw1.9.5/bulk_W6_1_respdata.hex">bulk_W6_1_respdata.hex</a></td></tr>
@@ -2187,7 +2199,13 @@ F5 10 00 00  00 00 00 00  BA 0E 25 03  26 01 D4 02  F2 02 30 7D  00 80 02 F0
 <li>The vendor sample always sends id 0 and checks only the type and section att <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:235-237, 275</a></span>. Its own comment nonetheless says the id "keeps incrementing" <span class="cite src"><span class="kind">source</span> <a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip" title="hiddemo.cpp inside the vendor zip; line numbers refer to that file">VS hiddemo.cpp:72</a></span>.</li>
 <li>I matches on type only <span class="cite src"><span class="kind">source</span> I <a href="https://github.com/inuchanbt/KM003C-CLI/blob/823e6766a049805e533a83973e5cb6e9ceabf7de/km003c_modules/transport.py#L274-L279">transport.py:274-279</a></span>.</li>
 </ul>
-<p><em>Recommendation:</em> match on type, and log an id mismatch without failing.</p>
+<p><strong>Resolved (fw 1.9.5).</strong> The user's unit echoed the request id on 20 of 20 replies, including the CONNECT ACCEPT and the MemoryRead <code>C4</code> confirmation (§6 and §14 "Verified on device").</p>
+<p><em>Recommendation:</em> <strong>match replies on type AND id.</strong></p>
+<ul>
+<li><strong>Why not type only:</strong> a stale reply that arrives after a retry would be taken as the retry's answer. The retry's real reply then stays queued on EP 0x81, and the next write stalls the meter (see the hazard box at the top).</li>
+<li><strong>What the powerz client does:</strong> it skips frames carrying a foreign id, keeps the last frame of the wanted type only as a fallback, and drains EP 0x81 before the next write.</li>
+<li><strong>Exceptions that keep id 0:</strong> the 0x4C auth reply and the HEAD reply. The client never sends those requests.</li>
+</ul>
 <p><strong>C7 – Level-0 gating.</strong> On 1.9.9 the decompilation masks the attributes to <code>0x19</code> <span class="cite notes"><span class="kind">notes</span> RR <a href="https://github.com/okhsunrog/km003c-protocol-research/blob/776b783b76b17e7ba0b59e9fff1d123180f32d2c/docs/firmware/handlers.md?plain=1#L110-L113">handlers.md:110-113</a></span>. On 2.0.6, AdcQueue, 0x020 and 0x040 are served at L0 <span class="cite notes"><span class="kind">notes</span> O <a href="https://github.com/nesquikm/open-powerz/blob/6180fe74afc4972aebfd9ef527bc9136872d86ea/docs/protocol.md?plain=1#L203-L206">protocol.md:203-206</a></span>.</p>
 <p><strong>C8 – PD over HID.</strong></p>
 <ul>
