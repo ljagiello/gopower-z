@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KM003C Official Software RE</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1b1f24; --muted:#57606a; --border:#d0d7de; --code-bg:#f6f8fa;
+  --accent:#0969da; --warn-bg:#fff8c5; --warn-fg:#4d2d00; --bad-bg:#ffebe9; --bad-fg:#82071e;
+  --ok-bg:#dafbe1; --ok-fg:#0a3622; --th-bg:#f0f3f6;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --border:#30363d; --code-bg:#161b22;
+    --accent:#4493f8; --warn-bg:#3b2f00; --warn-fg:#f2cc60; --bad-bg:#3d1214; --bad-fg:#ffa198;
+    --ok-bg:#0f2d1a; --ok-fg:#7ee2a8; --th-bg:#1c2128;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:1.6rem;line-height:1.25;margin:.4em 0 .2em}
+h2{font-size:1.3rem;margin:2em 0 .5em;padding-bottom:.25em;border-bottom:1px solid var(--border)}
+h3{font-size:1.08rem;margin:1.5em 0 .4em}
+p,li{overflow-wrap:anywhere}
+a{color:var(--accent)}
+code{font:0.88em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code-bg);padding:.1em .3em;border-radius:4px;overflow-wrap:anywhere}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;max-width:100%}
+pre code{background:none;padding:0;overflow-wrap:normal;white-space:pre}
+.tw{overflow-x:auto;max-width:100%;margin:.6em 0 1em}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{border:1px solid var(--border);padding:6px 8px;text-align:left;vertical-align:top}
+th{background:var(--th-bg)}
+td code{white-space:nowrap}
+.muted{color:var(--muted)}
+.tag{display:inline-block;font-size:.78rem;font-weight:600;padding:.05em .45em;border-radius:4px;white-space:nowrap}
+.safe{background:var(--ok-bg);color:var(--ok-fg)}
+.unsafe{background:var(--bad-bg);color:var(--bad-fg)}
+.state{background:var(--warn-bg);color:var(--warn-fg)}
+.note{background:var(--warn-bg);color:var(--warn-fg);border-radius:6px;padding:10px 12px;margin:1em 0}
+.danger{background:var(--bad-bg);color:var(--bad-fg);border-radius:6px;padding:10px 12px;margin:1em 0}
+nav ol{padding-left:1.3em}
+details{margin:.5em 0}
+summary{cursor:pointer;font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<h1>POWER-Z KM003C: what ChargerLab's official software sends</h1>
+<p class="muted">How the official Windows software talks to the KM003C (USB VID <code>0x5FC9</code>, PID <code>0x0063</code>), as input for an interoperable Go client.
+Primary target: the user's <b>POWER-Z Lab 3.0.0</b> (<code>powerz_km_win_3.0.0/qt6_x64/POWER-Z.exe</code>). Cross-reference: <b>POWER-Z Lab 2.5.2</b> (<code>Mtools.exe</code>, <code>PDM.exe</code>), the official SDK sample and PDFs.
+Nothing here was tested against a device.</p>
+
+<div class="note"><b>Citation key.</b>
+<code>P3 FUN_…</code>: POWER-Z 3.0.0 <code>POWER-Z.exe</code>.
+<code>Mt FUN_…</code>: 2.5.2 <code>Mtools.exe</code>.
+<code>PDM FUN_…</code>: 2.5.2 <code>PDM.exe</code>.
+All three are Ghidra 12.2 headless decompiles; the address is the function VA, and <code>L&lt;n&gt;</code> is a line number in that decompiler's C output.
+<i>docx</i>: the official <code>KM002C&amp;3C API Description.docx</code>.
+<i>capture</i>: a USBPcap recording of the official 2.5.x app talking to a KM003C. These are third-party captures (repo <code>okhsunrog/km003c-protocol-research</code>, <code>usb_master_dataset.parquet</code>), used only to validate decompiled logic.
+<b>CONFLICT</b> marks a contradiction between sources; it is left unresolved.</div>
+
+<nav><ol>
+<li><a href="#tldr">Key findings</a></li>
+<li><a href="#inv">Software inventory</a></li>
+<li><a href="#p3">POWER-Z 3.0.0 specifics</a></li>
+<li><a href="#transport">Transport: which interface for what</a></li>
+<li><a href="#frame">Framing</a></li>
+<li><a href="#cmds">Commands, attributes, SAFE/UNSAFE</a></li>
+<li><a href="#seq">Connect and dashboard request sequence</a></li>
+<li><a href="#structs">Response structs (ADC, queue, PD, settings, info)</a></li>
+<li><a href="#auth">Authentication and crypto</a></li>
+<li><a href="#cdc">CDC serial: streaming command and text commands</a></li>
+<li><a href="#proto">Detected fast-charge protocol</a></li>
+<li><a href="#fw">Firmware container and upgrade path (documentation only)</a></li>
+<li><a href="#mobile">Android / iOS</a></li>
+<li><a href="#avoid">What the Go client must never send</a></li>
+<li><a href="#art">Artifacts</a></li>
+</ol></nav>
+
+<h2 id="tldr">1. Key findings</h2>
+<ol>
+<li><b>POWER-Z 3.0.0 (the user's build) splits by interface:</b>
+  <ul>
+  <li><b>Live dashboard and recording use the CDC serial port</b> with a newer framing, <b>type 0x15</b>:
+    <ul>
+    <li>Header bits: seq nibble at 8–11, length at 12–23, sub-command at 24–31. Replies set bit 7, so they start <code>0x95</code>.</li>
+    <li>Sub-commands: 01 info, 02 auth, 05 set (att 0x32 = stream start/stop), 07 ADC records (polled every 10 ms), 08 Type-C/PD/UFCS state logs (unused).</li>
+    </ul></li>
+  <li><b>libusb/IF0 is used only for firmware update and factory provisioning</b>, which includes a new <b>0x43 OTP-ID write</b>.</li>
+  </ul>
+  2.5.2 used IF0 bulk for everything. Details in §3.</li>
+<li><b>Transport (2.5.2).</b> libusb <b>bulk</b> on <b>IF0</b> (vendor class, WinUSB): EP <code>0x01</code> OUT, <code>0x81</code> IN. CDC (IF1/2) carries the same binary commands plus a text "PDM" protocol-trigger language. HID (IF3) carries the same binary commands in 64-byte reports.</li>
+<li><b>Bring-up</b>, confirmed by the 2.5.2 decompile and capture:
+  <ol>
+  <li><code>CONNECT</code>.</li>
+  <li>Four AES-encrypted memory reads: <code>0x420</code>, <code>0x4420</code>, <code>0x3000C00</code>, <code>0x40010450</code>.</li>
+  <li>An AES challenge-response <code>0x4C</code> keyed on the MCU UID.</li>
+  <li><code>GET_DATA(Settings)</code>, then <code>GET_DATA(RecordList)</code>, then <code>STOP_QUEUE</code>.</li>
+  <li>Poll <code>GET_DATA</code> with an attribute bitmask.</li>
+  </ol></li>
+<li><b>Auth is enforced by the device for streaming.</b> In the capture the meter answers <code>START_QUEUE (0x0E)</code> with <code>REJECT (0x06)</code>. The app then re-runs CONNECT, the UID read and <code>0x4C</code>, and the retry succeeds. The decompile has the same recovery path (<code>Mt FUN_14007c640</code> L65782–65788). Which other commands are gated cannot be determined from PC code.</li>
+<li><b>Keys.</b> Hardcoded AES-128-ECB keys with 0xFF padding, all validated by decrypting captured traffic:
+  <ul>
+  <li><code>Lh2yfB7n6X7d9a5Z</code>: memory reads, encrypted replies, firmware image.</li>
+  <li><code>Fa0b4tA25f4R038a</code>: auth request. The reply uses <code>FX0b4tA25f4R038a</code> (byte 1 replaced by <code>'X'</code>).</li>
+  </ul>
+  The same key strings are present in 3.0.0.</li>
+<li><b>ADC block.</b> 44 bytes on current firmware, not the docx's 40. 3.0.0 exposes the tail as roles <code>vsbu1</code>/<code>vsbu2</code>, shown as <b>TMP1/TMP2</b>. Its UI says channel 1 = meter-internal temperature and channel 2 = external sensor (reserved); see §8.1.</li>
+<li><b>IBUS sign.</b> Negative means current flows <b>receptacle → plug</b>. Source: the new-ADC PDF, and the 3.0.0 UI text "KM003C电流从[母座]流向[公头]就是反电流". 3.0.0 has an optional "absolute current |A|" mode and a separate <code>polarity</code> indicator.</li>
+<li><b>Detected fast-charge protocol.</b> Neither PC version has a code→name table for the on-screen "detected protocol". The PC triggers detection only through CDC text commands (<code>entry …</code>), all of which change device state.</li>
+<li><b>Unsafe commands exist</b> (§14):
+  <ul>
+  <li>JUMP_APROM/DFU (0x08/0x09), firmware download (0x40/0x42 plus 4080-byte chunks), flash write <code>0x4A</code>, SET_DATA <code>0x48</code>.</li>
+  <li>PDM settings write <code>0x0A</code> (key 8 = factory reset).</li>
+  <li>3.0.0 <code>setOtpID</code>/<code>allocOtpID</code> (writes the device ID).</li>
+  <li>Every CDC text command, including undocumented <code>pd hrst</code>.</li>
+  <li>2.5.2 <b>auto-sends JUMP_DFU</b> when the HEAD reply word is non-zero.</li>
+  </ul></li>
+</ol>
+
+<h2 id="inv">2. Software inventory</h2>
+<div class="tw"><table>
+<tr><th>Artifact</th><th>Source</th><th>Version</th><th>SHA-256</th><th>Tech</th></tr>
+<tr><td><b>POWER-Z Lab 3.0.0</b> <code>qt6_x64/POWER-Z.exe</code></td><td>official package <code>powerz_km_win_3.0.0</code> (also contains <code>qt5_x64/</code>, <code>qt5_x32/</code>, <code>firmware/</code>, <code>qt6_x64/log/</code>)</td><td>"POWER-Z Lab 3.0", built 2025-02-23</td><td><code>0ee94e6300720ea9739071cbb5ad2ed4ffa9923c0a702b34c01a28e2cb3720b5</code></td><td>Qt 6 C++ + QML (compiled into rcc), libusb-1.0, Qt6SerialPort, ChartDirector</td></tr>
+<tr><td>3.0.0 <code>firmware/KM003C_V2.0.0.mencrypt</code></td><td>same bundle</td><td>FW 2.0.0, 2025.2.20</td><td><code>57cd634713090fb2993c44e0edb09d53405e18d24d1234ff5e3fd635cfc326fc</code></td><td>QDataStream container, AES-ECB image (§12)</td></tr>
+<tr><td><code>POWER-Z.zip</code> → <code>Setup.exe</code></td><td><a href="https://chargerlab.oss-cn-shenzhen.aliyuncs.com/POWER-Z.zip">chargerlab OSS</a> (linked from <a href="https://www.power-z.com/blogs/technical-support/power-z-km003c-km002c-technical-support">power-z.com tech support</a>)</td><td>2.5.2</td><td>zip <code>cbbdadec09f153246397e86f83446154ddfa2ad2168d1cfdce4f3d49c086c616</code><br>exe <code>0fc732ae644fb21dc235dd0b8e85fae741548e4c0faa9595361db2f63c7e6817</code></td><td>Advanced Installer bootstrapper (payload not unpacked)</td></tr>
+<tr><td>Portable <code>POWER-Z_free.zip</code></td><td><a href="https://chargerlab.oss-cn-shenzhen.aliyuncs.com/2.5.2/POWER-Z_free.zip">chargerlab OSS 2.5.2</a></td><td>2.5.2</td><td><code>497d73afcd356e001bde0eee6b8c9bdc415dcf7b75101f688ae22cfaf30e485f</code></td><td>—</td></tr>
+<tr><td>└ <code>Mtools.exe</code></td><td>portable zip</td><td>"POWER-Z Lab 2.5.2"</td><td><code>8ca204a3a42a24a5dd1395ead0d8dbb8a0f65ef6edb5418b0c8f4206f6176885</code></td><td>Qt 6 widgets C++, libusb</td></tr>
+<tr><td>└ <code>PDM.exe</code></td><td>portable zip</td><td>2026-04-15</td><td><code>40e3a1af596ba0614ebfff0f0a742e1b62516af0bd103f7bb266f2f2222ef5e4</code></td><td>Qt 6, Qt6SerialPort only</td></tr>
+<tr><td>Official PDFs: new-ADC command, CDC trigger commands, PDM custom data</td><td>portable zip <code>doc/</code>, <code>translations/cmd.pdf</code></td><td>2026</td><td>—</td><td>—</td></tr>
+<tr><td>SDK sample <code>hiddemo_vs2019_for-KM002C3C.zip</code> (+ docx)</td><td><a href="https://www.chargerlab.com/wp-content/uploads/2019/05/hiddemo_vs2019_for-KM002C3C.zip">chargerlab.com</a></td><td>2022</td><td><code>00240281b0b2e724c09683f2712c9a8bee2c7c1e788a68f4b6b9912ef38e9c7d</code></td><td>C++ libusb (HID)</td></tr>
+<tr><td>Driver <code>InstallDriver.zip</code></td><td><a href="https://www.chargerlab.com/wp-content/uploads/2022/07/InstallDriver.zip">chargerlab.com</a></td><td>2022-07</td><td><code>8f655497c94a8786bebb8279ce1cd85314df7e8499d53540985dbd260855f25b</code></td><td>dpinst + <code>POWER-Z_WinUSB.inf</code></td></tr>
+<tr><td>Android "POWER-Z" <code>cn.powerz.powerdumper</code> 1.0.1</td><td>vivo app store (official store)</td><td>1.0.1 (Play has 1.0.3, not obtainable)</td><td><code>54576d979b9517f7237ba379bf5a0c30f6e597dedd7e7c89d7cefb4eb47e7317</code></td><td>no USB/BLE meter code (§13)</td></tr>
+<tr><td>iOS "POWER-Z" (<code>com.powerz.powercalculator</code>)</td><td>App Store id6754865141</td><td>1.1</td><td>not obtainable</td><td>listing: phone power tool</td></tr>
+<tr><td>Web (WebUSB/WebHID) tool</td><td colspan="4">None official. The only one found is the third-party <a href="https://hackaday.io/project/206301-powerscope">PowerScope</a>. No macOS app exists either.</td></tr>
+</table></div>
+
+<h2 id="p3">3. POWER-Z 3.0.0 specifics</h2>
+<p class="muted">Filled in from the 3.0.0 decompile; see the sub-sections below.</p>
+<div id="p3-body">
+<p>3.0.0 is a different program from 2.5.2. It is a QML "MultipleRecord" multi-meter recorder with a firmware-update and <b>factory-provisioning</b> window. It has <b>no PD analyzer and no protocol trigger</b>. Ghidra decompiled 3691 functions; the class names come from RTTI and Qt moc metadata.</p>
+
+<h3>3.1 Which class talks to the meter, and how</h3>
+<div class="tw"><table>
+<tr><th>Class</th><th>Transport</th><th>Role</th><th>Key functions</th></tr>
+<tr><td><code>ModbusTransfer</code> (vftable set at <code>P3</code> L197458)</td><td><b>CDC serial</b> via <code>MySerialMaster</code>/<code>QSerialPort</code> (opened 2 000 000 8N1 in <code>P3 FUN_140112ed0</code>; baud is irrelevant on CDC)</td><td><b>Live dashboard and recording.</b> Despite the name it speaks two protocols: the ChargerLab "0x15" protocol to KM meters, and Modbus RTU to other products</td><td><code>FUN_140110ab0</code> open, <code>FUN_140110d50</code> info, <code>FUN_140112aa0</code> auth, <code>FUN_140113670</code> timerEvent, <code>FUN_1401131e0</code> ADC poll, <code>FUN_1401122d0</code> record parser, <code>FUN_140112130</code>/<code>FUN_140112d20</code> stream start/stop</td></tr>
+<tr><td><code>MySerialMaster</code> (L191413)</td><td>CDC</td><td>request queue, timeouts ("Request timeout."), frame matching</td><td><code>FUN_1401058a0</code> sendRequest, <code>FUN_140105d50</code> readyRead</td></tr>
+<tr><td><code>MyUsbPort</code> / <code>Upgrade</code> / <code>MyUsb</code> / <code>MyLibUsb</code> (L169192, L170856, L167723, L160820)</td><td><b>libusb bulk, IF0</b></td><td>firmware update window (<code>FwUpWindow.qml</code>) and factory provisioning: read info, jump, download, <b>write OTP ID</b></td><td><code>FUN_1400e7a10</code> read info, <code>FUN_1400e76b0</code> jumpApp, <code>FUN_1400e5190</code> download, <code>FUN_1400e82f0</code> setOtpID</td></tr>
+</table></div>
+
+<h3>3.2 The "0x15" serial frame (new in 3.0.0)</h3>
+<pre><code>u32 LE header:  bits 0-6  type = 0x15        bit 7  = 1 in replies (0x95)
+                bits 8-11 seq nibble         bits 12-23 payload length (bytes)
+                bits 24-31 sub-command
+reply accepted iff  (hdr ^ req) &amp; 0x7f == 0  &amp;&amp;  (hdr ^ req) &amp; 0xf00 == 0
+                    &amp;&amp;  (int8)hdr[0] &lt; 0  &amp;&amp;  ((hdr &gt;&gt; 12) &amp; 0xfff) == len - 4      (P3 FUN_140105d50)
+payload handed to the caller = bytes after the 4-byte header</code></pre>
+<div class="tw"><table>
+<tr><th>Sub-cmd</th><th>Builder</th><th>Request body</th><th>Reply / meaning</th><th>Class</th></tr>
+<tr><td>0x01</td><td><code>P3 FUN_140110d50</code> L197981</td><td>16 B: <code>u32 now_secs, u32 rand×3</code> (header <code>…|0x1010015</code>)</td><td>64 B Boot info block, 64 B App info block, OTP ASCII, 16 B, then a 32-B AES block (§3.5)</td><td><span class="tag safe">READ</span></td></tr>
+<tr><td>0x02</td><td><code>P3 FUN_140112aa0</code> L198760</td><td>32 B <code>AES_ECB(key0, rand0..3 | info[16..28] | rand7)</code></td><td>accepted if <code>reply u32@4 == rand1</code> → <code>+0x20d</code> = authorized</td><td><span class="tag safe">SESSION</span></td></tr>
+<tr><td>0x05</td><td><code>P3 FUN_140112d20</code> L198855</td><td><code>u32 sub-hdr = 0x32 | 0x01000000</code> (att 0x32, size 4) + <code>u32 value</code></td><td>"set attribute 0x32": <b>0 = stop</b>, <b>0x303 = start at ≤ 1 ms</b>, <b>1 = start (slower)</b> (<code>FUN_140112130</code> L198492–198496). The id nibble here is <code>now_ms &amp; 0xF</code>, not the counter</td><td><span class="tag state">STREAM CTRL</span></td></tr>
+<tr><td>0x07</td><td><code>P3 FUN_1401131e0</code>, timerEvent L199240</td><td>none (header only <code>…|0x7000015</code>)</td><td>ADC record batch (§3.4)</td><td><span class="tag safe">READ</span></td></tr>
+<tr><td>0x08</td><td>timerEvent L199278</td><td>none</td><td>TLVs: <code>01</code> TypeCStateLog (u8 len), <code>02</code> PDStateLog (u8), <code>03</code> PDBuffer (u16), <code>04</code> ufcs_log (u16). Only the lengths are logged (<code>P3 FUN_1401107b0</code>), and the <code>"protocol"</code> timer that sends it is never started (only <code>"adc"</code> is, L197809)</td><td><span class="tag safe">READ</span> (unused)</td></tr>
+</table></div>
+
+<h3>3.3 3.0.0 connect and dashboard sequence (CDC)</h3>
+<ol>
+<li>Open the COM port (<code>FUN_140110ab0</code>).</li>
+<li><code>0x15/01</code> info query (<code>FUN_140110d50</code>). This fills the info list and decides <b>"private"</b> (<code>+0x20e</code>), see §3.5.</li>
+<li><code>0x15/02</code> auth (<code>FUN_140112aa0</code>), which sets <code>+0x20d</code>.</li>
+<li>Start a <b>10 ms</b> timer named <code>"adc"</code> (L197809). On each tick, if <code>+0x20d</code> is set:
+  <ul>
+  <li>"private": send <code>0x15/07</code>.</li>
+  <li>Otherwise: send Modbus RTU fn 4 "read input registers 0, count 10" (<code>00 00 00 0a</code>, <code>FUN_140106690</code>), which is for non-KM products.</li>
+  </ul></li>
+<li>Recording start/stop sends <code>0x15/05 att 0x32</code>.</li>
+<li>The dashboard shows VBUS, IBUS (with a <code>polarity</code> badge), PWR, DP, DM, CC1, CC2, TMP1, TMP2 (QML roles <code>vbus ibus polarity power vdp vdm vcc1 vcc2 vsbu1 vsbu2</code>, <code>DevView.qml</code>).</li>
+</ol>
+<p class="muted">Developer log <code>qt6_x64/log/2025-03-17.txt</code>:</p>
+<ul class="muted">
+<li><code>USB串口插入 "COM4"</code> ("USB serial port inserted") and <code>USB插入 "\\?\USB#VID_5FC9&amp;PID_0063#001590#{A5DCBF10-…}"</code> (serial <code>001590</code>).</li>
+<li>1624 × <code>missN N</code>, the gap detector in <code>FUN_1401122d0</code>.</li>
+<li>The firmware window logs <code>"02010000" "03010000"</code>: CONNECT answered by DISCONNECT. That most likely happened while the CDC session held the meter.</li>
+</ul>
+
+<h3>3.4 3.0.0 ADC record batch (<code>0x15/07</code> reply, <code>P3 FUN_1401122d0</code> L198521)</h3>
+<pre><code>payload[0..3]   ?            u32 payload[4..7] = flags (bit 3 set → no temperature fields valid)
+payload[8]      ?            payload[9]  = samples-per-record divisor (1..10, else 1)
+payload[10]     limit (&lt;21)  payload[11] = record count (min(count, limit))
+record k (20 B) at 12 + 20·k:
+  i32 Vbus µV (/1e6) | i32 Ibus µA (/1e6, signed) | u16 ×4 (/1000 → V) | i16 T1 | i16 T2   (×1/128 °C; 0x8000 → -0.009 sentinel)</code></pre>
+<p>The four u16 values are in record order, which matches the new-ADC PDF's <code>Vcc1, Vcc2, Vdp, Vdm</code>; the code itself just labels them x1–x4. Snippet:</p>
+<pre><code>dVar27 = (double)*(int *)(pcVar9 + lVar14 + -8) / 1000000.0;      // Vbus
+dVar24 = (double)*(int *)(pcVar9 + lVar14 + -4) / 1000000.0;      // Ibus (signed)
+dVar4  = (double)*(ushort *)(pcVar9 + lVar14) / 1000.0;           // x1..x4 at +0,+2,+4,+6
+if ((uVar3 &gt;&gt; 3 &amp; 1) == 0) {
+  if (*(short *)(pcVar9 + lVar14 + 8) == -0x8000) dVar34 = -0.009;
+  else dVar34 = (double)(int)*(short *)(pcVar9 + lVar14 + 8) * 0.0078125;   // T1
+  ... same for +10 → T2 }
+Ah += Ibus/3600000 ; Wh += Vbus*Ibus/3600/1000     // per 1 ms sample</code></pre>
+<p>At rates of 1 ms or faster each record is emitted directly. At slower rates the app averages <code>rate/1000</code> records, so the meter streams at 1 kSPS and the PC decimates. The QML rate options are 0.1/1/10/100/1000 SPS, stored in µs. The "Temp" option is disabled at 1 kSPS. Its tooltip translates as "Channel 1: meter internal (disabled at 1 ms sampling); Channel 2: external sensor (reserved channel, needs latest meter)".</p>
+
+<h3>3.5 3.0.0 device info and the "private" (genuine-device) check (<code>P3 FUN_140110d50</code>)</h3>
+<ul>
+<li><b>Reply layout:</b> 64 B Boot block, 64 B App block, then OTP ASCII.
+  <ul>
+  <li>Each info block: <code>u32@0 == FFFFFFFF</code> → "none"; strings @0x10/0x1C/0x28/0x34 = name / version / date / plan.</li>
+  <li>OTP sections split by spaces: 0 = SN, 1 = UUID (shown truncated to 16 chars + <code>****</code>), 2 = Unix factory date (rendered <code>yyyy-MM-dd hh:mm:ss</code>). <code>"LYS"</code> inside OTP[0x34..] → "true".</li>
+  </ul></li>
+<li><b>Labels</b> (<code>FwUpWindow</code> QML): Boot name/version/date/plan, App name/version/date/plan, 出厂日期 (factory date), SN, Authorize, UUID, GUID, ROM2. <code>hwVersion = Boot version</code>, <code>fwVersion = App version</code>.</li>
+<li><b>Genuineness check:</b> the trailing 32 B are decrypted with <b>key3 whose byte [2] is stepped from <code>'0'</code> up to <code>'z'</code></b> until <code>dec[0] == challenge secs</code>. If <code>dec[4]</code> and <code>dec[1]</code> also match two OTP words, the device is "private": Authorize = <code>"private"</code> and <code>+0x20e = 1</code>.</li>
+<li><b>Effect:</b> only "private" devices are polled with the KM <code>0x15/07</code> command; others fall back to Modbus (L198285–198306, L199193).</li>
+</ul>
+
+<h3>3.6 3.0.0 libusb (IF0) path: firmware window and provisioning only</h3>
+<ul>
+<li>Builders are identical to 2.5.2: <code>P3 FUN_1400dfae0</code> ctrl, <code>FUN_1400dfb70</code> HEAD, <code>FUN_1400dfbf0</code> 0x44 read, <code>FUN_1400dfe40</code> 0x42 descriptor.</li>
+<li><b>No 0x4C and no GET_DATA/START_QUEUE builders exist in 3.0.0</b>: grep for <code>0x200004c</code>/<code>0x1004a</code> finds 0 hits.</li>
+<li>Read info (<code>FUN_1400e7a10</code> L172523–172598) reads <code>0x420</code>, <code>0x4420</code>, <code>0x3000C00</code> and <code>0x40010450</code> with 0x44.</li>
+<li><code>jumpApp(n)</code> (<code>FUN_1400e76b0</code> L172322–172326) sends CONNECT, then <code>(n^1)+8</code>, i.e. JUMP_APROM/JUMP_DFU.</li>
+<li>New in 3.0.0: <b>type 0x43 = OTP write</b> (<code>FUN_1400e00b0</code>, L167544), sent by <code>setOtpID</code> (<code>FUN_1400e82f0</code>).</li>
+</ul>
+<pre><code>local_a4 = (uint)DAT_1402b4c78 &lt;&lt; 8 | 0x1800043;          // type 0x43, obj 6
+append(00 0c 00 03)  append(3c 00 00 00)                   // addr 0x03000C00, len 0x3C
+append(serial.toLocal8Bit()) ' ' QUuid::createUuid().toString().toUpper() ' '
+append(QByteArray::number(currentDateTimeUtc().toSecsSinceEpoch())) ' ' '\0' 'L' 'Y' 'S' '\0'</code></pre>
+<p>The provisioning QML numbers devices with an SN spin box (<code>usbport.allocOtpID(sn)</code> / <code>setOtpID()</code>). It then uploads the written ID with <code>my_network.saveId(text)</code>. <code>setOtpID</code> only proceeds when the current OTP reads "undefined" and the device is in APP. <span class="tag unsafe">PERMANENT: OTP is one-time-programmable</span></p>
+</div>
+
+<h2 id="transport">4. Transport: which interface for what</h2>
+<div class="tw"><table>
+<tr><th>Interface</th><th>Endpoints</th><th>Used by</th><th>Content</th></tr>
+<tr><td>IF0 vendor 0xFF (WinUSB via <code>POWER-Z_WinUSB.inf</code>, <code>MI_00</code>, DeviceInterfaceGUID <code>{153261DD-0615-4691-DAFA-35232D8353D7}</code>)</td><td>bulk <code>0x01</code> OUT / <code>0x81</code> IN (capture)</td><td>2.5.2 Mtools (<code>UsbPolicyMX</code>), 3.0.0 (<code>MyLibUsb</code>/<code>MyUsb</code>/<code>Upgrade</code>)</td><td>binary 4-byte-header protocol: live data, info, auth, firmware upgrade</td></tr>
+<tr><td>IF1/IF2 CDC-ACM</td><td>bulk + interrupt</td><td><b>3.0.0 live dashboard</b> (<code>ModbusTransfer</code> over <code>MySerialMaster</code>/<code>MySerialPort</code>), PDM.exe</td><td>3.0.0's 0x15 frames (§3.2); the docx binary protocol (PDM's 0x8C memory read and 0x0A settings write); PDM text commands; the simplified <code>02</code> streaming command</td></tr>
+<tr><td>IF3 HID (vendor page 0xFF00, 64-byte reports, no report ID)</td><td>interrupt</td><td>official SDK sample <code>hiddemo.cpp</code></td><td>same binary protocol; docx limits HID payload to ≤ 60 bytes</td></tr>
+</table></div>
+<p>2.5.2 details:</p>
+<ul>
+<li><b>Open</b> (<code>Mt FUN_1400774a0</code> L62531): detaches the kernel driver and claims every interface.</li>
+<li><b>Write</b> (<code>Mt FUN_140078b00</code> L63595): uses the first OUT endpoint whose transfer type is BULK (2).</li>
+<li><b>Zero-length packet:</b> after any write whose length is a multiple of 64, an empty bulk write follows (<code>Mt FUN_14007d5d0</code> L66307–66313).</li>
+<li><b>Class selection</b> (<code>Mt FUN_140013380</code> L11282–11293): VID <code>0x5FC9</code> → <code>UsbPolicyMX</code>; VID <code>0x0483</code> → <code>UsbPolicyKM</code>.</li>
+</ul>
+
+<h2 id="frame">5. Framing</h2>
+<p>Every message starts with a 4-byte little-endian header (docx <code>MsgHeader_TypeDef</code>, identical in every builder of both app versions):</p>
+<pre><code>ctrl view  : bits 0-6 type | bit 7 extend | bits 8-15 id | bit 16 encrypted | bits 17-31 att (15)
+data view  : bits 0-6 type | bit 7 extend | bits 8-15 id | bit 16 encode | 17-18 permi | 19-21 rsvd | bits 22-31 obj (# u32 words)
+sub-header : bits 0-14 att | bit 15 next | bits 16-21 chunk | bits 22-31 size (bytes per chunk)   (inside 0x41 payloads)</code></pre>
+<ul>
+<li><b>id:</b> one global byte counter, pre-incremented per packet (<code>Mt FUN_140078d70</code> L63739). The device echoes it, e.g. <code>02 01 00 00</code> → <code>05 01 00 00</code>.</li>
+<li><b>Bit 16:</b> marks an AES/key0 payload on 0x44/0x4A requests, on the 0xC4 read-reply header and on encrypted 0x41 replies. It is <b>not</b> set on the 0x4C auth request, whose body is AES with key3.</li>
+<li><b>obj in plaintext replies does not equal the payload length.</b> Capture: ADC reply <code>41 0a 82 02</code> has obj = 10 but carries 48 bytes. Parse by sub-header <code>size</code>. The app uses <code>obj*4</code> only as the decrypt length for encrypted replies.</li>
+</ul>
+<h3>5.1 Packet builders (2.5.2 Mtools; every writer of the tx-id counter)</h3>
+<div class="tw"><table>
+<tr><th>Builder</th><th>Header literal</th><th>Body / meaning</th></tr>
+<tr><td><code>Mt FUN_140078d70(type, att8)</code></td><td><code>((att&lt;&lt;9|id)&lt;&lt;8)|type</code></td><td>generic control</td></tr>
+<tr><td><code>Mt FUN_140078e00(att16)</code></td><td><code>((att&lt;&lt;9|id)&lt;&lt;8)|0x0C</code></td><td>GET_DATA, att = bitmask</td></tr>
+<tr><td><code>Mt FUN_140078e80()</code></td><td><code>id&lt;&lt;8|0x01000040</code></td><td>HEAD + 16 zero bytes</td></tr>
+<tr><td><code>Mt FUN_140078ef0(addr,len)</code></td><td><code>id&lt;&lt;8|0x01010044</code></td><td>memory read, 32 B AES (§9.2)</td></tr>
+<tr><td><code>Mt FUN_140079160(plain,key)</code></td><td><code>id&lt;&lt;8|0x0200004C</code></td><td>auth, 32 B AES (§9.1)</td></tr>
+<tr><td><code>Mt FUN_140079290(att,data)</code></td><td><code>id&lt;&lt;8|0x48</code>, obj = len/4+2</td><td>SET_DATA: sub-header <code>att|len&lt;&lt;22</code> + data</td></tr>
+<tr><td><code>Mt FUN_140079370(info)</code></td><td><code>id&lt;&lt;8|0x04000042</code></td><td>64 B firmware descriptor (upgrade)</td></tr>
+<tr><td><code>Mt FUN_140079700(addr,data)</code></td><td><code>id&lt;&lt;8|0x0001004A</code></td><td>encrypted flash write (256 B chunks)</td></tr>
+<tr><td><code>PDM FUN_1400dd3e0(0x100,body)</code></td><td><code>((0x100&lt;&lt;9|id)&lt;&lt;8)|0x1008C</code></td><td>GET_DATA + extend + encrypted: CDC memory read (§9.3)</td></tr>
+<tr><td><code>PDM FUN_1400dd470(map)</code></td><td><code>n&lt;&lt;23|id&lt;&lt;8|0x0A</code></td><td>settings write, key/value list (§8.5)</td></tr>
+</table></div>
+
+<h2 id="cmds">6. Commands, attributes, SAFE/UNSAFE</h2>
+<h3>6.1 Control types</h3>
+<div class="tw"><table>
+<tr><th>Type</th><th>Name</th><th>Use by official software</th><th>Class</th></tr>
+<tr><td>0x01</td><td>SYNC</td><td>device → host during firmware upload</td><td>—</td></tr>
+<tr><td>0x02</td><td>CONNECT</td><td>first command (capture; <code>Mt FUN_14007afb0</code>; 3.0.0 log <code>"02010000"</code>)</td><td><span class="tag safe">SESSION</span> required</td></tr>
+<tr><td>0x03</td><td>DISCONNECT</td><td>device → host. 3.0.0 log: <code>"02010000" "03010000"</code>, i.e. the meter answered CONNECT with DISCONNECT</td><td>—</td></tr>
+<tr><td>0x04</td><td>RESET</td><td>never sent by either app</td><td><span class="tag unsafe">AVOID</span></td></tr>
+<tr><td>0x05 / 0x06 / 0x07</td><td>ACCEPT / REJECT / FINISHED</td><td>device replies</td><td>—</td></tr>
+<tr><td>0x08</td><td>JUMP_APROM</td><td><code>on_jump</code> when not "APP" (<code>Mt FUN_14007b620</code> L65172)</td><td><span class="tag unsafe">UNSAFE reboot</span></td></tr>
+<tr><td>0x09</td><td>JUMP_DFU</td><td><code>on_jump</code> in "APP" (L65168); also the 2.5.2 automatic HEAD-failure path</td><td><span class="tag unsafe">UNSAFE bootloader</span></td></tr>
+<tr><td>0x0A</td><td>GET_STATUS (docx) / settings write (PDM)</td><td>PDM SetDialog (<code>PDM FUN_1400d8cc0</code>)</td><td><span class="tag unsafe">UNSAFE</span></td></tr>
+<tr><td>0x0C</td><td>GET_DATA</td><td>all live data</td><td><span class="tag safe">SAFE READ</span></td></tr>
+<tr><td>0x0D</td><td>GET_FILE</td><td>never sent</td><td><span class="tag unsafe">AVOID</span></td></tr>
+<tr><td>0x0E</td><td>START_QUEUE (att = rate index)</td><td><code>Mt FUN_14007c640</code> L65764</td><td><span class="tag state">STREAM CTRL</span> auth-gated</td></tr>
+<tr><td>0x0F</td><td>STOP_QUEUE</td><td>L65750; after connect</td><td><span class="tag state">STREAM CTRL</span></td></tr>
+<tr><td>0x10</td><td>START_ANALYZER (att 1 = PD)</td><td><code>Mt FUN_14007c4d0</code>; capture <code>10 f4 02 00</code></td><td><span class="tag state">SNIFFER CTRL</span> passive</td></tr>
+<tr><td>0x11</td><td>STOP_ANALYZER</td><td>L65671</td><td><span class="tag state">SNIFFER CTRL</span></td></tr>
+</table></div>
+<h3>6.2 Data types</h3>
+<div class="tw"><table>
+<tr><th>Type</th><th>Dir</th><th>Meaning</th><th>Class</th></tr>
+<tr><td>0x40</td><td>both</td><td>HEAD (16 zero bytes). If the reply's <code>u32@4</code> ≠ 0, 2.5.2 shows "您正在使用最原始的固件…请先升级固件" and auto-emits <code>sign_jump(1)</code> → JUMP_DFU (<code>Mt FUN_140011b10</code> L10688–10709)</td><td><span class="tag safe">READ</span>; never copy the jump</td></tr>
+<tr><td>0x41</td><td>D→H</td><td>PUT_DATA, chained sub-blocks</td><td>—</td></tr>
+<tr><td>0x42</td><td>H→D</td><td>firmware descriptor (model KM002C/KM003C/KM004C, size, version, CRC)</td><td><span class="tag unsafe">UNSAFE fw</span></td></tr>
+<tr><td>0x44 (reply 0xC4)</td><td>both</td><td>encrypted memory read</td><td><span class="tag safe">SAFE READ</span> at the app's addresses</td></tr>
+<tr><td>0x48</td><td>H→D</td><td>SET_DATA; 2.5.2 uses att 0x28 to rewrite the offline-record list (<code>Mt FUN_14001b630</code> L15809)</td><td><span class="tag unsafe">UNSAFE</span></td></tr>
+<tr><td>0x4A</td><td>H→D</td><td>encrypted flash write (<code>on_writeSpiFlash</code>, <code>Mt FUN_14007cad0</code>)</td><td><span class="tag unsafe">UNSAFE</span></td></tr>
+<tr><td>0x4C</td><td>both</td><td>auth challenge/response</td><td><span class="tag safe">SESSION</span> needed for streaming</td></tr>
+<tr><td>raw 4080 B</td><td>H→D</td><td>firmware chunks (0xFF0 each) after CONNECT/HEAD/0x42 (<code>Mt FUN_14007afd0</code>)</td><td><span class="tag unsafe">UNSAFE fw</span></td></tr>
+</table></div>
+<h3>6.3 GET_DATA attribute bitmask</h3>
+<div class="tw"><table>
+<tr><th>Bit</th><th>Name (docx / moc <code>Attribute_type</code>)</th><th>App use</th><th>Reply block</th></tr>
+<tr><td>0x001</td><td>ADC</td><td>polled every 200 ms</td><td>44 B (§8.1)</td></tr>
+<tr><td>0x002</td><td>ADC_QUEUE</td><td>when the queue runs</td><td>N × 20 B (§8.2)</td></tr>
+<tr><td>0x004</td><td>ADC_QUEUE_10K</td><td>—</td><td>—</td></tr>
+<tr><td>0x008</td><td>SETTINGS</td><td>once after auth</td><td>180 B (§8.5)</td></tr>
+<tr><td>0x010</td><td>PD_PACKET</td><td>analyzer mode 1, every 5 ms</td><td>§8.3</td></tr>
+<tr><td>0x020</td><td>PD_STATUS</td><td>hex-logged only</td><td>unknown</td></tr>
+<tr><td>0x040</td><td>QC_PACKET</td><td>analyzer mode ≥ 2, every 50 ms</td><td>as 0x010</td></tr>
+<tr><td>0x080</td><td>TICK</td><td>—</td><td><code>u32</code> tick + <code>u8</code></td></tr>
+<tr><td>0x100</td><td>Tick__</td><td>PDM: with extend + encrypt, carries the CDC memory read</td><td>—</td></tr>
+<tr><td>0x200</td><td>RecordList</td><td>once after settings</td><td>offline-record list</td></tr>
+<tr><td>0x400</td><td>PDList</td><td>—</td><td>—</td></tr>
+</table></div>
+<p class="muted">The lookup <code>{1,2,4,…,0x400}</code> is in <code>Mt FUN_14007b4c0</code> L65099–65104. Masks seen in the capture: 0x001, 0x002, 0x003, 0x008, 0x010, 0x011, 0x200.</p>
+
+<h2 id="seq">7. Connect and dashboard request sequence</h2>
+<p>2.5.2 Mtools, confirmed byte-for-byte by capture <code>orig_adc_1000hz</code>:</p>
+<pre><code>H→D 02 01 00 00                         CONNECT            → D→H 05 01 00 00 ACCEPT
+H→D 44 02 01 01 + 32B AES(key0)         read 0x420 /0x40   → c4 02 01 01 + echo, then 64B AES(key0) data
+H→D 44 03 01 01 + …                     read 0x4420/0x40   → info strings (model, FW version, date)
+H→D 44 04 01 01 + …                     read 0x3000C00/0x40 → OTP ASCII (serial etc.)
+H→D 44 05 01 01 + …                     read 0x40010450/0xC → 12-byte MCU UID (one 16-B block)
+H→D 4c 06 00 02 + 32B AES(key3)         auth               → 4c 00 03 02 + 32B AES(key3')
+H→D 0c 07 10 00                         GET_DATA att 0x008 → 41 07 02 0b | 08 00 00 2d | 180B settings
+H→D 0c 08 00 04                         GET_DATA att 0x200 → record list
+H→D 0f 09 00 00                         STOP_QUEUE         → 05 09 00 00
+H→D 0c 0a 02 00  (repeat)               GET_DATA att 0x001 → 41 0a 82 02 | 01 00 00 0b | 44B ADC</code></pre>
+<p>The same order appears in the decompile:</p>
+<ol>
+<li>DeviceItem <code>Mt FUN_140011b10</code> runs <code>sign_openUsb</code> → <code>sign_connectDev</code> → 50 ms sleep → <code>sign_headDev</code> → <code>queryInfo</code>.</li>
+<li>DeviceView <code>Mt FUN_14001db20</code> L16874–16888 then runs <code>sign_readOtpInfo</code> → <code>sign_security(1)</code> → <code>sign_getData(3)</code> → <code>sign_enQueue(0,rate)</code> (= STOP).</li>
+</ol>
+<p><b>Live polling</b> (<code>Mt FUN_14007d200</code> L66107, the timerEvent):</p>
+<ul>
+<li>Timer period: 10 ms in queue mode, 2 ms in analyzer mode.</li>
+<li>Flags accumulate into <code>+0x25a</code>:
+  <ul>
+  <li><code>0x001</code> every 200 ms.</li>
+  <li><code>0x002</code> every <code>[1000,200,100,32,10,…][rate]</code> ms.</li>
+  <li><code>0x010</code> every 5 ms in analyzer mode 1.</li>
+  <li><code>0x040</code> every 50 ms in analyzer mode ≥ 2.</li>
+  </ul></li>
+<li>The app then sends one <code>GET_DATA(att = flags)</code> (disasm <code>0x14007d333</code>).</li>
+</ul>
+<p><b>START_QUEUE</b> carries a rate index with sample periods <code>[1000,100,20,1]</code> ms. On a non-ACCEPT reply the app sends CONNECT, then readOtpInfo, then <code>security(1)</code>, and retries. Capture <code>pd_adcqueue_new</code> shows exactly this sequence after an <code>06</code> REJECT.</p>
+<div id="seq-p3"><p><b>3.0.0 differs:</b> its live dashboard runs on the <b>CDC</b> port with the 0x15 protocol. The sequence is info <code>0x15/01</code>, then auth <code>0x15/02</code>, then <code>0x15/07</code> every 10 ms (§3.3). 3.0.0 never sends <code>GET_DATA</code>, <code>0x4C</code> or <code>START_QUEUE</code>.</p></div>
+
+<h2 id="structs">8. Response structs</h2>
+<h3 id="adc">8.1 ADC block (att 0x001), 44 bytes on current firmware</h3>
+<div class="tw"><table>
+<tr><th>Off</th><th>Type</th><th>Field</th><th>Scaling / evidence</th></tr>
+<tr><td>0x00</td><td>i32</td><td>Vbus</td><td>µV → /1e6 V</td></tr>
+<tr><td>0x04</td><td>i32</td><td>Ibus, signed</td><td>µA → /1e6 A; <b>negative = receptacle → plug</b> (new-ADC PDF; 3.0.0 UI string @<code>0x1cea2c</code>)</td></tr>
+<tr><td>0x08</td><td>i32</td><td>Vbus_avg</td><td>filtered; not read by 2.5.2</td></tr>
+<tr><td>0x0C</td><td>i32</td><td>Ibus_avg</td><td>not read by 2.5.2</td></tr>
+<tr><td>0x10</td><td>i32</td><td>Vbus_ori_avg</td><td>filtered, uncalibrated; /1e6</td></tr>
+<tr><td>0x14</td><td>i32</td><td>Ibus_ori_avg</td><td>/1e6</td></tr>
+<tr><td>0x18</td><td>i16</td><td>Temp (T1, ADC chip)</td><td>×1/128 °C (<code>Mt</code> const <code>0.0078125</code> @<code>0x140196348</code>); <code>0x8000</code> = invalid</td></tr>
+<tr><td>0x1A</td><td>u16</td><td>Vcc1</td><td>0.1 mV → /1e4 V</td></tr>
+<tr><td>0x1C</td><td>u16</td><td>Vcc2</td><td>/1e4</td></tr>
+<tr><td>0x1E</td><td>u16</td><td>Vd+</td><td>/1e4</td></tr>
+<tr><td>0x20</td><td>u16</td><td>Vd−</td><td>/1e4</td></tr>
+<tr><td>0x22</td><td>u16</td><td>Vdd internal</td><td>not read (capture ≈ 3.24 V)</td></tr>
+<tr><td>0x24–0x2B</td><td colspan="3">See the tail table below.</td></tr>
+</table></div>
+<div id="adc-tail">
+<h4>ADC tail 0x24–0x2B</h4>
+<div class="tw"><table>
+<tr><th>Off</th><th>Type</th><th>2.5.2 use (<code>Mt FUN_14007a190</code>, disasm <code>0x14007a7aa</code>, <code>0x14007a847</code>)</th><th>Capture value (KM003C, idle)</th><th>Best interpretation</th></tr>
+<tr><td>0x24</td><td>i16</td><td>emitted raw as the 8th value. Used as the temperature (raw °C, lightly smoothed) only when <code>@0x18 == 0x8000</code> (KM002C Lite has no ADC-chip sensor)</td><td><code>00 80</code> = 0x8000</td><td><b>Second temperature channel</b> (T2: MCU per the 2.5.2 changelog; "external sensor, reserved" per 3.0.0's Temp tooltip); <code>0x8000</code> = not present</td></tr>
+<tr><td>0x26</td><td>u16</td><td>not read</td><td><code>7a 00</code> (122)</td><td>unknown</td></tr>
+<tr><td>0x28</td><td>u16</td><td>/10, stored at <code>+0x288</code>, substituted into queue-record temperature when START_QUEUE flag bit 8 is set (<code>Mt FUN_14007c640</code> L65732, <code>FUN_140079ca0</code> L64371–64376)</td><td><code>1f 00</code> (31 → 3.1)</td><td>unknown; possibly the battery-% feature the V2.5.0 changelog says replaces temperature. Unproven</td></tr>
+<tr><td>0x2A</td><td>u16</td><td>not read</td><td><code>1b 00</code> (27)</td><td>unknown (plausibly MCU °C; unproven)</td></tr>
+</table></div>
+<ul>
+<li><b>CONFLICT:</b> the docx gives a 40-byte struct with <code>Rate:2 + n[3]</code> at 0x24.</li>
+<li><b>CONFLICT (scale):</b> 2.5.2 treats <code>@0x24</code> as integer °C, while 3.0.0's serial records scale both temperatures ×1/128 with a <code>0x8000</code> sentinel.</li>
+<li>3.0.0 does not parse the USB ADC block at all (it has no GET_DATA path), so it cannot settle 0x26–0x2B.</li>
+<li>The 3.0.0 QML role names for the two temperatures are <code>vsbu1</code>/<code>vsbu2</code>, displayed as TMP1/TMP2. A hidden "SBU" option ("Type-C only, needs latest meter") shares the same channels.</li>
+</ul>
+</div>
+
+<h3>8.2 ADC_QUEUE record (att 0x002), 20 bytes</h3>
+<div class="tw"><table>
+<tr><th>Off</th><th>Type</th><th>Field</th><th>Scaling</th></tr>
+<tr><td>0x00</td><td>u32</td><td>time / sequence</td><td>app detects gaps ("miss", also seen 1624× in the 3.0.0 log)</td></tr>
+<tr><td>0x04</td><td>i32</td><td>Vbus µV</td><td>/1e6</td></tr>
+<tr><td>0x08</td><td>i32</td><td>Ibus µA</td><td>/1e6</td></tr>
+<tr><td>0x0C</td><td>u16</td><td>Vcc1</td><td>/1e4 at rate index 0, else /1e3 (<code>Mt FUN_140079ca0</code> L64359–64370)</td></tr>
+<tr><td>0x0E</td><td>u16</td><td>Vcc2</td><td>same</td></tr>
+<tr><td>0x10</td><td>u16</td><td>Vd+</td><td>same</td></tr>
+<tr><td>0x12</td><td>u16</td><td>Vd−</td><td>same</td></tr>
+</table></div>
+
+<h3 id="pd">8.3 PD / UFCS analyzer block (att 0x010 / 0x040)</h3>
+<p>Mixed sources: capture <code>pd_capture_new</code> plus the decompile. 2.5.2 drops blocks with <code>size &lt; 12</code>.</p>
+<pre><code>12-byte preamble : u32 time | u16 Vbus mV | i16 Ibus mA | u16 CC1 mV | u16 CC2 mV
+message record   : u8 (0x80 | len) | u32 time | u8 SOP (0 SOP, 1 SOP', 2 SOP'') | PD header (2) + data objects
+e.g.  9f f9e95b00 00 a161 2c910108 2cd10200 …   (Source_Capabilities, 6 PDOs)
+      87 90ea5b00 00 4102                        (GoodCRC)
+      8b 94ea5b00 00 8210 dc700323               (Request + RDO)</code></pre>
+<p>Event codes come from <code>Mt FUN_1400643c0</code> (L51945). The event byte is <code>lo nibble = type, hi nibble = arg</code>:</p>
+<div class="tw"><table>
+<tr><th>Type</th><th>Event</th><th>Arg (hi nibble)</th></tr>
+<tr><td>1</td><td>Attach</td><td>1 CC1, 2 CC2</td></tr>
+<tr><td>2</td><td>Detach</td><td>1 CC1, 2 CC2</td></tr>
+<tr><td>3</td><td>Bad Message ID</td><td>—</td></tr>
+<tr><td>4</td><td>Receive Hard Reset</td><td>—</td></tr>
+<tr><td>5</td><td>Cable Reset</td><td>—</td></tr>
+<tr><td>6</td><td>Receive error</td><td>0 Bmc, 1 Pulse Number, 2 Freq, 3 Kcode, 4 Sop, 5 Eop, 6 CRC Check, 7 Data Count, 8 Unknown, 9 Retries</td></tr>
+<tr><td>7</td><td>Monitor Type</td><td>0 PD, 1 UFCS, 2 VIVO</td></tr>
+<tr><td>8</td><td>Big Message</td><td>—</td></tr>
+</table></div>
+<p>The PD message name tables (control/data/extended message types, PDO/RDO field decoding, USB-IF VID→vendor names) are in the 2.5.2 PD analyzer (<code>Mt FUN_1400572d0</code>, <code>FUN_1400629e0</code> and others). They follow the USB-PD 3.2 spec. The hardcoded key <code>Ya0b4u595f4X031f</code> there decrypts 16 bytes of a vendor PD payload <i>for display only</i> (<code>Mt FUN_1400572d0</code> L49639).</p>
+<div id="pd-p3"><p><b>3.0.0 has no PD decoder</b>: there are no PD message-name strings. Its only PD-related traffic is the unused <code>0x15/08</code> TLV (TypeCStateLog / PDStateLog / PDBuffer / ufcs_log), whose contents it never parses (§3.2).</p></div>
+
+<h3>8.4 Device info, OTP and UID (via 0x44)</h3>
+<p>Layout from captured replies decrypted with key0. Fields are NUL-terminated 12-byte slots.</p>
+<div class="tw"><table>
+<tr><th>Addr / len</th><th>Content</th></tr>
+<tr><td><code>0x420</code> / 0x40</td><td>bootloader/HW block: <code>u32 0, u32 0x08001FFF, 8×FF</code>; @0x10 model <code>"KM003C"</code>, @0x1C <b>HW version</b> (<code>"2.1"</code>), @0x28 date, @0x34 empty</td></tr>
+<tr><td><code>0x4420</code> / 0x40</td><td>app block: <code>u32 0x4000</code> (load base), <code>u32 FFFFFFFF</code>, <code>u32 image size</code>, <code>u32 checksum?</code>; @0x10 model, @0x1C <b>FW version</b> (e.g. <code>"1.9.5"</code>), @0x28 build date, @0x34 <code>"1"</code>. If <code>u32@0 == FFFFFFFF</code> the app shows "none" (<code>Mt FUN_14007b790</code> L65348)</td></tr>
+<tr><td><code>0x3000C00</code> / 0x40</td><td>OTP ASCII, space-separated: serial number, a 32-hex-character ID, a Unix manufacture timestamp, a short code; FF-padded (<code>Mt FUN_140143720</code> splits it)</td></tr>
+<tr><td><code>0x40010450</code> / 0x0C</td><td>12-byte MCU unique ID (reply = one AES block: 12 B + 4×00)</td></tr>
+</table></div>
+<p>2.5.2 builds its info list from <code>0x420</code> (4 strings) followed by <code>0x4420</code> (4 strings). The version label shows list entry 5, i.e. <code>0x4420@0x1C</code>, in APP mode, and entry 1 (<code>0x420@0x1C</code>) in DFU mode (<code>Mt FUN_140011b10</code> L10563–10604). 3.0.0 QML uses <code>info.get(0).name</code> as the model and <code>info.get(5).name //版本号</code> ("version number") as the firmware version.</p>
+
+<h3>8.5 Settings blob (att 0x008), 180 bytes</h3>
+<p>Sources: <code>PDM FUN_14000cc30</code> L8013–8061 and <code>Mt FUN_14007a8d0</code> L64747–64757.</p>
+<div class="tw"><table>
+<tr><th>Offset / bits</th><th>Meaning</th><th>PDM write key</th></tr>
+<tr><td>u32@0x00 bit 0</td><td>button group (probably language)</td><td>1</td></tr>
+<tr><td>bits 3–9</td><td>brightness 0–127 (default 50)</td><td>3</td></tr>
+<tr><td>bits 10–11 / 14–15 / 16–18</td><td>three combos (logo/rotate/theme/reduce; exact mapping not recovered)</td><td>4 / 6 / 7</td></tr>
+<tr><td>bit 27 (<code>&gt;&gt;26 &amp; 2</code>)</td><td>checkbox (probably auto-rotate)</td><td>—</td></tr>
+<tr><td>u32@0x1C…0x2C, 0x30…0x40, 0x58</td><td>voltage cal ×5, current cal ×5, offset (display only)</td><td>—</td></tr>
+<tr><td>u32@0x60 bits 0–1</td><td>combo (default 1)</td><td>0x15</td></tr>
+<tr><td>u32@0x60 bits 2–3</td><td><b>sample-rate index</b></td><td>0x14</td></tr>
+</table></div>
+<p><b>CONFLICT, rate index 0:</b> Mtools period table = 1000 ms (1 SPS); PDM label = "2 SPS"; new-ADC PDF = "4 per second". 3.0.0 offers 0.1 / 1 / 10 / 100 / 1000 SPS, stored as µs (<code>indexToUsec = 1000000/value</code>).</p>
+<p><b>PDM settings write</b> (type 0x0A, <span class="tag unsafe">UNSAFE</span>):</p>
+<ul>
+<li>The body is a list of <code>{u32 0x01008000|key, u32 value}</code>, terminated by key <code>0x7FFF = 0x1234</code> (<code>PDM FUN_14000c780</code>).</li>
+<li>The "reset" button sends <b>key 8 = 1, a factory reset</b> (<code>PDM FUN_14000d090</code> L8080–8111).</li>
+</ul>
+
+<h2 id="auth">9. Authentication and crypto</h2>
+<ul>
+<li><b>Cipher:</b> AES-128 with the standard tables (S-box @<code>Mt 0x1402836c0</code>). Each 16-byte block is encrypted independently (<code>Mt FUN_14007d930</code>), i.e. <b>ECB</b>.</li>
+<li><b>Padding</b> (<code>Mt FUN_14007e970</code>): mode 3 = the last partial block is padded with 0xFF. All protocol uses select mode 3.</li>
+<li><b>Key selection:</b> <code>Mt FUN_140080d20(idx)</code> slices 16 bytes out of an obfuscation string. The same strings and function are in <code>PDM FUN_1400182a0</code>, and the strings are in 3.0.0.</li>
+<li><b>Validation:</b> everything below was checked by decrypting captured traffic with a small AES/CRC-32 script.</li>
+</ul>
+<div class="tw"><table>
+<tr><th>idx</th><th>Source string</th><th>Offset</th><th>Key</th><th>Use</th></tr>
+<tr><td>0</td><td><code>NmR0R.uz3KgNOu4xufpWLh2yfB7n6X7d9a5ZBwLe/CZ.iz8</code></td><td>20</td><td><code>Lh2yfB7n6X7d9a5Z</code><br><code>4c6832796642376e365837643961355a</code></td><td>0x44/0x4A, encrypted replies, firmware image</td></tr>
+<tr><td>1</td><td><code>7imR35uca2H54rsdkW78R3k5dj0fHvcRmYA9xpHTtlTzTQ4</code></td><td>14</td><td><code>sdkW78R3k5dj0fHv</code></td><td>no caller in 2.5.2</td></tr>
+<tr><td>2</td><td><code>MOhaDnvvU.BRgUy34VW13jHj3598equq0yNVdMa*4AdUK0g</code></td><td>13</td><td><code>Uy34VW13jHj3598e</code></td><td>no caller in 2.5.2</td></tr>
+<tr><td>3</td><td><code>XwcPWtquq0yNVdaQjaFO7LFa0b4tA25f4R038azbeXoxQ41po940gl90mNGZmdRvYk</code></td><td>22</td><td><code>Fa0b4tA25f4R038a</code><br>reply: <code>FX0b4tA25f4R038a</code></td><td>0x4C auth</td></tr>
+</table></div>
+<h3>9.1 Handshake 0x4C (<code>on_security(mode)</code>, <code>Mt FUN_14007c100</code> L65510)</h3>
+<pre><code>plain[32] = u64 now_ms | middle[16] | u64 rand
+            mode 1: middle = 16 B read from 0x40010450 (UID 12 B + 00 00 00 00)   ← used by the app
+            mode 2: middle = first 16 B of OTP 0x3000C00
+send  : 4c id 00 02 | AES_ECB(key3, plain)
+accept: reply type 0x4C; dec = AES_ECB^-1(key3 with [1]='X', reply[4:36]);
+        dec[0:8] == now_ms  &&  dec[24:32] == rand   (capture: dec == plain)</code></pre>
+<h3>9.2 Memory read 0x44 (<code>Mt FUN_14007cfb0</code> + <code>FUN_140078ef0</code>)</h3>
+<pre><code>request: 44 id 01 01 | AES_ECB(key0, u32 addr | u32 len | u32 FFFFFFFF | u32 crc32(first 12 B) | 16×FF)
+         crc32 = standard reflected 0xEDB88320 (table @Mt 0x140195ae0), e.g. 0x420/0x40 → 0x241b8c1b
+reply  : c4 id 01 01 | plaintext echo of {addr,len,FFFFFFFF,crc}   (20 B)
+         then IN transfers of AES_ECB(key0) data until len bytes; 0x06 = REJECT</code></pre>
+<p>Addresses the apps read: <code>0x420</code>, <code>0x4420</code>, <code>0x3000C00</code>, <code>0x40010450</code>, and <code>0x98000000+off</code> (SPI flash; offline logs at <code>0x98100000+</code>, <code>Mt FUN_14007c050</code> disasm <code>0x14007c067</code>).</p>
+<h3>9.3 PDM CDC memory-read variant (<code>PDM FUN_1400d9490</code> L161624)</h3>
+<pre><code>plain[48] = u32 addr | u32 len | u32 crc32(addr‖len) | 9 × u32 random
+send      = 8c id 01 02 | AES_ECB(key0, plain)[0:44]          (GET_DATA, extend, encrypted, att 0x100)
+reply     : find the same 4-byte header, then AES_ECB^-1(key = plain[16:32], rest)   (per-request session key)</code></pre>
+<div id="auth-p3"><h3>9.4 3.0.0 serial auth</h3>
+<p>The serial path has its own authentication (§3.2, §3.5):</p>
+<ul>
+<li><code>0x15/02</code> sends <code>AES_ECB(key0, rand×4 | 12 B from info | rand)</code>. The reply must echo <code>rand1</code> at <code>u32@4</code>; this is the host authenticating to the device.</li>
+<li>The <code>0x15/01</code> reply carries a block encrypted with a <b>per-device key3 variant</b> (byte [2] ∈ <code>'0'..'y'</code>) that must echo the challenge and OTP words; this is the device proving it is genuine ("private").</li>
+<li>Same key strings as 2.5.2: <code>P3 FUN_14001ac20(idx)</code>. AES helpers <code>P3 FUN_140019fd0</code> (setkey), <code>FUN_140019fc0</code> (pad mode 3), <code>FUN_140019e90</code> (encrypt), <code>FUN_140019de0</code> (decrypt).</li>
+<li>Not validated against a capture; no 3.0.0 serial capture exists.</li>
+</ul></div>
+
+<h2 id="cdc">10. CDC serial</h2>
+<h3>10.1 Simplified streaming command (official <code>doc/获取ADC数据新命令.pdf</code>), <span class="tag safe">SAFE READ</span></h3>
+<pre><code>request (1–4 bytes; just "02" is valid):
+  byte0 type:7|zero:1   01 keep-alive · 02 start ADC auto-upload · 03 stop
+  byte1 att  hi nibble  0 ADC · 1 ADC+PD · 2 ADC+UFCS · 3 ADC+PD/UFCS
+             lo nibble  0 = 4/s · 1 = 10/s · 2 = 50/s · 3 = 1000/s · 4 = 10000/s (reserved)
+  byte2 obj  ("5: 5*20 bytes")      byte3 crc8
+reply: same 4-byte header + N × 20-byte queue records (§8.2)</code></pre>
+<ul>
+<li><b>Lifetime:</b> streaming stops on USB disconnect or after 1 hour. Re-send <code>02</code> or <code>01</code> periodically to keep it running.</li>
+<li><b>CRC-8 not identified:</b> no standard CRC-8 reproduces both PDF examples (<code>02 12 05→6A</code>, <code>02 02 06→F2</code>), and no CRC-8 table exists in any binary. Send the 1-byte form.</li>
+</ul>
+<div id="cdc-p3"><p><b>3.0.0 does not use this command.</b> It uses the 0x15 frames in §3.2 instead. On CDC the meter therefore accepts at least three binary dialects: the docx 4-byte-header commands, the PDF's 1–4-byte "02" command, and the 0x15 frames.</p></div>
+<h3>10.2 PDM text commands, <span class="tag unsafe">ALL STATE-CHANGING</span></h3>
+<p>ASCII on the CDC port, baud ignored. Sources: the trigger PDF and PDM.exe strings.</p>
+<div class="tw"><table>
+<tr><th>Group</th><th>Commands</th></tr>
+<tr><td>module</td><td><code>pdm open</code>, <code>pdm close</code>, <code>reset</code>, <code>pdm set type=?,em=?,sink=?</code>, <b><code>pdm parm</code></b> (undocumented read-back)</td></tr>
+<tr><td>detection</td><td><code>entry pd|ufcs|qc|fcp|scp|afc|vfcp|sfcp|tfcp</code>, <code>entry bc</code>, <code>entry apple</code>, <code>entry list</code>, <code>entry list+</code> (VOOC/MTK PE, needs a dummy load)</td></tr>
+<tr><td>requests</td><td><code>qc ?V</code>, <code>qc3 volt=|inc=|dec=</code>, <code>fcp ?V</code>, <code>scp volt=,cur=</code>, <code>afc ?V</code>, <code>sfcp ?V</code>, <code>vfcp volt=,cur=</code>, <code>tfcp volt=,cur=</code>, <code>ufcs req=,volt=,cur=</code>, <code>ufcs pdo|cmd=|data=</code>, <code>pd pdo</code>, <code>pd req=,…</code>, <code>pd cmd=</code>, <code>pd data=</code>, <code>pd drp</code>, <b><code>pd hrst</code></b> (undocumented PD Hard Reset)</td></tr>
+<tr><td>device → host</td><td><code>ready</code>, <code>error</code>, <code>cc disconnect</code>, <code>cc1 attach</code>, <code>cc2 attach</code>, <code>pdm mode entry</code>, <code>ufcs:</code>/<code>vfcp:</code>/<code>tfcp:</code> dumps</td></tr>
+</table></div>
+
+<h2 id="proto">11. Detected fast-charge protocol</h2>
+<div id="proto-body">
+<p><b>Not found in 2.5.2</b> (Mtools or PDM):</p>
+<ul>
+<li>There is no code→name table for the meter's on-screen "detected protocol".</li>
+<li>The vendor list near <code>Mt 0x140194…</code> (Samsung, Apple, Huawei, Xiaomi, …) is a USB-IF VID→name table for PD Discover Identity.</li>
+<li><code>PD_STATUS</code> (0x020) is only hex-dumped (<code>Mt FUN_14007a8d0</code> L64722–64731).</li>
+<li>PDM detects protocols only via CDC <code>entry …</code>, which is state-changing.</li>
+</ul>
+<p><b>3.0.0: also not found.</b></p>
+<ul>
+<li>No protocol-name table, no <code>entry</code> commands, and no trigger UI.</li>
+<li>The only candidate source of protocol state is the <code>0x15/08</code> reply (TypeCStateLog / PDStateLog / PDBuffer / ufcs_log TLVs). 3.0.0 never sends it (its timer is never started) and never decodes it.</li>
+<li>The detected-protocol string therefore has to come from firmware analysis or experiments. Note that the <code>0x15/08</code> TLVs and the 2.5.2 <code>PD_STATUS</code> (0x020) block are the two device replies that might carry it, and neither PC app interprets them.</li>
+</ul></div>
+
+<h2 id="fw">12. Firmware container and upgrade path <span class="tag unsafe">UNSAFE-BOOT, documentation only</span></h2>
+<p><code>.mencrypt</code> is a Qt <code>QDataStream</code>: a <code>u32 BE</code> count, then length-prefixed UTF-16BE <code>QString</code>s, then <code>QByteArray</code>s.</p>
+<div class="tw"><table>
+<tr><th>#</th><th>KM003C_V2.0.0</th><th>Meaning</th></tr>
+<tr><td>0</td><td><code>"Firmware file"</code></td><td>magic</td></tr>
+<tr><td>1</td><td><code>"ChargerLab"</code></td><td>vendor</td></tr>
+<tr><td>2</td><td><code>"V1.0"</code></td><td>container version</td></tr>
+<tr><td>3</td><td><code>"KM003C"</code></td><td>model (also KM002C, KM002C Lite, MI2)</td></tr>
+<tr><td>4</td><td><code>"2.0.0"</code></td><td>firmware version</td></tr>
+<tr><td>5</td><td><code>"2025.2.20"</code></td><td>date</td></tr>
+<tr><td>6</td><td><code>"64118EC3"</code></td><td><b>CRC-32 of the plaintext image</b> (verified)</td></tr>
+<tr><td>7</td><td><code>"439396"</code></td><td>plaintext length (verified)</td></tr>
+<tr><td>8 / 9</td><td>120 B / 212 B</td><td>UTF-16 changelog (zh / en)</td></tr>
+<tr><td>10</td><td>439408 B</td><td><b>AES-128-ECB key0</b> image (0xFF pad). Decrypts to a Cortex-M vector table (SP <code>0x200068c8</code>, reset <code>0x4295</code>, load base <code>0x4000</code>)</td></tr>
+</table></div>
+<p><b>Upgrade on the wire</b> (2.5.2 <code>Mt FUN_14007afd0</code>, capture <code>updating_firmware</code>):</p>
+<ol>
+<li><code>CONNECT</code>.</li>
+<li><code>HEAD</code> (reply <code>u32@4</code> must be 0).</li>
+<li><code>0x42</code> descriptor (64 B: model flag 0x4000, size, version, CRC, rand); expect <code>ACCEPT</code>.</li>
+<li>Send the ciphertext in 0xFF0-byte bulk writes, each answered with <code>SYNC (0x01)</code>.</li>
+<li>Wait for <code>FINISHED (0x07)</code>.</li>
+</ol>
+<p>JUMP_DFU/APROM (0x09/0x08) switch between the bootloader and the application.</p>
+<div id="fw-p3"><p><b>3.0.0 upgrade</b> (<code>Upgrade</code> class) builds the 0x42 descriptor differently:</p>
+<ul>
+<li><code>P3 FUN_1400dfe40</code> decrypts the image with key0 and takes the 64-byte info block at <b>image offset 0x420</b> (the same layout as the device's <code>0x4420</code> block).</li>
+<li>It checks that the block's model string matches the device.</li>
+<li>It patches in size, CRC and a random word, and sends it as type 0x42 (L167492–167530).</li>
+<li>Process states in the moc enum: Start, Erase, Dnload, Verify, VerifyFail, VerifyCorrect, Finished, TestJump, ReadInfo, ReadOpt, ReadQuid, ReadFlash1.</li>
+</ul></div>
+
+<h2 id="mobile">13. Android / iOS</h2>
+<ul>
+<li><b>Android</b> <code>cn.powerz.powerdumper</code> 1.0.1 (vivo store; jadx): <b>no KM003C/KM002C support</b>.
+  <ul>
+  <li>No USB-host feature or filter.</li>
+  <li>No <code>UsbDevice</code>, <code>bulkTransfer</code> or <code>controlTransfer</code>, and no VID <code>0x5FC9</code>/24521.</li>
+  <li>No native libraries and no Bluetooth.</li>
+  <li>The only <code>UsbManager</code> reference is androidx's service-name table (<code>ContextCompat.java:34</code>).</li>
+  <li>The app reads the phone's own battery voltage/current (<code>PowerFragment.java:259–316</code>).</li>
+  <li>Play's 1.0.3 could not be downloaded and is unchecked.</li>
+  </ul></li>
+<li><b>iOS</b> 1.1 (<code>com.powerz.powercalculator</code>): the listing describes a phone power tool only; the app was not obtainable.</li>
+</ul>
+
+<h2 id="avoid">14. What the Go client must never send</h2>
+<div class="danger">
+<ul>
+<li>Control types <code>0x04</code> RESET, <code>0x08</code> JUMP_APROM, <code>0x09</code> JUMP_DFU, <code>0x0A</code> settings write (key 8 = factory reset), <code>0x0D</code> GET_FILE.</li>
+<li>Data types <code>0x42</code>, <code>0x48</code>, <code>0x4A</code>, and raw 4080-byte firmware chunks.</li>
+<li>HEAD as part of an upgrade, and the 2.5.2 auto-jump on a non-zero HEAD word.</li>
+<li><code>0x44</code> reads outside the five documented addresses.</li>
+<li>3.0.0 <code>setOtpID</code> / <code>allocOtpID</code> / <code>jumpApp</code> paths.</li>
+<li>Every CDC text command (<code>pdm …</code>, <code>entry …</code>, <code>reset</code>, <code>qc…</code>, <code>pd …</code>, <code>pd hrst</code>, <code>ufcs …</code> …).</li>
+</ul>
+</div>
+<p><b>Safe set:</b></p>
+<ul>
+<li>CONNECT, the 0x4C auth (mode 1), and 0x44 reads of the info/OTP/UID addresses.</li>
+<li>GET_DATA with bits 0x001/0x002/0x008/0x010/0x040/0x200.</li>
+<li>START/STOP_QUEUE and START/STOP_ANALYZER (sampling or sniffing only).</li>
+<li>CDC <code>02</code>/<code>01</code>/<code>03</code>.</li>
+</ul>
+<p>Parse the ADC block by its sub-header <code>size</code>. Expect REJECT on START_QUEUE and recover the way the official app does.</p>
+<div id="avoid-p3"><p><b>Added by 3.0.0:</b></p>
+<ul>
+<li>Type <b>0x43 OTP write</b> (permanent device identity).</li>
+<li><code>0x15/05</code> with any attribute other than <code>0x32</code>: unknown "set" semantics. <code>0x32</code> itself only starts/stops the stream.</li>
+<li>Modbus RTU frames.</li>
+</ul>
+<p><b>Safe 3.0.0 reads:</b> <code>0x15/01</code>, <code>0x15/02</code>, <code>0x15/07</code>, <code>0x15/08</code>.</p></div>
+
+<h2 id="art">15. Method</h2>
+<ul>
+<li><b>Inputs:</b> the official files listed in §2, identified by package-relative name and SHA-256. Downloaded files were treated as untrusted data and never executed.</li>
+<li><b>Decompilation:</b> a Ghidra 12.2 headless script decompiled every function of <code>qt6_x64/POWER-Z.exe</code> (3.0.0), <code>Mtools.exe</code> and <code>PDM.exe</code> (2.5.2), and listed string cross-references. radare2 was used for disassembly checks.</li>
+<li><b>QML:</b> recovered from the 3.0.0 executable's embedded Qt resources: 16 zlib-compressed files and 17 plain-text files. The rest exist only as qmlcache bytecode.</li>
+<li><b>Helper scripts:</b> small scripts parsed the <code>.mencrypt</code> QDataStream header, carved length-prefixed text resources, brute-forced CRC-8 parameters, and verified the AES keys and CRC-32 against captured traffic.</li>
+</ul>
+</main>
+</body>
+</html>

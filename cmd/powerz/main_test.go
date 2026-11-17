@@ -113,13 +113,16 @@ func loadADC(t *testing.T) km003c.ADC {
 // The JSON field names are a contract; renaming one requires bumping
 // schemaVersion.
 func TestSnapshotFieldNames(t *testing.T) {
-	s := toSnapshot(loadADC(t), time.Unix(0, 0).UTC(), "050002")
+	a := loadADC(t)
+	a.ApplyTail(km003c.TailLayoutFor("1.9.5"))
+	s := toSnapshot(a, time.Unix(0, 0).UTC(), "050002", "1.9.5")
 	b, _ := json.Marshal(s)
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
-	want := []string{"schema_version", "time", "serial", "vbus_v", "ibus_a", "power_w", "vbus_avg_v",
-		"ibus_avg_a", "power_avg_w", "temp_c", "cc1_v", "cc2_v", "dp_v", "dm_v", "vdd_v",
-		"cc2_avg_v", "dp_avg_v", "dm_avg_v", "inferred", "raw"}
+	want := []string{"schema_version", "time", "serial", "firmware_version", "vbus_v", "ibus_a", "power_w",
+		"vbus_avg_v", "ibus_avg_a", "power_avg_w", "temp_c", "temp2_c", "cc1_v", "cc2_v", "dp_v", "dm_v",
+		"vdd_v", "cc2_avg_v", "dp_avg_v", "dm_avg_v", "sample_rate_sps", "sink_battery_percent",
+		"inferred", "raw"}
 	for _, k := range want {
 		if _, ok := m[k]; !ok {
 			t.Errorf("missing field %q", k)
@@ -136,8 +139,14 @@ func TestSnapshotFieldNames(t *testing.T) {
 			t.Errorf("schema documents %q but snapshot lacks it", k)
 		}
 	}
-	if s.VBusV < 0.004 || s.VBusV > 0.007 || s.TempC == nil {
+	if s.VBusV < 0.004 || s.VBusV > 0.007 || s.TempC == nil || s.Temp2C != nil {
 		t.Errorf("values: %+v", s)
+	}
+	if s.SampleRateSPS == nil || *s.SampleRateSPS != 50 || s.CC2AvgV == nil || s.Raw.TailLayout != "line-averages" {
+		t.Errorf("firmware-dependent fields: %+v", s)
+	}
+	if s.Inferred.DashboardLabel != "[ N/A ]" { // VBUS ~5 mV, as on the meter's screen
+		t.Errorf("dashboard label %q", s.Inferred.DashboardLabel)
 	}
 }
 

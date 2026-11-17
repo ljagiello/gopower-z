@@ -223,8 +223,9 @@ func render(st style, s *session, a *km003c.ADC, info km003c.DeviceInfo, infoErr
 	line("")
 	line("  %s %s   %s %s   %s", st.cyan("CC1"), fmt.Sprintf("%.4f V", a.CC1V()),
 		st.purple("CC2"), fmt.Sprintf("%.4f V", a.CC2V()), st.dim(ccHint(a.CC1V(), a.CC2V())))
-	line("  %s %s   %s %s   %s", st.green("D+ "), fmt.Sprintf("%.4f V", a.DPV()),
-		st.yellow("D- "), fmt.Sprintf("%.4f V", a.DMV()), st.dim(dataLineHint(a.DPV(), a.DMV())))
+	l1, l2 := km003c.DashboardLabels(*a)
+	line("  %s %s   %s %s   %s %s", st.green("D+ "), fmt.Sprintf("%.4f V", a.DPV()),
+		st.yellow("D- "), fmt.Sprintf("%.4f V", a.DMV()), st.bold("Protocol "+l1), st.dim(l2))
 	line("")
 	sw := max(w-12, 10)
 	line("  %s %s", st.dim("|P| "), st.blue(sparkline(s.history, sw)))

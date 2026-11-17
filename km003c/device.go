@@ -21,6 +21,13 @@ type Device struct {
 	// request in that state, so the endpoint is drained before the next
 	// write.
 	dirty bool
+	// lastIO is when the last frame was exchanged. After an idle gap the
+	// meter may have queued an unsolicited DISCONNECT (firmware 2.0.7 drops
+	// the session after ~10 s), so the endpoint is drained first.
+	lastIO time.Time
+	// layout selects how ADC tail bytes are decoded (see DetectLayout).
+	layout   TailLayout
+	firmware string
 
 	// Timeout bounds each request/reply exchange.
 	Timeout time.Duration
@@ -41,6 +48,10 @@ func (d *Device) Transport() Transport { return d.t }
 
 // Close closes the transport.
 func (d *Device) Close() error { return d.t.Close() }
+
+// idleDrainAfter is how long the link may be idle before the IN endpoint is
+// drained ahead of the next request.
+const idleDrainAfter = 4 * time.Second
 
 // drain discards everything queued on the IN endpoint (stale replies and
 // zero-length packets) until a read times out.
@@ -68,10 +79,15 @@ func (d *Device) write(ctx context.Context, frame []byte) error {
 	if err := CheckRequest(frame, d.t.Kind()); err != nil {
 		return err
 	}
-	if d.dirty {
+	idle := !d.lastIO.IsZero() && time.Since(d.lastIO) > idleDrainAfter
+	if d.dirty || idle {
 		d.drain()
 		d.dirty = false
 	}
+	if idle {
+		d.connected = false // the meter may have dropped the session
+	}
+	d.lastIO = time.Now()
 	if d.Trace != nil {
 		d.Trace("tx", frame)
 	}
@@ -167,7 +183,9 @@ func (d *Device) ReadADC(ctx context.Context) (ADC, error) {
 	if !ok {
 		return ADC{}, fmt.Errorf("km003c: reply has no ADC section")
 	}
-	return ParseADC(s.Payload)
+	a, err := ParseADC(s.Payload)
+	a.ApplyTail(d.layout)
+	return a, err
 }
 
 // ReadADCAndPD reads an ADC snapshot together with the pending PD events in a
@@ -187,6 +205,7 @@ func (d *Device) ReadADCAndPD(ctx context.Context) (ADC, *PDPacket, error) {
 	if err != nil {
 		return a, nil, err
 	}
+	a.ApplyTail(d.layout)
 	if ps, ok := FindSection(secs, AttPDPacket); ok {
 		pd, err := ParsePDPacket(ps.Payload)
 		if err != nil {
@@ -349,5 +368,44 @@ func (d *Device) ReadInfo(ctx context.Context) (DeviceInfo, error) {
 		}
 		b.parse(data, &info)
 	}
+	d.setFirmware(info.FirmwareVersion)
 	return info, nil
 }
+
+func (d *Device) setFirmware(v string) {
+	d.firmware = v
+	d.layout = TailLayoutFor(v)
+}
+
+// DetectLayout reads the application firmware version (CONNECT plus one
+// MemoryRead, bulk only) and selects the matching ADC tail layout for
+// subsequent reads. It returns the firmware version. Without it, the
+// firmware-dependent ADC tail bytes are left undecoded.
+func (d *Device) DetectLayout(ctx context.Context) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.firmware != "" {
+		return d.firmware, nil
+	}
+	if d.t.Kind() != Bulk {
+		return "", fmt.Errorf("km003c: firmware version is only available over the bulk interface")
+	}
+	if err := d.connect(ctx); err != nil {
+		return "", err
+	}
+	data, err := d.memoryRead(ctx, addrFirmware, 64)
+	if err != nil {
+		return "", fmt.Errorf("read firmware block: %w", err)
+	}
+	var info DeviceInfo
+	ParseFirmwareBlock(data, &info)
+	d.setFirmware(info.FirmwareVersion)
+	return d.firmware, nil
+}
+
+// FirmwareVersion returns the version learned by ReadInfo or DetectLayout,
+// or "" if neither has run.
+func (d *Device) FirmwareVersion() string { return d.firmware }
+
+// Layout returns the ADC tail layout in use.
+func (d *Device) Layout() TailLayout { return d.layout }

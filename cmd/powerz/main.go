@@ -269,6 +269,11 @@ func open(ctx context.Context, g globals) (*meter, error) {
 			fmt.Fprintf(os.Stderr, "%s %-9s %s\n", time.Now().Format("15:04:05.000"), dir, hexdump(f))
 		}
 	}
+	// The ADC tail layout depends on the firmware version. Failure is not
+	// fatal: the firmware-dependent fields are then reported as null.
+	if _, err := d.DetectLayout(ctx); err != nil && g.trace {
+		fmt.Fprintln(os.Stderr, "powerz: firmware version unknown:", err)
+	}
 	return &meter{Device: d, usb: t.Description()}, nil
 }
 

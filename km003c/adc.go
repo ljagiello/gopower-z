@@ -22,14 +22,106 @@ type ADC struct {
 	CC1, CC2  uint16 // CC line voltages, 0.1 mV
 	DP, DM    uint16 // D+ / D- voltages, 0.1 mV
 	VDD       uint16 // internal supply, 0.1 mV
-	// Averages in the 44-byte payload (offsets 0x26-0x2B), 1 mV units.
-	// Verified on firmware 1.9.5 against the live CC2/D+/D- readings.
-	HasLineAvg bool
+	Tail      []byte // payload bytes 0x24.. verbatim
+
+	// Fields below are decoded from Tail by ApplyTail; their layout depends
+	// on the firmware version (see TailLayoutFor).
+	Layout     TailLayout
+	Temp2Raw   int16 // second temperature channel, 1/128 °C; -32768 = absent
+	RateIndex  int   // configured sample rate (0=2, 1=10, 2=50, 3=1000 SPS); -1 unknown
+	HasLineAvg bool  // CC2/D+/D- averages present (TailLineAverages)
 	CC2AvgMV   uint16
 	DPAvgMV    uint16
 	DMAvgMV    uint16
-	Tail       []byte // payload bytes 0x24.. verbatim (0x24/0x25 are undocumented)
+	HasStatus  bool  // TailStatus fields present
+	Accel      uint8 // accelerometer status (low nibble) and orientation (high nibble, 0xF = flat)
+	// BatteryPermille is the sink's battery level learned from sniffed PD
+	// traffic, in 0.1 % units; 0 when unknown.
+	BatteryPermille uint16
 }
+
+// TailLayout identifies how ADC payload bytes 0x24..0x2B are laid out. The
+// meaning changed between firmware versions (docs/firmware.html).
+type TailLayout int
+
+const (
+	// TailUnknown: firmware version unknown; only Tail is filled.
+	TailUnknown TailLayout = iota
+	// TailLineAverages (firmware up to 2.0.0): 0x24 i16 second temperature,
+	// 0x26 u16 CC2 average in mV whose low 2 bits hold the sample-rate index,
+	// 0x28 u16 D+ average mV, 0x2A u16 D- average mV.
+	TailLineAverages
+	// TailStatus (newer firmware): 0x24 i16 second temperature, 0x26 u8
+	// sample-rate index, 0x27 u8 accelerometer status, 0x28 u16 battery ‰.
+	TailStatus
+)
+
+func (l TailLayout) String() string {
+	switch l {
+	case TailLineAverages:
+		return "line-averages"
+	case TailStatus:
+		return "status"
+	}
+	return "unknown"
+}
+
+// TailLayoutFor returns the tail layout used by an application firmware
+// version such as "1.9.5" or "2.0.7".
+func TailLayoutFor(version string) TailLayout {
+	var a, b, c int
+	if n, _ := fmt.Sscanf(version, "%d.%d.%d", &a, &b, &c); n != 3 {
+		return TailUnknown
+	}
+	v := a*10000 + b*100 + c
+	switch {
+	case v <= tailLastLineAverages:
+		return TailLineAverages
+	case v >= tailFirstStatus:
+		return TailStatus
+	}
+	return TailUnknown
+}
+
+// Version boundaries (major*10000 + minor*100 + patch). Verified by firmware
+// analysis: 1.9.5 (captured), 1.9.9 and 2.0.0 use line averages; 2.0.6 (device
+// observation by open-powerz) and 2.0.7 use the status layout.
+const (
+	tailLastLineAverages = 20000
+	tailFirstStatus      = 20006
+)
+
+// ApplyTail decodes the firmware-dependent tail bytes.
+func (a *ADC) ApplyTail(l TailLayout) {
+	a.Layout = l
+	a.RateIndex = -1
+	t := a.Tail
+	if l == TailUnknown || len(t) < 8 {
+		return
+	}
+	le := binary.LittleEndian
+	a.Temp2Raw = int16(le.Uint16(t[0:]))
+	switch l {
+	case TailLineAverages:
+		cc2 := le.Uint16(t[2:])
+		a.RateIndex = int(cc2 & 3)
+		a.CC2AvgMV = cc2 &^ 3
+		a.DPAvgMV = le.Uint16(t[4:])
+		a.DMAvgMV = le.Uint16(t[6:])
+		a.HasLineAvg = true
+	case TailStatus:
+		a.RateIndex = int(t[2] & 3)
+		a.Accel = t[3]
+		a.BatteryPermille = le.Uint16(t[4:])
+		a.HasStatus = true
+	}
+}
+
+// Temp2Valid reports whether the second temperature channel is present.
+func (a ADC) Temp2Valid() bool { return a.Layout != TailUnknown && a.Temp2Raw != -32768 }
+
+// Temp2C returns the second temperature channel in °C.
+func (a ADC) Temp2C() float64 { return float64(a.Temp2Raw) / 128 }
 
 // Request for a single ADC snapshot.
 func ADCRequest(id uint8) []byte {
@@ -60,12 +152,7 @@ func ParseADC(p []byte) (ADC, error) {
 	if len(p) > adcCoreSize {
 		a.Tail = append([]byte(nil), p[adcCoreSize:]...)
 	}
-	if len(p) >= 0x2C {
-		a.HasLineAvg = true
-		a.CC2AvgMV = le.Uint16(p[0x26:])
-		a.DPAvgMV = le.Uint16(p[0x28:])
-		a.DMAvgMV = le.Uint16(p[0x2A:])
-	}
+	a.RateIndex = -1
 	return a, nil
 }
 

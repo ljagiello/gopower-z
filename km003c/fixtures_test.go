@@ -76,6 +76,10 @@ func TestFixtureADC(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
+		if a.HasLineAvg || a.RateIndex != -1 {
+			t.Fatalf("%s: tail decoded without a known layout", f)
+		}
+		a.ApplyTail(TailLayoutFor("1.9.5"))
 		// Screen at capture time: VBUS ≈ 5 mV, IBUS 0, ~27 °C,
 		// D+ 0.086, D- 0.090, CC1 0.068, CC2 0.027.
 		within := func(name string, v, lo, hi float64) {
@@ -94,9 +98,17 @@ func TestFixtureADC(t *testing.T) {
 		if !a.HasLineAvg {
 			t.Fatalf("%s: no line averages", f)
 		}
-		within("CC2 avg", float64(a.CC2AvgMV)/1000, 0.024, 0.030)
+		within("CC2 avg", float64(a.CC2AvgMV)/1000, 0.022, 0.030)
 		within("D+ avg", float64(a.DPAvgMV)/1000, 0.083, 0.088)
 		within("D- avg", float64(a.DMAvgMV)/1000, 0.087, 0.092)
+		// The settings block reports rate code 2 (50 SPS); on firmware
+		// <= 2.0.0 it lives in the low bits of the CC2 average.
+		if a.RateIndex != 2 {
+			t.Errorf("%s: rate index %d, want 2", f, a.RateIndex)
+		}
+		if a.Temp2Valid() {
+			t.Errorf("%s: second temperature should be absent (0x8000)", f)
+		}
 	}
 }
 

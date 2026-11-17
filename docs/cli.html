@@ -117,7 +117,7 @@ powerz schema                # everything below, as JSON</code></pre>
   <li><strong>Every command can be bounded.</strong> <code>read</code>, <code>measure</code>, <code>info</code>, <code>devices</code> and <code>schema</code> terminate on their own. <code>log</code> and <code>pd</code> take <code>-duration</code> or <code>-n</code>, and automation should always pass one.</li>
   <li><strong>One process per meter.</strong> The USB interface is exclusive. A concurrent call fails with <code>busy</code> (exit 4, retryable) unless you pass <code>-wait 10s</code>, which queues behind the other process.</li>
   <li><strong>Common flags work anywhere</strong>, before or after the command: <code>-json -text -serial S -timeout D -wait D -trace</code>.</li>
-  <li><strong>Interpretations are separated from measurements.</strong> Fields under <code>inferred</code> are powerz's interpretation of voltages, not data from the meter.</li>
+  <li><strong>Interpretations are separated from measurements.</strong> Fields under <code>inferred</code> are computed by powerz, not reported by the meter.</li>
 </ul>
 </div>
 
@@ -137,12 +137,12 @@ powerz schema                # everything below, as JSON</code></pre>
 
 <h3>Example: <code>powerz read</code> (piped)</h3>
 <p>Captured from a real meter with nothing attached (firmware 1.9.5):</p>
-<pre><code>{"schema_version":1,"time":"2026-11-16T16:35:46.541866-08:00","serial":"050002",
- "vbus_v":0.005192,"ibus_a":0.000008,"power_w":0,"vbus_avg_v":0.005304,"ibus_avg_a":-0.000019,
- "power_avg_w":0,"temp_c":27.844,"cc1_v":0.0696,"cc2_v":0.028,"dp_v":0.0863,"dm_v":0.0906,
- "vdd_v":3.2052,"cc2_avg_v":0.026,"dp_avg_v":0.085,"dm_avg_v":0.091,
- "inferred":{"cc":"no Type-C termination detected","data_lines":"idle (no data-line signalling)"},
- "raw":{"vbus_uncal_avg_uv":5404,"ibus_uncal_avg_ua":-63,"tail_hex":"00 80 1A 00 55 00 5B 00"}}</code></pre>
+<pre><code>{"schema_version":1,"time":"2026-11-16T16:58:05.178365-08:00","serial":"050002","firmware_version":"1.9.5",
+ "vbus_v":0.00529,"ibus_a":-0.000032,"power_w":0,"vbus_avg_v":0.005382,"ibus_avg_a":-0.000045,"power_avg_w":0,
+ "temp_c":28.164,"temp2_c":null,"cc1_v":0.0703,"cc2_v":0.028,"dp_v":0.0862,"dm_v":0.0905,"vdd_v":3.2052,
+ "cc2_avg_v":0.024,"dp_avg_v":0.085,"dm_avg_v":0.089,"sample_rate_sps":50,"sink_battery_percent":null,
+ "inferred":{"dashboard_label":"[ N/A ]","dashboard_label_2":"[ N/A ]","cc":"no Type-C termination detected"},
+ "raw":{"vbus_uncal_avg_uv":5482,"ibus_uncal_avg_ua":-89,"tail_layout":"line-averages","tail_hex":"00 80 1A 00 55 00 59 00"}}</code></pre>
 
 <h3>Example: <code>powerz measure -duration 2s</code></h3>
 <pre><code>{"schema_version":1,"serial":"050002","start":"…","end":"…","duration_s":2.001,"interval_s":0.1,
@@ -181,10 +181,14 @@ powerz schema                # everything below, as JSON</code></pre>
 <tr><td><code>temp_c</code></td><td>Meter temperature; <code>null</code> when the meter flags it invalid (e.g. at 1000 SPS).</td></tr>
 <tr><td><code>cc1_v</code>, <code>cc2_v</code></td><td>Type-C configuration channel voltages.</td></tr>
 <tr><td><code>dp_v</code>, <code>dm_v</code></td><td>USB D+ / D− voltages (used by BC1.2, Apple, QC, etc. signalling).</td></tr>
-<tr><td><code>cc2_avg_v</code>, <code>dp_avg_v</code>, <code>dm_avg_v</code></td><td>The meter's averages of CC2, D+ and D− (1 mV resolution), verified on firmware 1.9.5.</td></tr>
+<tr><td><code>cc2_avg_v</code>, <code>dp_avg_v</code>, <code>dm_avg_v</code></td><td>The meter's averages of CC2, D+ and D−. Only firmware up to 2.0.0 reports them; on newer firmware they are <code>null</code>. Verified on firmware 1.9.5.</td></tr>
+<tr><td><code>firmware_version</code></td><td>The meter's application firmware. It is read once per invocation and selects how the firmware-dependent fields are decoded.</td></tr>
+<tr><td><code>sample_rate_sps</code></td><td>The sample rate configured on the meter: 2, 10, 50 or 1000.</td></tr>
+<tr><td><code>temp2_c</code></td><td>The second (reserved, external) temperature channel; normally <code>null</code>.</td></tr>
+<tr><td><code>sink_battery_percent</code></td><td>The sink's battery level as learned by the meter from USB-PD traffic (newer firmware only); otherwise <code>null</code>.</td></tr>
+<tr><td><code>inferred.dashboard_label</code>, <code>inferred.dashboard_label_2</code></td><td>The meter's own D+/D− protocol labels (<code>DCP</code>, <code>Apple 2.4A</code>, <code>QC2.0 9V</code>, <code>FCP | AFC</code>, <code>SFCP 9V</code>, <code>[ N/A ]</code>, …). powerz recomputes them from VBUS, D+ and D− with the algorithm ported from the meter firmware, so they match the screen.</td></tr>
 <tr><td><code>vdd_v</code></td><td>The meter's internal supply voltage.</td></tr>
 <tr><td><code>inferred.cc</code></td><td>powerz's reading of the CC levels (Default USB / 1.5 A / 3.0 A Type-C advertisement). Inference.</td></tr>
-<tr><td><code>inferred.data_lines</code></td><td>powerz's reading of D+/D− levels against known Apple, BC1.2 and QC patterns. Inference.</td></tr>
 <tr><td><code>raw.*</code></td><td>Uncalibrated averages and the ADC tail bytes, for debugging.</td></tr>
 <tr><td><code>energy_wh</code>, <code>charge_mah</code></td><td>(measure) Signed integrals of power and current over the measurement.</td></tr>
 <tr><td><code>pd.source_capabilities</code></td><td>(measure) PDOs most recently advertised by the charger.</td></tr>
@@ -241,7 +245,8 @@ powerz schema                # everything below, as JSON</code></pre>
 <h2 id="caveats">9. Caveats</h2>
 <ul>
   <li><strong>IBUS sign convention:</strong> which direction is positive has not yet been verified with a known load. Energy and charge are signed accordingly.</li>
-  <li><strong>Detected fast-charge protocol:</strong> the protocol the meter shows on its screen is not exposed over USB by any known command. <code>inferred</code> fields and PD capture are the substitutes.</li>
+  <li><strong>Detected fast-charge protocol:</strong> the meter's D+/D− dashboard labels are reproduced exactly (<code>inferred.dashboard_label*</code>). Protocols the meter detects by sniffing (AFC, FCP, SCP, UFCS, VOOC) are kept only in firmware RAM and are not exposed over USB. USB-PD details come from <code>pd</code> and the <code>pd</code> section of <code>measure</code>.</li>
+  <li><strong>IBUS sign:</strong> the official app and open-powerz state that negative means current flowing from the meter's female receptacle to its male plug. This has not yet been checked on a bench with a known load.</li>
   <li><strong>Polling rate:</strong> the meter samples at its configured rate (2, 10, 50 or 1000 SPS, see <code>info</code>). Polling faster only repeats values.</li>
   <li><strong>PD buffer:</strong> reading PD drains the meter's PD buffer, so only one consumer sees each record.</li>
 </ul>

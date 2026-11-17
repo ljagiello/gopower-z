@@ -33,7 +33,7 @@ func setupRead(fs *flag.FlagSet) func(context.Context, globals) error {
 		if err != nil {
 			return err
 		}
-		snap := toSnapshot(a, time.Now(), m.usb.Serial)
+		snap := toSnapshot(a, time.Now(), m.usb.Serial, m.FirmwareVersion())
 		if g.jsonMode() {
 			return emitIndented(snap)
 		}
@@ -62,8 +62,11 @@ func printSnapshotText(s snapshot, a km003c.ADC) {
 	row("D-", st.yellow(fmt.Sprintf("%.4f V", s.DMV)), avgText(s.DMAvgV))
 	row("VDD", fmt.Sprintf("%.4f V", s.VDDV), "meter internal supply")
 	fmt.Println()
+	fmt.Println("  " + st.dim("label: ") + s.Inferred.DashboardLabel + " / " + s.Inferred.DashboardLabel2 + st.dim("  (meter's D+/D- dashboard labels, recomputed)"))
 	fmt.Println("  " + st.dim("CC:    ") + s.Inferred.CC + st.dim("  (inferred)"))
-	fmt.Println("  " + st.dim("D+/D-: ") + s.Inferred.DataLines + st.dim("  (inferred)"))
+	if s.FirmwareVersion != "" {
+		fmt.Println("  " + st.dim("firmware "+s.FirmwareVersion))
+	}
 }
 
 func avgText(v *float64) string {
@@ -155,7 +158,7 @@ func setupMeasure(fs *flag.FlagSet) func(context.Context, globals) error {
 				if a.TempValid() {
 					temp.add(a.TempC())
 				}
-				s := toSnapshot(a, now, m.usb.Serial)
+				s := toSnapshot(a, now, m.usb.Serial, m.FirmwareVersion())
 				last = &s
 				res.Samples++
 				if pd != nil {
@@ -287,7 +290,7 @@ func setupLog(fs *flag.FlagSet) func(context.Context, globals) error {
 				}
 				return err
 			}
-			if err := write(toSnapshot(a, time.Now(), m.usb.Serial)); err != nil {
+			if err := write(toSnapshot(a, time.Now(), m.usb.Serial, m.FirmwareVersion())); err != nil {
 				if isBrokenPipe(err) {
 					return nil
 				}
