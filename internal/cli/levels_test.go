@@ -267,8 +267,8 @@ func TestLevelsShortLevelJoinsCloserNeighbour(t *testing.T) {
 			}
 			ss = append(ss, sample{T: tt, I: i})
 		}
-		l := newLevelSet(ss, values(ss, func(s sample) float64 { return s.I }), []int{0, 200, 230, 600}, 60)
-		l.persist(levelMinS)
+		l := newLevelSet(ss, []int{0, 200, 230, 600}, 60)
+		l.persist(0)
 		if !slices.Equal(l.bounds, c.want) {
 			t.Errorf("%v / %v / %v A: bounds %v, want %v", c.a, c.b, c.c, l.bounds, c.want)
 		}

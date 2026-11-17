@@ -518,6 +518,11 @@ func TestMeasureText(t *testing.T) {
 	if s := text(one); strings.Contains(s, "levels") {
 		t.Errorf("one level is not listed:\n%s", s)
 	}
+	two := r
+	two.Levels = []levelJSON{lv(0, 42.3, 0.134), lv(42.3, 60, 0.441)}
+	if s := text(two); !strings.HasSuffix(s, "  2 levels (typical current)\n         0.0 .. 42.3     s  134.000 mA\n        42.3 .. 60.0     s  441.000 mA\n") {
+		t.Errorf("two levels:\n%s", s)
+	}
 	three := r
 	three.Levels = []levelJSON{lv(0, 16, 0.065484), lv(16, 23, 0.0614625), lv(23, 60, -0.0000001)}
 	wantLevels := "  IBUS per 20s  ▁ █\n" +
