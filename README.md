@@ -34,14 +34,17 @@ touch firmware.
 
 ## Documentation
 
-All documentation is HTML in [`docs/`](docs/), published at
-**https://ljagiello.github.io/gopower-z/**:
+Documentation lives at **https://powerz.jagiello.dev**:
 
-- [CLI reference and agent guide](https://ljagiello.github.io/gopower-z/cli.html)
-- [KM003C USB protocol](https://ljagiello.github.io/gopower-z/protocol.html)
-- [Hardware notes](https://ljagiello.github.io/gopower-z/hardware.html)
-- [Official software reverse engineering](https://ljagiello.github.io/gopower-z/official-software-re.html)
-- [Firmware analysis](https://ljagiello.github.io/gopower-z/firmware.html)
+- [CLI reference and agent guide](https://powerz.jagiello.dev/cli)
+- [KM003C USB protocol](https://powerz.jagiello.dev/protocol)
+- [Hardware notes](https://powerz.jagiello.dev/hardware)
+- [Official software reverse engineering](https://powerz.jagiello.dev/official-software-re)
+- [Firmware analysis](https://powerz.jagiello.dev/firmware)
+
+The pages are written as HTML in [`docs/`](docs/). [`site/`](site/) wraps them
+in the site layout and builds the search index; Vercel deploys it on every push
+to `main` that touches `docs/` or `site/`.
 
 ## License
 
