@@ -19,8 +19,9 @@ concurrency:
 #   - fuzzing of every parser of untrusted meter / USB-PD data
 #   - actionlint (GitHub Actions workflow syntax and shellcheck)
 #
-# Documentation-only changes (docs/, site/, *.md, Vercel config, issue
-# templates, LICENSE) skip all of the above; only "docs are HTML only" runs.
+# Changes that cannot affect the Go build (docs/, site/, *.md, Vercel config,
+# Dependabot config, CODEOWNERS, issue templates, LICENSE) skip all of the
+# above; only "docs are HTML only" runs.
 # The skipped jobs still report success, which is what the ruleset's required
 # checks need. Matrix jobs skip their steps rather than the whole job, because
 # a skipped matrix job reports under its unexpanded name and the required
@@ -50,10 +51,10 @@ jobs:
           elif [ "$EVENT" = push ] && [ -n "${BEFORE//0/}" ]; then
             files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename')
           fi
-          # Files that are not documentation. grep -v without -q, so a SIGPIPE
-          # under pipefail can never be mistaken for "nothing else changed".
+          # Files that could affect the Go build. grep -v without -q, so a
+          # SIGPIPE under pipefail can never be mistaken for "nothing else changed".
           other=$(printf '%s\n' "$files" |
-            grep -vE '^(docs/|site/|\.github/ISSUE_TEMPLATE/)|\.md$|^(vercel\.json|\.vercelignore|LICENSE)$' || true)
+            grep -vE '^(docs/|site/|\.github/ISSUE_TEMPLATE/)|\.md$|^(vercel\.json|\.vercelignore|LICENSE|\.github/dependabot\.yml|\.github/CODEOWNERS)$' || true)
           code=true
           if [ -n "$files" ] && [ -z "$other" ]; then code=false; fi
           printf 'changed files:\n%s\n\ncode=%s\n' "$files" "$code"

@@ -19,6 +19,28 @@ updates:
           - minor
           - patch
 
+  # The docs site build (site/package.json): cheerio, Pagefind and fonts.
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+      day: monday
+    # Wait a week before proposing a new release, so a hijacked npm version
+    # is usually caught and yanked before it reaches a PR.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - javascript
+    commit-message:
+      prefix: "deps"
+    groups:
+      site-minor-patch:
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
