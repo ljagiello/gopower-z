@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/ljagiello/gopower-z/security/advisories/new
     about: Report security issues privately, not as public issues.
   - name: Protocol documentation
-    url: https://ljagiello.github.io/gopower-z/protocol.html
+    url: https://powerz.jagiello.dev/protocol
     about: Byte-level KM003C USB protocol notes used by powerz.

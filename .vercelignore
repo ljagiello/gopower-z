@@ -1,0 +1,7 @@
+# The docs site only needs docs/ (the HTML sources) and site/ (the build).
+/*
+!docs
+!site
+!vercel.json
+site/node_modules
+site/dist
