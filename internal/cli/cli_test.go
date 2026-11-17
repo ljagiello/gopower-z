@@ -477,7 +477,7 @@ func TestMeasureText(t *testing.T) {
 		Stats: measureStats{
 			VBusV:  &statJSON{Min: 5.07, Mean: 5.076, Max: 5.08, Last: 5.076, Stdev: 0.002, P5: 5.072, P50: 5.076, P95: 5.079},
 			IBusA:  &statJSON{Min: 0.12, Mean: 0.25, Max: 0.45, Last: 0.44, Stdev: 0.15, P5: 0.13, P50: 0.2, P95: 0.44},
-			PowerW: &statJSON{Min: 0.6, Mean: 1.27, Max: 2.29, Last: 2.23, Stdev: 0.76, P5: 0.66, P50: 1.01, P95: 2.23},
+			PowerW: &statJSON{Min: -0.00003, Mean: 1.27, Max: 2.29, Last: 2.23, Stdev: 0.76, P5: 0.66, P50: 1.01, P95: 2.23},
 			TempC:  &statJSON{Min: 27.9, Mean: 28, Max: 28.1, Last: 28, Stdev: 0.05, P5: 27.9, P50: 28, P95: 28.1},
 			DPV:    &statJSON{Min: 0.01, Max: 3},
 			DMV:    &statJSON{Min: 0.002, Max: 0.004},
@@ -494,7 +494,7 @@ func TestMeasureText(t *testing.T) {
 		"POWER-Z measure  050002  60.0s  600 samples  2 failed  flow receptacle_to_plug  (completed)",
 		"  VBUS  mean 5.0760 V   min 5.0700  p5 5.0720  p50 5.0760  p95 5.0790  max 5.0800  sd 0.0020",
 		"  IBUS  mean 250.000 mA   min 120.000  p5 130.000  p50 200.000  p95 440.000  max 450.000  sd 150.000",
-		"  PWR   mean 1.2700 W   min 0.6000  p5 0.6600  p50 1.0100  p95 2.2300  max 2.2900  sd 0.7600",
+		"  PWR   mean 1.2700 W   min 0.0000  p5 0.6600  p50 1.0100  p95 2.2300  max 2.2900  sd 0.7600",
 		"  TEMP  mean 28.00 °C   min 27.90  p5 27.90  p50 28.00  p95 28.10  max 28.10  sd 0.05",
 		"  D+ 0.010..3.000 V   D- 0.002..0.004 V",
 		"  energy 0.021100 Wh   charge 4.1667 mAh   over 59.900 s",

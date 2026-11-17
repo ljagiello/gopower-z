@@ -36,6 +36,8 @@ func TestDescribe(t *testing.T) {
 	// A long constant run (D+ held at 0.6 V for a full window): the
 	// variance must not round to a negative number and come out as NaN,
 	// which encoding/json would refuse, losing the whole measure object.
+	// gonum's variance goes negative here on arm64 (fused multiply-add),
+	// not on amd64, so the arm64 CI runners are the ones that catch it.
 	long := make([]float64, maxSamples)
 	for k := range long {
 		long[k] = 0.6
@@ -80,8 +82,8 @@ func TestStatAndBinKeys(t *testing.T) {
 		t.Fatalf("stats %v, bins %v", got.Stats, got.Bins)
 	}
 	for _, field := range []string{"vbus_v", "ibus_a", "power_w"} {
-		r := got.Bins[0][field].(map[string]any)
-		if r["min"] != 1.0 || r["mean"] != 4.0 || r["max"] != 10.0 {
+		r, ok := got.Bins[0][field].(map[string]any)
+		if !ok || r["min"] != 1.0 || r["mean"] != 4.0 || r["max"] != 10.0 {
 			t.Errorf("bins[0].%s = %v", field, r)
 		}
 	}

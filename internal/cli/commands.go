@@ -175,7 +175,8 @@ func fatalMidRun(err error) bool {
 
 // measureReadings is how many readings a window can hold at most. measure
 // keeps every reading until the end of the window for the percentiles, so
-// past maxSamples (about 64 MB) it refuses and points to log.
+// past maxSamples it refuses and points to log. The readings alone are
+// about 64 MB at the limit; the process peaks near 200 MB.
 func measureReadings(duration, interval time.Duration) (int, error) {
 	n := int64(duration / interval)
 	if duration%interval != 0 {
@@ -302,13 +303,13 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		res.IntegratedS = round(integrated, 3)
 		// A completed window ends a little after --duration (the last read and
 		// the timer); analysing that tail as its own bin would add a sliver.
-		window := math.Min(end.Sub(start).Seconds(), duration.Seconds())
+		window := min(end.Sub(start), *duration)
 		if binW == 0 {
 			// Automatic width from the time actually measured, so a long window
 			// that ended early (SIGTERM, the meter went away) keeps its shape.
-			binW = autoBin(time.Duration(window*float64(time.Second)), *interval)
+			binW = autoBin(window, *interval)
 		}
-		res.analysis = analyze(samples, window, binW.Seconds())
+		res.analysis = analyze(samples, window.Seconds(), binW.Seconds())
 		res.Direction = string(km003c.FlowNone)
 		if res.Stats.IBusA != nil {
 			res.Direction = meanDirection(res.Stats.IBusA.Mean)
@@ -358,7 +359,8 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 		if s == nil {
 			return
 		}
-		f := func(v float64) string { return strconv.FormatFloat(v*scale, 'f', prec, 64) }
+		// nz: idle noise such as -0.00002 W prints as 0.0000, not -0.0000.
+		f := func(v float64) string { return strconv.FormatFloat(nz(v*scale, 0.5*math.Pow10(-prec)), 'f', prec, 64) }
 		_, _ = fmt.Fprintf(w, "  %-5s mean %s %s   min %s  p5 %s  p50 %s  p95 %s  max %s  sd %s\n", name,
 			f(s.Mean), unit, f(s.Min), f(s.P5), f(s.P50), f(s.P95), f(s.Max), f(s.Stdev))
 	}
@@ -372,7 +374,7 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 	_, _ = fmt.Fprintf(w, "  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
 	// The sparkline covers the whole window: groups of bins are averaged down
 	// to at most sparkWidth columns, and empty bins stay as gaps.
-	const sparkWidth = 60 // with the label, fits an 80-column terminal
+	const sparkWidth = 60 // with the label of an automatic width, fits 80 columns
 	if len(r.Bins) > 1 {
 		group := (len(r.Bins) + sparkWidth - 1) / sparkWidth
 		var cols []float64

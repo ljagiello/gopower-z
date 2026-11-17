@@ -11,8 +11,7 @@ import (
 
 // This file turns the readings of a measure window into the summary that
 // measure prints: per-field statistics and time bins. It never talks to the
-// meter, so it can be tested on synthetic series and reused for recorded
-// logs.
+// meter, so it can be tested on synthetic series.
 
 // sample is one successful reading as the analysis sees it.
 type sample struct {
