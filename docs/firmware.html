@@ -244,7 +244,13 @@ No timeout is left armed, so nothing more is queued. The host must read that rep
 <tr><td><code>0x0C</code></td><td>GetData</td><td><code>FUN_00046494(src, attr)</code>, §7</td></tr>
 <tr><td><code>0x0D</code></td><td>GetFile</td><td><code>FUN_00046872</code>: attribute bit 0 gives the log catalog, otherwise an empty <code>0x41</code></td></tr>
 <tr><td><code>0x0E</code> / <code>0x0F</code></td><td>Start/StopGraph</td><td>sets the live rate (the rate setter <code>FUN_00018138</code> resets the averages)</td></tr>
-<tr><td><code>0x10</code> / <code>0x11</code></td><td>PdEnable/Disable</td><td>attr 1: PD capture; attr &ge; 2: resets the D+/D&minus; protocol engine; attr 0: Reject</td></tr>
+<tr><td><code>0x10</code> / <code>0x11</code></td><td>PdEnable/Disable</td><td>No auth check. PdEnable is rejected (<code>0x06</code>) if the PD flag (<code>0x20003CD6</code> bit 4) is already set, or if attr is 0. Otherwise it sets that flag (<code>FUN_0005243a</code>), which mainly drives a status-bar icon, and then:
+<ul>
+  <li>attr 1: <strong>empties the PD record FIFO</strong>. <code>FUN_00005fe0</code> zeroes its read and write indices with one 32-bit store.</li>
+  <li>attr &ge; 2: re-arms the D+/D&minus; protocol engine (<code>FUN_0004de48</code>).</li>
+</ul>
+The flag is RAM-only. PdDisable clears it, and so do Disconnect, the idle timeout, and a Connect sent while already connected.
+<p>Recording does <em>not</em> depend on PdEnable. The PD task <code>0x0001E794</code> queues every good-CRC received message (<code>FUN_0000f23c</code>) and every attach, detach and receive-status event (<code>FUN_0000f36c</code>) unconditionally. They go into a 252-byte ring at PD object <code>0x20004044+0x55E</code>, which drops the oldest records when full (<code>FUN_00005f74</code>).</p></td></tr>
 <tr><td><code>0x40</code></td><td>Head</td><td>reply <code>0x01000040</code>, <code>0x1000</code> (APP mode)</td></tr>
 <tr><td><code>0x44</code></td><td>MemoryRead</td><td>§11; connected, no auth</td></tr>
 <tr><td><code>0x48</code></td><td>SettingsBatch</td><td class="danger"><code>FUN_00046a1c</code>, no auth at dispatch (per-op gates in §12)</td></tr>

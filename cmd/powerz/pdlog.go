@@ -277,7 +277,8 @@ type pdSummary struct {
 
 // noPDNote explains an empty capture so it is not mistaken for a failure.
 const noPDNote = "no USB-PD traffic was captured in this window; this is normal when no negotiation happened " +
-	"(PD is only exchanged on attach or renegotiation, and non-PD devices never negotiate); " +
+	"(PD is only exchanged on attach or renegotiation, and only when both the charger and the device support USB-PD; " +
+	"the meter records every PD message it sees, so an attach with no messages means no PD was spoken); " +
 	"a contract negotiated before the capture started is not visible - reconnect the device during the capture to observe it"
 
 func (t *pdTracker) summary(records []pdRecord) *pdSummary {
