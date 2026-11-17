@@ -11,15 +11,30 @@ the field names, errors are structured with stable exit codes, and
 `powerz schema` describes the whole interface.
 
 ```sh
-# macOS: brew install libusb pkgconf   ·   Debian/Ubuntu: apt install libusb-1.0-0-dev pkg-config
+# macOS
+brew install libusb pkgconf
+# Debian/Ubuntu
+sudo apt install libusb-1.0-0-dev pkg-config
+
 go install github.com/ljagiello/gopower-z/cmd/powerz@latest
 
-powerz                         # live dashboard (or one JSON reading when piped)
-powerz measure --duration 10s  # min/mean/max V·A·W, Wh, mAh, USB-PD contract
-powerz info                    # model, firmware, serial, settings
-powerz pd --duration 30s       # decoded USB Power Delivery traffic
-powerz schema                  # machine-readable reference for agents
-powerz completion zsh          # shell completion (bash, zsh, fish, powershell)
+# live dashboard (or one JSON reading when piped)
+powerz
+
+# min/mean/max V·A·W, Wh, mAh, USB-PD contract
+powerz measure --duration 10s
+
+# model, firmware, serial, settings
+powerz info
+
+# decoded USB Power Delivery traffic
+powerz pd --duration 30s
+
+# machine-readable reference for agents
+powerz schema
+
+# shell completion (bash, zsh, fish, powershell)
+powerz completion zsh
 ```
 
 Prebuilt binaries are attached to
