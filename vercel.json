@@ -4,7 +4,7 @@
   "installCommand": "npm ci --prefix site",
   "buildCommand": "npm run build --prefix site",
   "outputDirectory": "site/dist",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- docs site vercel.json .vercelignore",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- docs site vercel.json .vercelignore || exit 1",
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [

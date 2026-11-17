@@ -1,5 +1,7 @@
 # The docs site only needs docs/ (the HTML sources) and site/ (the build).
+# .git stays: vercel.json's ignoreCommand runs git diff to skip builds.
 /*
+!.git
 !docs
 !site
 !vercel.json
