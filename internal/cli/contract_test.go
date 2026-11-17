@@ -192,20 +192,32 @@ func TestSchemaContract(t *testing.T) {
 	if !kinds["message"] || !kinds["event"] || !kinds["undecoded"] {
 		t.Fatalf("sample does not cover every record kind: %v", kinds)
 	}
-	var v, i, p, temp stat
-	for k := range 5 {
-		v.add(5 + float64(k)/1000)
-		i.add(0.44)
-		p.add(2.2)
-		temp.add(28)
+	// A window with a current step (so shifts is populated) and a gap of
+	// failed readings (so one bin is empty and its value objects are null).
+	var ss []sample
+	for k := range 100 {
+		if k >= 20 && k < 30 {
+			continue
+		}
+		cur := 0.134
+		if k >= 60 {
+			cur = 0.441
+		}
+		ss = append(ss, sample{T: float64(k) / 10, V: 5.076, I: cur, P: 5.076 * cur, DP: 3, DM: 0.002, Temp: 28, TempOK: k%2 == 0})
+	}
+	an := analyze(ss, 10, 1)
+	if len(an.Shifts) == 0 || an.Bins[2].Samples != 0 || an.Stats.IBusA.CI95 == nil {
+		t.Fatalf("sample analysis does not cover shifts, an empty bin and ci95: %+v", an)
 	}
 	m := measureResult{SchemaVersion: schemaVersion, Serial: "050002", FirmwareVersion: new("1.9.5"),
 		Start: utcTime(now), End: utcTime(now.Add(10 * time.Second)), EndReason: "completed", DurationS: 10, IntegratedS: 9.9,
-		IntervalS: 0.1, Samples: 100, FailedSamples: 1, LastError: new("timeout"), Direction: "receptacle_to_plug",
-		Stats:    measureStats{VBusV: v.json(6), IBusA: i.json(6), PowerW: p.json(6), TempC: temp.json(3)},
+		IntervalS: 0.1, Samples: 90, FailedSamples: 10, LastError: new("timeout"), Direction: "receptacle_to_plug",
+		Stats: an.Stats, BinS: an.BinS, Bins: an.Bins, Shifts: an.Shifts,
 		EnergyWh: 0.006, ChargeMAh: 1.2, Last: &snap, PD: sum}
 	checkShape(t, "measure", toAny(t, m))
-	empty := measureResult{SchemaVersion: schemaVersion, Serial: "050002", Stats: measureStats{},
+	none := analyze(nil, 0, 1)
+	empty := measureResult{SchemaVersion: schemaVersion, Serial: "050002", Stats: none.Stats,
+		BinS: none.BinS, Bins: none.Bins, Shifts: none.Shifts,
 		FirmwareError: new("km003c: read timeout"), EndReason: "interrupted",
 		Direction: "none", PD: (&pdTracker{}).summary(nil)}
 	checkShape(t, "measure", toAny(t, empty))

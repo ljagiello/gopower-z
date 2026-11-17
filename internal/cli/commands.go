@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"syscall"
@@ -113,13 +114,6 @@ func avgText(v *float64) string {
 
 // ---------------------------------------------------------------- measure
 
-type measureStats struct {
-	VBusV  *statJSON `json:"vbus_v"`
-	IBusA  *statJSON `json:"ibus_a"`
-	PowerW *statJSON `json:"power_w"`
-	TempC  *statJSON `json:"temp_c"`
-}
-
 type measureResult struct {
 	SchemaVersion   int          `json:"schema_version"`
 	Serial          string       `json:"serial"`
@@ -136,6 +130,9 @@ type measureResult struct {
 	LastError       *string      `json:"last_error"`
 	Direction       string       `json:"direction"`
 	Stats           measureStats `json:"stats"`
+	BinS            float64      `json:"bin_s"`
+	Bins            []binJSON    `json:"bins"`
+	Shifts          []shiftJSON  `json:"shifts"`
 	EnergyWh        float64      `json:"energy_wh"`
 	ChargeMAh       float64      `json:"charge_mah"`
 	Last            *snapshot    `json:"last"`
@@ -183,12 +180,24 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 	duration := fs.Duration("duration", 5*time.Second, "how long to sample")
 	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval, at least 20ms (the meter's own sample rate bounds how often values change)")
 	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract, records)")
+	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output (0 = automatic: at least 5 samples per bin, at most %d bins)", maxAutoBins))
 	return func(ctx context.Context, g globals) error {
 		if *duration <= 0 {
 			return usageErr("measure: --duration must be positive (e.g. 10s)")
 		}
 		if err := checkInterval("measure", *interval, 20*time.Millisecond); err != nil {
 			return err
+		}
+		binW := *bin
+		switch {
+		case binW < 0:
+			return usageErr("measure: --bin must not be negative")
+		case binW == 0:
+			binW = autoBin(*duration, *interval)
+		case binW < *interval:
+			return usageErr("measure: --bin %s is shorter than --interval %s", binW, *interval)
+		case math.Ceil(duration.Seconds()/binW.Seconds()) > maxBins:
+			return usageErr("measure: --bin %s gives more than %d bins over --duration %s; use a wider bin", binW, maxBins, *duration)
 		}
 		m, err := open(ctx, g)
 		if err != nil {
@@ -200,7 +209,7 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 			return ctx.Err()
 		}
 
-		var v, i, p, temp stat
+		var samples []sample
 		var in integrator
 		var last *snapshot
 		var lastErr, stop error
@@ -239,12 +248,8 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 				}
 			default:
 				in.add(now, a.FlowPower(), a.FlowA())
-				v.add(a.VBus())
-				i.add(a.FlowA())
-				p.add(a.FlowPower())
-				if a.TempValid() {
-					temp.add(a.TempC())
-				}
+				samples = append(samples, sample{T: now.Sub(start).Seconds(), V: a.VBus(), I: a.FlowA(), P: a.FlowPower(),
+					DP: a.DPV(), DM: a.DMV(), Temp: a.TempC(), TempOK: a.TempValid()})
 				s := toSnapshot(a, now, m.usb.Serial, m.FirmwareVersion(), m.firmwareError())
 				last = &s
 				res.Samples++
@@ -265,8 +270,12 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		res.EndReason = endReason(stop)
 		res.DurationS = round(end.Sub(start).Seconds(), 3)
 		res.IntegratedS = round(integrated, 3)
-		res.Stats = measureStats{VBusV: v.json(6), IBusA: i.json(6), PowerW: p.json(6), TempC: temp.json(3)}
-		res.Direction = meanDirection(i.avg())
+		an := analyze(samples, end.Sub(start).Seconds(), binW.Seconds())
+		res.Stats, res.BinS, res.Bins, res.Shifts = an.Stats, an.BinS, an.Bins, an.Shifts
+		res.Direction = string(km003c.FlowNone)
+		if an.Stats.IBusA != nil {
+			res.Direction = meanDirection(an.Stats.IBusA.Mean)
+		}
 		res.EnergyWh = round(wh, 9)
 		res.ChargeMAh = round(ah*1000, 6)
 		res.Last = last
@@ -306,17 +315,44 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 func printMeasureText(w io.Writer, st style, r measureResult) {
 	_, _ = fmt.Fprintf(w, "%s  %s  %.1fs  %d samples  %d failed  flow %s  (%s)\n", st.bold("POWER-Z measure"),
 		r.Serial, r.DurationS, r.Samples, r.FailedSamples, r.Direction, r.EndReason)
-	row := func(name, unit string, s *statJSON) {
+	// Text mode is for people: current in mA, the mean with its 95% interval,
+	// then the spread. JSON keeps the documented units.
+	row := func(name, unit string, scale float64, prec int, s *statJSON) {
 		if s == nil {
 			return
 		}
-		_, _ = fmt.Fprintf(w, "  %-5s min %12.6f  mean %12.6f  max %12.6f  last %12.6f %s\n", name, s.Min, s.Mean, s.Max, s.Last, unit)
+		f := func(v float64) string { return strconv.FormatFloat(v*scale, 'f', prec, 64) }
+		ci := ""
+		if s.CI95 != nil {
+			ci = " ±" + f(*s.CI95)
+		}
+		_, _ = fmt.Fprintf(w, "  %-5s mean %s%s %s   min %s  p5 %s  p50 %s  p95 %s  max %s  sd %s\n", name,
+			f(s.Mean), ci, unit, f(s.Min), f(s.P5), f(s.P50), f(s.P95), f(s.Max), f(s.Stdev))
 	}
-	row("VBUS", "V", r.Stats.VBusV)
-	row("IBUS", "A", r.Stats.IBusA)
-	row("PWR", "W", r.Stats.PowerW)
-	row("TEMP", "°C", r.Stats.TempC)
+	row("VBUS", "V", 1, 4, r.Stats.VBusV)
+	row("IBUS", "mA", 1000, 3, r.Stats.IBusA)
+	row("PWR", "W", 1, 4, r.Stats.PowerW)
+	row("TEMP", "°C", 1, 2, r.Stats.TempC)
+	if r.Stats.DPV != nil && r.Stats.DMV != nil {
+		_, _ = fmt.Fprintf(w, "  D+ %.3f..%.3f V   D- %.3f..%.3f V\n", r.Stats.DPV.Min, r.Stats.DPV.Max, r.Stats.DMV.Min, r.Stats.DMV.Max)
+	}
 	_, _ = fmt.Fprintf(w, "  energy %.6f Wh   charge %.4f mAh   over %.3f s\n", r.EnergyWh, r.ChargeMAh, r.IntegratedS)
+	var means []float64
+	for _, b := range r.Bins {
+		if b.IBusA != nil {
+			means = append(means, b.IBusA.Mean)
+		}
+	}
+	if len(means) > 1 {
+		_, _ = fmt.Fprintf(w, "  IBUS per %gs bin  %s\n", r.BinS, sparkline(means, 120))
+	}
+	for _, s := range r.Shifts {
+		unit, scale, prec := "V", 1.0, 3
+		if s.Field == "ibus_a" {
+			unit, scale, prec = "mA", 1000, 1
+		}
+		_, _ = fmt.Fprintf(w, "  shift at %.3fs  %s  %.*f -> %.*f %s\n", s.TS, s.Field, prec, s.From*scale, prec, s.To*scale, unit)
+	}
 	if r.PD != nil {
 		_, _ = fmt.Fprintf(w, "  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)
 		for _, p := range r.PD.SourceCapabilities {

@@ -250,6 +250,49 @@ func TestCLIMeasureNoSamples(t *testing.T) {
 	}
 }
 
+// measure's bins follow --bin, and impossible widths are usage errors before
+// the meter is touched.
+func TestCLIMeasureBins(t *testing.T) {
+	c := newCLI(t)
+	if code := c.run(context.Background(), "measure", "--duration", "400ms", "--interval", "20ms", "--bin", "100ms", "--pd=false"); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, c.stderr.String())
+	}
+	m := c.one()
+	checkShape(t, "measure", m)
+	if m["bin_s"] != 0.1 || len(m["bins"].([]any)) < 4 || m["shifts"] == nil {
+		t.Errorf("bins %v / %v / %v", m["bin_s"], m["bins"], m["shifts"])
+	}
+	for _, args := range [][]string{
+		{"--bin", "-1s"},
+		{"--bin", "10ms", "--interval", "20ms"},
+		{"--bin", "20ms", "--interval", "20ms", "--duration", "1m"},
+	} {
+		c := newCLI(t)
+		if code := c.run(context.Background(), append([]string{"measure"}, args...)...); code != exitUsage || c.errCode() != "usage" {
+			t.Errorf("%v: exit %d, stderr %s", args, code, c.stderr.String())
+		}
+	}
+}
+
+func TestMeasureText(t *testing.T) {
+	ss := series(20, 0.1, 0.002, 9, func(t float64) float64 {
+		if t >= 12 {
+			return 0.441
+		}
+		return 0.134
+	})
+	a := analyze(ss, 20, 0.5)
+	var b strings.Builder
+	printMeasureText(&b, style{}, measureResult{Serial: "050002", DurationS: 20, Samples: len(ss), Direction: "receptacle_to_plug",
+		EndReason: "completed", Stats: a.Stats, BinS: a.BinS, Bins: a.Bins, Shifts: a.Shifts})
+	out := b.String()
+	for _, want := range []string{"IBUS  mean 256.", " mA", "±", "p95", "IBUS per 0.5s bin", "shift at 12.000s  ibus_a  133.7 -> 441.5 mA", "D+ 3.000..3.000 V"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCLIPD(t *testing.T) {
 	c := newCLI(t)
 	c.fm.PD = [][]byte{

@@ -184,23 +184,6 @@ func (s stat) avg() float64 {
 	return s.sum / float64(s.n)
 }
 
-type statJSON struct {
-	Min  float64 `json:"min"`
-	Mean float64 `json:"mean"`
-	Max  float64 `json:"max"`
-	Last float64 `json:"last"`
-}
-
-func (s stat) json(decimals int) *statJSON {
-	if s.n == 0 {
-		return nil
-	}
-	return &statJSON{
-		Min: round(s.min, decimals), Mean: round(s.avg(), decimals),
-		Max: round(s.max, decimals), Last: round(s.last, decimals),
-	}
-}
-
 // meanDirection classifies the mean current like ADC.Direction.
 func meanDirection(meanA float64) string {
 	switch {
