@@ -201,9 +201,6 @@ async function buildDoc(page) {
     .join("\n");
   const main = $("main").first();
 
-  // The shell's sidebar replaces the per-page link bar.
-  main.find(".docs-nav").remove();
-
   // The first <nav> in a page is its table of contents. Tag it so the shell
   // can hide it once the right-hand rail is on screen.
   main.find("nav").first().addClass("page-toc");
