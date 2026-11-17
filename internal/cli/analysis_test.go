@@ -34,7 +34,7 @@ func TestShiftChargeStep(t *testing.T) {
 	// from/to are measured from the located step, not from bin edges, so
 	// they do not depend on where the step falls inside a bin.
 	for _, binS := range []float64{0.5, 1, 2, 5} {
-		a := analyze(ss, 60, binS)
+		a := analyze(ss, 60, binS, 0)
 		if len(a.Shifts) != 1 {
 			t.Fatalf("bin %v: want one shift, got %+v", binS, a.Shifts)
 		}
@@ -48,7 +48,7 @@ func TestShiftChargeStep(t *testing.T) {
 func TestShiftNoneOnNoise(t *testing.T) {
 	for seed := range uint64(20) {
 		ss := series(60, 0.1, 0.004, seed, func(float64) float64 { return 0.09 })
-		if a := analyze(ss, 60, 0.5); len(a.Shifts) != 0 {
+		if a := analyze(ss, 60, 0.5, 0); len(a.Shifts) != 0 {
 			t.Fatalf("seed %d: flat noise reported shifts %+v", seed, a.Shifts)
 		}
 	}
@@ -62,7 +62,7 @@ func TestShiftIgnoresShortBursts(t *testing.T) {
 		}
 		return 0.09
 	})
-	if a := analyze(ss, 60, 1); len(a.Shifts) != 0 {
+	if a := analyze(ss, 60, 1, 0); len(a.Shifts) != 0 {
 		t.Errorf("bursts reported as shifts: %+v", a.Shifts)
 	}
 }
@@ -75,7 +75,7 @@ func TestShiftListBounded(t *testing.T) {
 		}
 		return 0.1
 	})
-	a := analyze(ss, 600, 1)
+	a := analyze(ss, 600, 1, 0)
 	if len(a.Shifts) != maxShifts {
 		t.Fatalf("want the list capped at %d, got %d", maxShifts, len(a.Shifts))
 	}
@@ -98,7 +98,7 @@ func TestShiftOtherFields(t *testing.T) {
 			ss[k].V = 9.02
 		}
 	}
-	a := analyze(ss, 30, 0.5)
+	a := analyze(ss, 30, 0.5, 0)
 	got := map[string]float64{}
 	for _, s := range a.Shifts {
 		got[s.Field] = s.TS
@@ -119,7 +119,7 @@ func TestCI95IndependentOfPollingRate(t *testing.T) {
 	}
 	at := func(t float64) float64 { return levels[min(len(levels)-1, int(t*10))] }
 	ci := func(dt float64) float64 {
-		a := analyze(series(60, dt, 0, 0, at), 60, 1)
+		a := analyze(series(60, dt, 0, 0, at), 60, 1, 0)
 		if a.Stats.IBusA.CI95 == nil {
 			t.Fatalf("no ci95 at dt %v", dt)
 		}
@@ -133,6 +133,23 @@ func TestCI95IndependentOfPollingRate(t *testing.T) {
 	// independent values with sd 3 mA has a 95% interval of about 0.24 mA.
 	if slow < 0.00012 || slow > 0.0005 {
 		t.Errorf("ci95 %v A, want about 0.24 mA", slow)
+	}
+}
+
+// A meter at 2 SPS changes its value every 0.5 s: over a 5 s window the
+// 0.25 s batches would share readings, so no interval is claimed. Over 20 s
+// the batches are long enough again.
+func TestCI95NeedsBatchesLongerThanMeterPeriod(t *testing.T) {
+	ss := series(20, 0.05, 0.003, 11, func(float64) float64 { return 0.09 })
+	short := ss[:100] // the first 5 s
+	if a := analyze(short, 5, 0.5, 0.5); a.Stats.IBusA.CI95 != nil {
+		t.Errorf("ci95 %v from 0.25 s batches of a 2 SPS meter", *a.Stats.IBusA.CI95)
+	}
+	if a := analyze(ss, 20, 0.5, 0.5); a.Stats.IBusA.CI95 == nil {
+		t.Error("no ci95 from 1 s batches of a 2 SPS meter")
+	}
+	if a := analyze(short, 5, 0.5, 0); a.Stats.IBusA.CI95 == nil {
+		t.Error("unknown meter period must not suppress ci95")
 	}
 }
 
@@ -153,7 +170,7 @@ func TestAnalyzeDegenerateWindows(t *testing.T) {
 		if name == "single bin" {
 			binS = 60
 		}
-		a := analyze(c.ss, c.window, binS)
+		a := analyze(c.ss, c.window, binS, 0)
 		if _, err := json.Marshal(measureResult{Stats: a.Stats, BinS: a.BinS, Bins: a.Bins, Shifts: a.Shifts}); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -167,7 +184,7 @@ func TestAnalyzeDegenerateWindows(t *testing.T) {
 			t.Errorf("%s: ci95 from too few batches", name)
 		}
 	}
-	a := analyze(constant, 10, 0.5)
+	a := analyze(constant, 10, 0.5, 0)
 	if s := a.Stats.IBusA; s.Stdev != 0 || s.CI95 == nil || *s.CI95 != 0 || s.P5 != 0.25 || s.P95 != 0.25 {
 		t.Errorf("constant series stats %+v", s)
 	}
@@ -175,7 +192,7 @@ func TestAnalyzeDegenerateWindows(t *testing.T) {
 
 func TestBins(t *testing.T) {
 	ss := series(10.25, 0.1, 0, 0, func(t float64) float64 { return t / 100 })
-	a := analyze(ss, 10.25, 1)
+	a := analyze(ss, 10.25, 1, 0)
 	if len(a.Bins) != 11 || a.BinS != 1 {
 		t.Fatalf("want 11 bins of 1 s (the last one short), got %d of %v", len(a.Bins), a.BinS)
 	}

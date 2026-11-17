@@ -115,7 +115,7 @@ var definitions = map[string][]fieldDoc{
 		fd("p5", tNum, false, "5th percentile (linear interpolation between samples)"),
 		fd("p50", tNum, false, "median"),
 		fd("p95", tNum, false, "95th percentile"),
-		fd("ci95", tNum, true, "half-width of the 95% confidence interval of mean (mean ± ci95), from the means of 20 equal-time batches of the window (batch means), so polling faster does not narrow it; covers sampling variation, not the meter's accuracy; null when fewer than 10 batches hold samples. Two windows' means differ (95%) when the difference exceeds sqrt(ci95_a^2 + ci95_b^2)"),
+		fd("ci95", tNum, true, "half-width of the 95% confidence interval of mean (mean ± ci95), from the means of 20 equal-time batches of the window (batch means), so polling faster does not narrow it; covers sampling variation, not the meter's accuracy; null when fewer than 10 batches hold samples or a batch is shorter than the meter's own sample period (e.g. under 10 s at 2 SPS). Two windows' means differ (95%) when the difference exceeds sqrt(ci95_a^2 + ci95_b^2)"),
 	},
 	"bin": {
 		fd("t_s", tNum, false, "start of the bin, seconds from the start of the window"),

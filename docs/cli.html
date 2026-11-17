@@ -187,7 +187,7 @@ powerz schema</code></pre>
     "records": []
   }
 }</code></pre>
-<p>Captured with v0.1.0. Builds after v0.1.0 add <code>stdev</code>, <code>p5</code>, <code>p50</code>, <code>p95</code> and <code>ci95</code> to every <code>stats</code> entry, <code>stats.dp_v</code> and <code>stats.dm_v</code>, and the <code>bin_s</code>, <code>bins</code> and <code>shifts</code> described next.</p>
+<p>Captured before the following fields were added. Builds after v0.1.0 add <code>stdev</code>, <code>p5</code>, <code>p50</code>, <code>p95</code> and <code>ci95</code> to every <code>stats</code> entry, <code>stats.dp_v</code> and <code>stats.dm_v</code>, and the <code>bin_s</code>, <code>bins</code> and <code>shifts</code> described next.</p>
 
 <h3 id="shape">Shape over time: <code>bins</code>, <code>shifts</code> and <code>ci95</code> (after v0.1.0)</h3>
 <p>Min, mean and max cannot tell a steady 225 mA from 134 mA that became 441 mA halfway through. <code>bins</code> cuts the window into <code>bin_s</code> slices (automatic: at least 5 samples per bin, at most 120 bins; or <code>--bin 1s</code>), and <code>shifts</code> names each lasting level change of <code>vbus_v</code>, <code>ibus_a</code>, <code>dp_v</code> and <code>dm_v</code> with the moment it happened. Illustrative excerpt, computed by powerz from a synthetic 60 s window in which the current steps from 134 to 441 mA at 42.3 s:</p>
@@ -208,7 +208,7 @@ powerz schema</code></pre>
 "shifts": [{"t_s": 42.3, "field": "ibus_a", "from": 0.133994, "to": 0.441139}]</code></pre>
 <ul>
   <li><strong>shifts</strong>: a bin mean has to move from the current level by more than the larger of a floor (0.25 V, 5 mA, 0.2 V for D+/D−) and six times the bin-to-bin noise, and the next bin has to agree. Bursts shorter than two bins are not shifts. <code>from</code> and <code>to</code> are the means on either side of the located step. At most 32 are listed; <code>[]</code> means every level held.</li>
-  <li><strong>ci95</strong>: the mean is <code>mean ± ci95</code> with 95% confidence. It comes from the means of 20 equal-time batches, so polling faster does not make it narrower. It is wide when the level changed during the window, as above: split the window at the shift, or measure each phase separately. It covers sampling variation, not the meter's accuracy, and is <code>null</code> when fewer than 10 batches hold samples.</li>
+  <li><strong>ci95</strong>: the mean is <code>mean ± ci95</code> with 95% confidence. It comes from the means of 20 equal-time batches, so polling faster does not make it narrower. It is wide when the level changed during the window, as above: split the window at the shift, or measure each phase separately. It covers sampling variation, not the meter's accuracy, and is <code>null</code> when fewer than 10 batches hold samples or a batch is shorter than the meter's own sample period (a window under 10 s at 2 SPS).</li>
   <li><strong>D+ and D−</strong>: a USB device that drops off the bus usually changes D+ or D−. <code>stats.dp_v</code>/<code>dm_v</code> give the range and <code>shifts</code> the moment.</li>
 </ul>
 <p>Text mode (<code>--text</code>) prints current in mA, each mean with its interval, a sparkline of the bins and one line per shift.</p>

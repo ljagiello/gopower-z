@@ -122,8 +122,10 @@ func autoBin(window, interval time.Duration) time.Duration {
 }
 
 // analyze summarises the samples of a window of the given length (seconds)
-// with bins of binS seconds. Every slice in the result is non-nil.
-func analyze(ss []sample, window, binS float64) analysis {
+// with bins of binS seconds. meterPeriod is the time between the meter's own
+// samples (0 if unknown); ci95 needs batches at least that long. Every slice
+// in the result is non-nil.
+func analyze(ss []sample, window, binS, meterPeriod float64) analysis {
 	get := func(f func(sample) float64) ([]float64, []float64) {
 		xs, ts := make([]float64, len(ss)), make([]float64, len(ss))
 		for k, s := range ss {
@@ -138,13 +140,19 @@ func analyze(ss []sample, window, binS float64) analysis {
 		}
 	}
 	a := analysis{BinS: round(binS, 3), Bins: []binJSON{}, Shifts: []shiftJSON{}}
+	// With batches shorter than the meter's sample period, neighbouring
+	// batches share readings and the interval would come out too narrow.
+	ciWindow := window
+	if window/ciBatches < meterPeriod {
+		ciWindow = 0
+	}
 	a.Stats = measureStats{
-		VBusV:  describe(window, 6)(get(func(s sample) float64 { return s.V })),
-		IBusA:  describe(window, 6)(get(func(s sample) float64 { return s.I })),
-		PowerW: describe(window, 6)(get(func(s sample) float64 { return s.P })),
-		TempC:  describe(window, 3)(temps, tempTs),
-		DPV:    describe(window, 4)(get(func(s sample) float64 { return s.DP })),
-		DMV:    describe(window, 4)(get(func(s sample) float64 { return s.DM })),
+		VBusV:  describe(ciWindow, 6)(get(func(s sample) float64 { return s.V })),
+		IBusA:  describe(ciWindow, 6)(get(func(s sample) float64 { return s.I })),
+		PowerW: describe(ciWindow, 6)(get(func(s sample) float64 { return s.P })),
+		TempC:  describe(ciWindow, 3)(temps, tempTs),
+		DPV:    describe(ciWindow, 4)(get(func(s sample) float64 { return s.DP })),
+		DMV:    describe(ciWindow, 4)(get(func(s sample) float64 { return s.DM })),
 	}
 	if len(ss) == 0 || binS <= 0 {
 		return a
@@ -197,7 +205,8 @@ func binRange(run []sample, f func(sample) float64) *rangeJSON {
 }
 
 // describe returns a function computing the statistics of values xs taken at
-// times ts (seconds into a window of the given length); nil when xs is empty.
+// times ts (seconds into a window of the given length; 0 = no ci95); nil
+// when xs is empty.
 func describe(window float64, decimals int) func(xs, ts []float64) *statJSON {
 	return func(xs, ts []float64) *statJSON {
 		n := len(xs)

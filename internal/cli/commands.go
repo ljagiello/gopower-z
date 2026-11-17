@@ -210,6 +210,7 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		}
 
 		var samples []sample
+		var meterPeriod float64 // seconds between the meter's own samples; 0 if unknown
 		var in integrator
 		var last *snapshot
 		var lastErr, stop error
@@ -250,6 +251,9 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 				in.add(now, a.FlowPower(), a.FlowA())
 				samples = append(samples, sample{T: now.Sub(start).Seconds(), V: a.VBus(), I: a.FlowA(), P: a.FlowPower(),
 					DP: a.DPV(), DM: a.DMV(), Temp: a.TempC(), TempOK: a.TempValid()})
+				if sps := km003c.SampleRate(a.RateIndex).SamplesPerSecond(); a.RateIndex >= 0 && sps > 0 {
+					meterPeriod = 1 / float64(sps)
+				}
 				s := toSnapshot(a, now, m.usb.Serial, m.FirmwareVersion(), m.firmwareError())
 				last = &s
 				res.Samples++
@@ -270,7 +274,10 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		res.EndReason = endReason(stop)
 		res.DurationS = round(end.Sub(start).Seconds(), 3)
 		res.IntegratedS = round(integrated, 3)
-		an := analyze(samples, end.Sub(start).Seconds(), binW.Seconds())
+		// A completed window ends a little after --duration (the last read and
+		// the timer); analysing that tail as its own bin would add a sliver.
+		window := math.Min(end.Sub(start).Seconds(), duration.Seconds())
+		an := analyze(samples, window, binW.Seconds(), meterPeriod)
 		res.Stats, res.BinS, res.Bins, res.Shifts = an.Stats, an.BinS, an.Bins, an.Shifts
 		res.Direction = string(km003c.FlowNone)
 		if an.Stats.IBusA != nil {

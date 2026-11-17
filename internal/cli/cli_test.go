@@ -259,8 +259,14 @@ func TestCLIMeasureBins(t *testing.T) {
 	}
 	m := c.one()
 	checkShape(t, "measure", m)
-	if m["bin_s"] != 0.1 || len(m["bins"].([]any)) < 4 || m["shifts"] == nil {
-		t.Errorf("bins %v / %v / %v", m["bin_s"], m["bins"], m["shifts"])
+	// A completed window ends a little after --duration; that must not add
+	// a near-empty extra bin.
+	bins := m["bins"].([]any)
+	if m["bin_s"] != 0.1 || len(bins) != 4 || m["shifts"] == nil {
+		t.Fatalf("bins %v / %v / %v", m["bin_s"], bins, m["shifts"])
+	}
+	if last := bins[3].(map[string]any); last["samples"].(float64) < 2 {
+		t.Errorf("last bin %v", last)
 	}
 	for _, args := range [][]string{
 		{"--bin", "-1s"},
@@ -281,7 +287,7 @@ func TestMeasureText(t *testing.T) {
 		}
 		return 0.134
 	})
-	a := analyze(ss, 20, 0.5)
+	a := analyze(ss, 20, 0.5, 0)
 	var b strings.Builder
 	printMeasureText(&b, style{}, measureResult{Serial: "050002", DurationS: 20, Samples: len(ss), Direction: "receptacle_to_plug",
 		EndReason: "completed", Stats: a.Stats, BinS: a.BinS, Bins: a.Bins, Shifts: a.Shifts})

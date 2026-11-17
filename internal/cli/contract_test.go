@@ -205,7 +205,7 @@ func TestSchemaContract(t *testing.T) {
 		}
 		ss = append(ss, sample{T: float64(k) / 10, V: 5.076, I: cur, P: 5.076 * cur, DP: 3, DM: 0.002, Temp: 28, TempOK: k%2 == 0})
 	}
-	an := analyze(ss, 10, 1)
+	an := analyze(ss, 10, 1, 0)
 	if len(an.Shifts) == 0 || an.Bins[2].Samples != 0 || an.Stats.IBusA.CI95 == nil {
 		t.Fatalf("sample analysis does not cover shifts, an empty bin and ci95: %+v", an)
 	}
@@ -215,7 +215,7 @@ func TestSchemaContract(t *testing.T) {
 		Stats: an.Stats, BinS: an.BinS, Bins: an.Bins, Shifts: an.Shifts,
 		EnergyWh: 0.006, ChargeMAh: 1.2, Last: &snap, PD: sum}
 	checkShape(t, "measure", toAny(t, m))
-	none := analyze(nil, 0, 1)
+	none := analyze(nil, 0, 1, 0)
 	empty := measureResult{SchemaVersion: schemaVersion, Serial: "050002", Stats: none.Stats,
 		BinS: none.BinS, Bins: none.Bins, Shifts: none.Shifts,
 		FirmwareError: new("km003c: read timeout"), EndReason: "interrupted",
