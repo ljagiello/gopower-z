@@ -132,7 +132,7 @@ powerz schema</code></pre>
 <div class="tw"><table>
 <tr><th>Command</th><th>Output</th><th>Flags</th><th>Purpose</th></tr>
 <tr><td><code>read</code></td><td>one JSON object</td><td>-</td><td>One snapshot. Default command when stdout is not a terminal. Reads the firmware version first (CONNECT plus one MemoryRead) to decode the firmware-dependent fields.</td></tr>
-<tr><td><code>measure</code></td><td>one JSON object</td><td><code>--duration 5s</code> <code>--interval 100ms</code> (≥ 20 ms) <code>--pd=true</code> <code>--bin 0</code> (automatic)</td><td>Samples for a fixed time. Returns <code>stats</code> (min/mean/max/last, stdev, p5/p50/p95 and an approximate 95% interval of the mean, for V, A, W, °C, D+ and D−), <code>bins</code> (the window over time) and <code>shifts</code> (lasting steps and ramps, see <a href="#shape">below</a>), energy and charge over <code>integrated_s</code>, the dominant <code>direction</code>, and the USB-PD capture with every record. <code>end_reason</code> says whether the window completed or ended early. <strong>The main command for agents.</strong></td></tr>
+<tr><td><code>measure</code></td><td>one JSON object</td><td><code>--duration 5s</code> <code>--interval 100ms</code> (≥ 20 ms) <code>--pd=true</code> <code>--bin 0</code> (automatic)</td><td>Samples for a fixed time. Returns <code>stats</code> (min/mean/max/last, stdev and p5/p50/p95 of V, A, W, °C, D+ and D−), <code>bins</code> (the window over time, see <a href="#shape">below</a>), energy and charge over <code>integrated_s</code>, the dominant <code>direction</code>, and the USB-PD capture with every record. <code>end_reason</code> says whether the window completed or ended early. <strong>The main command for agents.</strong></td></tr>
 <tr><td><code>log</code></td><td>JSON lines or CSV</td><td><code>--interval 200ms</code> (≥ 20 ms) <code>--format jsonl|csv</code> <code>--count</code>/<code>-n</code> <code>--duration</code></td><td>Streams snapshots (same shape as <code>read</code>). CSV columns: <code>time, vbus_v, ibus_a, power_w, direction, vbus_avg_v, ibus_avg_a, power_avg_w, temp_c, cc1_v, cc2_v, dp_v, dm_v, vdd_v</code>.</td></tr>
 <tr><td><code>pd</code></td><td>JSON lines</td><td><code>--interval 25ms</code> (≥ 10 ms) <code>--duration</code> <code>--count</code>/<code>-n</code> <code>--goodcrc</code></td><td>One record per captured USB-PD message or event, then a final <code>"kind":"summary"</code> line with counts, capabilities, contract, <code>end_reason</code> and a <code>note</code> when nothing was captured. Bytes the meter delivered that cannot be parsed are kept as <code>"kind":"undecoded"</code> records. Sends only GET_DATA for the PD buffer: no session and no memory reads.</td></tr>
 <tr><td><code>info</code></td><td>one JSON object</td><td>-</td><td>USB descriptors; model, firmware and hardware versions (ISO dates), serial and UUID; settings (sample rate, name, brightness, raw codes). The identity comes from three memory blocks: a block that cannot be read leaves only its fields <code>null</code> and is listed in <code>errors</code> (exit 7).</td></tr>
@@ -187,13 +187,13 @@ powerz schema</code></pre>
     "records": []
   }
 }</code></pre>
-<p>Captured before the following fields were added. Builds after v0.1.0 add <code>stdev</code>, <code>p5</code>, <code>p50</code>, <code>p95</code> and <code>ci95</code> to every <code>stats</code> entry, <code>stats.dp_v</code> and <code>stats.dm_v</code>, and the <code>bin_s</code>, <code>bins</code>, <code>shifts</code> and <code>shifts_truncated</code> described next.</p>
+<p>Captured before the following fields were added. Builds after v0.1.0 add <code>stdev</code>, <code>p5</code>, <code>p50</code> and <code>p95</code> to every <code>stats</code> entry, <code>stats.dp_v</code> and <code>stats.dm_v</code>, and the <code>bin_s</code> and <code>bins</code> described next.</p>
 
-<h3 id="shape">Shape over time: <code>bins</code>, <code>shifts</code> and <code>ci95</code> (after v0.1.0)</h3>
-<p>Min, mean and max cannot tell a steady 225 mA from 134 mA that became 441 mA partway through. <code>bins</code> cuts the window into <code>bin_s</code> slices (automatic: at least 5 polling intervals per bin, at most 120 bins; or <code>--bin 1s</code>), and <code>shifts</code> names each lasting change of <code>vbus_v</code>, <code>ibus_a</code>, <code>dp_v</code> and <code>dm_v</code>: a <code>step</code> between two levels, or a <code>ramp</code> for a steady drift. Illustrative excerpt, computed by powerz from a synthetic 60 s window in which the current steps from 134 to 441 mA at 42.3 s:</p>
+<h3 id="shape">Shape over time: <code>bins</code> (after v0.1.0)</h3>
+<p>Min, mean and max cannot tell a steady 225 mA from 134 mA that became 441 mA partway through. <code>bins</code> cuts the window into <code>bin_s</code> slices, each with the min, mean and max of <code>vbus_v</code>, <code>ibus_a</code> and <code>power_w</code>. The width is automatic (at least 5 polling intervals per bin, at most 120 bins) or set with <code>--bin 1s</code> (at least <code>--interval</code>, at most 1000 bins). Illustrative excerpt, computed by powerz from a synthetic 60 s window in which the current steps from 134 to 441 mA at 42.3 s:</p>
 <pre><code>"stats": {
   "ibus_a": {"min": 0.124744, "mean": 0.224602, "max": 0.447845, "last": 0.43735, "stdev": 0.140219,
-             "p5": 0.129448, "p50": 0.135847, "p95": 0.444044, "ci95": null},
+             "p5": 0.129448, "p50": 0.135847, "p95": 0.444044},
   …
 },
 "bin_s": 1,
@@ -204,16 +204,16 @@ powerz schema</code></pre>
   {"t_s": 42, "samples": 10, …, "ibus_a": {"min": 0.133397, "mean": 0.349906, "max": 0.445533}, …},
   {"t_s": 43, "samples": 10, …, "ibus_a": {"min": 0.43654, "mean": 0.440502, "max": 0.444248}, …},
   …
-],
-"shifts": [{"t_s": 42.3, "field": "ibus_a", "kind": "step", "duration_s": 0, "from": 0.134133, "to": 0.441006}],
-"shifts_truncated": false</code></pre>
-<p>The same current held steady at 134 mA for 60 s gives <code>"mean": 0.134037, "ci95": 0.000175</code>, so 134.04 ± 0.18 mA. A 10-minute charge taper from 2.0 A to 0.6 A comes out as one ramp, not a staircase: <code>{"t_s": 0, "kind": "ramp", "duration_s": 540, "from": 1.980724, "to": 0.586641}</code>.</p>
+]</code></pre>
 <ul>
-  <li><strong>shifts</strong>: a bin mean has to move from the current level by more than the larger of a floor (0.25 V, 5 mA, 0.2 V for D+/D−) and six times the bin-to-bin noise, and the next bin has to agree. Each level must then last at least two bins, and levels are compared by their medians, so short bursts are not listed however they fall against bin edges and however many there are. A step's <code>from</code> and <code>to</code> are the medians on either side of the located change, so a burst inside a level does not move them. A run of drifting levels is one <code>ramp</code> with its <code>duration_s</code>. At most 32 per field are listed, earliest first; <code>shifts_truncated</code> says when more were found. <code>[]</code> means every level held.</li>
-  <li><strong>ci95</strong>: the mean is <code>mean ± ci95</code> with about 95% confidence. It comes from the means of 10 equal-time batches, so polling faster does not make it narrower. It is <code>null</code> when the window is under 30 s (each batch must last 3 s), and when the level changed or drifted during the window, as above: split the window at the shift, or measure each phase separately. It assumes the load fluctuates on time scales well under one batch; for loads that wander slowly, use a longer window. It covers sampling variation, not the meter's accuracy.</li>
-  <li><strong>D+ and D−</strong>: a USB device that drops off the bus usually changes D+ or D−. <code>stats.dp_v</code>/<code>dm_v</code> give the range and <code>shifts</code> the moment.</li>
+  <li><strong>Reading the shape:</strong> the step is the first bin whose <code>ibus_a.mean</code> leaves the earlier level; a bin that straddles it (42 s above) has a wide min–max. A burst inside one bin raises that bin's <code>max</code> much more than its <code>mean</code>.</li>
+  <li><strong>Empty bins</strong> (every read in them failed) have <code>samples</code> 0 and <code>null</code> values. The last bin may be shorter, and also holds a reading taken just after the window ends.</li>
+  <li><strong>stdev and percentiles</strong> describe the readings in the window (p50 is the median; percentiles interpolate between readings, the R/NumPy default). A wide p5–p95 with a small stdev points at a few outliers; a mean far from p50 at a level change or bursts. Readings close in time repeat at the meter's own sample rate, so do not turn stdev into a confidence interval with √n.</li>
+  <li><strong>D+ and D−</strong>: a USB device that drops off the bus usually changes D+ or D−; <code>stats.dp_v</code>/<code>dm_v</code> give their range over the window.</li>
+  <li><strong>Size:</strong> measure keeps every reading until the window ends (about 64 bytes each), so a window holds at most 1 000 000 readings (about 28 hours at 100 ms); longer runs are a usage error that points to <code>log</code>.</li>
 </ul>
-<p>Text mode (<code>--text</code>) prints current in mA, each mean with its interval where there is one, a sparkline of the whole window (empty bins as gaps) and one line per step or ramp.</p>
+<p>Detected level changes (a list of steps and ramps with their times) are planned for a later release.</p>
+<p>Text mode (<code>--text</code>) prints current in mA, each mean with its spread, and a sparkline of the whole window (empty bins as gaps).</p>
 
 <h3><code>powerz info</code></h3>
 <pre><code>{
@@ -264,15 +264,10 @@ powerz schema</code></pre>
 # .stats.power_w.mean / .max (peak draw), .energy_wh over .integrated_s, .direction</code></pre>
 <h3>Did the draw change during the window?</h3>
 <pre><code>powerz measure --duration 60s
-# .shifts[]    each lasting change: .t_s, .field, .kind (step|ramp), .from, .to ([] = steady)
-# .bins[]      per-bin min/mean/max of vbus_v, ibus_a, power_w over time
+# .bins[]      per-bin min/mean/max of vbus_v, ibus_a, power_w over time:
+#              a level change is where .ibus_a.mean moves and stays
+# .stats.ibus_a.p5 / .p95 far apart with a small .stdev: a few outliers
 # .stats.dp_v  D+ range; a USB device dropping off the bus usually moves it</code></pre>
-<h3>Is a small difference real?</h3>
-<p>Measure each state in its own window and compare the means with their intervals:</p>
-<pre><code>powerz measure --duration 60s > radio_on.json
-powerz measure --duration 60s > radio_off.json
-# the means likely differ when their difference exceeds sqrt(on.ci95^2 + off.ci95^2);
-# ci95 is null under 30 s, or when the level changed (check .shifts) or drifted</code></pre>
 <h3>What does this charger offer, and what did the device negotiate?</h3>
 <p>USB-PD is only exchanged when the device attaches or renegotiates, so start the capture first and connect the device during it:</p>
 <pre><code>powerz measure --duration 20s
@@ -305,7 +300,6 @@ powerz measure --duration 60s > radio_off.json
   <li><strong>USB-PD decoding</strong> follows the USB-PD 3.1 specification and is fuzzed, but has not yet been checked against a live negotiation.</li>
   <li><strong>Sniffed protocol sessions</strong> (AFC/FCP/SCP/UFCS/VOOC sessions the meter detects) live only in firmware RAM and are not exposed over USB.</li>
   <li><strong>Polling rate:</strong> the meter samples at its configured rate (see <code>info</code>); polling faster repeats values.</li>
-  <li><strong>bins, shifts and ci95</strong> are computed by powerz from the polled samples. The shift and ramp rules were tuned on synthetic series (steps, noise, bursts, ramps, tapers) and have not yet been checked against device captures.</li>
   <li><strong>PD buffer:</strong> reading PD drains the meter's buffer, so only one consumer sees each record.</li>
   <li><strong>Firmware newer than 2.0.7</strong> is not guessed: its firmware-dependent fields and dashboard labels are reported as unknown until that firmware has been analysed.</li>
 </ul>

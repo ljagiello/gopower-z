@@ -115,29 +115,25 @@ func avgText(v *float64) string {
 // ---------------------------------------------------------------- measure
 
 type measureResult struct {
-	SchemaVersion   int          `json:"schema_version"`
-	Serial          string       `json:"serial"`
-	FirmwareVersion *string      `json:"firmware_version"`
-	FirmwareError   *string      `json:"firmware_error"`
-	Start           string       `json:"start"`
-	End             string       `json:"end"`
-	EndReason       string       `json:"end_reason"`
-	DurationS       float64      `json:"duration_s"`
-	IntegratedS     float64      `json:"integrated_s"`
-	IntervalS       float64      `json:"interval_s"`
-	Samples         int          `json:"samples"`
-	FailedSamples   int          `json:"failed_samples"`
-	LastError       *string      `json:"last_error"`
-	Direction       string       `json:"direction"`
-	Stats           measureStats `json:"stats"`
-	BinS            float64      `json:"bin_s"`
-	Bins            []binJSON    `json:"bins"`
-	Shifts          []shiftJSON  `json:"shifts"`
-	ShiftsTruncated bool         `json:"shifts_truncated"`
-	EnergyWh        float64      `json:"energy_wh"`
-	ChargeMAh       float64      `json:"charge_mah"`
-	Last            *snapshot    `json:"last"`
-	PD              *pdSummary   `json:"pd"`
+	SchemaVersion   int        `json:"schema_version"`
+	Serial          string     `json:"serial"`
+	FirmwareVersion *string    `json:"firmware_version"`
+	FirmwareError   *string    `json:"firmware_error"`
+	Start           string     `json:"start"`
+	End             string     `json:"end"`
+	EndReason       string     `json:"end_reason"`
+	DurationS       float64    `json:"duration_s"`
+	IntegratedS     float64    `json:"integrated_s"`
+	IntervalS       float64    `json:"interval_s"`
+	Samples         int        `json:"samples"`
+	FailedSamples   int        `json:"failed_samples"`
+	LastError       *string    `json:"last_error"`
+	Direction       string     `json:"direction"`
+	analysis                   // stats, bin_s, bins
+	EnergyWh        float64    `json:"energy_wh"`
+	ChargeMAh       float64    `json:"charge_mah"`
+	Last            *snapshot  `json:"last"`
+	PD              *pdSummary `json:"pd"`
 }
 
 // integrator accumulates energy and charge, holding each sample until the
@@ -177,11 +173,47 @@ func fatalMidRun(err error) bool {
 	return errors.Is(err, km003c.ErrNotFound) || errors.Is(err, km003c.ErrBusy) || errors.Is(err, km003c.ErrStuck)
 }
 
+// measureReadings is how many readings a window can hold at most. measure
+// keeps every reading until the end of the window for the percentiles, so
+// past maxSamples (about 64 MB) it refuses and points to log.
+func measureReadings(duration, interval time.Duration) (int, error) {
+	n := int64(duration / interval)
+	if duration%interval != 0 {
+		n++
+	}
+	if n+1 > maxSamples {
+		return 0, usageErr("measure: --duration %s at --interval %s is %d readings, more than %d; use a longer --interval, or `powerz log` for long runs",
+			duration, interval, n+1, maxSamples)
+	}
+	return int(n + 1), nil
+}
+
+// measureBin resolves --bin: 0 picks the automatic width; otherwise it must
+// be at least --interval and give at most maxBins bins over --duration.
+func measureBin(duration, interval, bin time.Duration) (time.Duration, error) {
+	switch {
+	case bin < 0:
+		return 0, usageErr("measure: --bin must not be negative")
+	case bin == 0:
+		return autoBin(duration, interval), nil
+	case bin < interval:
+		return 0, usageErr("measure: --bin %s is shorter than --interval %s", bin, interval)
+	}
+	n := duration / bin
+	if duration%bin != 0 {
+		n++
+	}
+	if n > maxBins {
+		return 0, usageErr("measure: --bin %s gives %d bins over --duration %s, more than %d; use a wider bin", bin, n, duration, maxBins)
+	}
+	return bin, nil
+}
+
 func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 	duration := fs.Duration("duration", 5*time.Second, "how long to sample")
 	interval := fs.Duration("interval", 100*time.Millisecond, "sampling interval, at least 20ms (the meter's own sample rate bounds how often values change)")
 	withPD := fs.Bool("pd", true, "also capture USB-PD traffic (source capabilities, negotiated contract, records)")
-	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output (0 = automatic: at least 5 samples per bin, at most %d bins)", maxAutoBins))
+	bin := fs.Duration("bin", 0, fmt.Sprintf("width of the time bins in the output (0 = automatic: at least 5 polling intervals per bin, at most %d bins)", maxAutoBins))
 	return func(ctx context.Context, g globals) error {
 		if *duration <= 0 {
 			return usageErr("measure: --duration must be positive (e.g. 10s)")
@@ -189,16 +221,13 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		if err := checkInterval("measure", *interval, 20*time.Millisecond); err != nil {
 			return err
 		}
-		binW := *bin
-		switch {
-		case binW < 0:
-			return usageErr("measure: --bin must not be negative")
-		case binW == 0:
-			binW = autoBin(*duration, *interval)
-		case binW < *interval:
-			return usageErr("measure: --bin %s is shorter than --interval %s", binW, *interval)
-		case math.Ceil(duration.Seconds()/binW.Seconds()) > maxBins:
-			return usageErr("measure: --bin %s gives more than %d bins over --duration %s; use a wider bin", binW, maxBins, *duration)
+		expected, err := measureReadings(*duration, *interval)
+		if err != nil {
+			return err
+		}
+		binW, err := measureBin(*duration, *interval, *bin)
+		if err != nil {
+			return err
 		}
 		m, err := open(ctx, g)
 		if err != nil {
@@ -210,7 +239,7 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 			return ctx.Err()
 		}
 
-		var samples []sample
+		samples := make([]sample, 0, expected)
 		var in integrator
 		var last *snapshot
 		var lastErr, stop error
@@ -274,11 +303,10 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 		// A completed window ends a little after --duration (the last read and
 		// the timer); analysing that tail as its own bin would add a sliver.
 		window := math.Min(end.Sub(start).Seconds(), duration.Seconds())
-		an := analyze(samples, window, binW.Seconds())
-		res.Stats, res.BinS, res.Bins, res.Shifts, res.ShiftsTruncated = an.Stats, an.BinS, an.Bins, an.Shifts, an.ShiftsTruncated
+		res.analysis = analyze(samples, window, binW.Seconds())
 		res.Direction = string(km003c.FlowNone)
-		if an.Stats.IBusA != nil {
-			res.Direction = meanDirection(an.Stats.IBusA.Mean)
+		if res.Stats.IBusA != nil {
+			res.Direction = meanDirection(res.Stats.IBusA.Mean)
 		}
 		res.EnergyWh = round(wh, 9)
 		res.ChargeMAh = round(ah*1000, 6)
@@ -319,19 +347,15 @@ func setupMeasure(fs *pflag.FlagSet) func(context.Context, globals) error {
 func printMeasureText(w io.Writer, st style, r measureResult) {
 	_, _ = fmt.Fprintf(w, "%s  %s  %.1fs  %d samples  %d failed  flow %s  (%s)\n", st.bold("POWER-Z measure"),
 		r.Serial, r.DurationS, r.Samples, r.FailedSamples, r.Direction, r.EndReason)
-	// Text mode is for people: current in mA, the mean with its 95% interval,
-	// then the spread. JSON keeps the documented units.
+	// Text mode is for people: current in mA, the mean, then the spread.
+	// JSON keeps the documented units.
 	row := func(name, unit string, scale float64, prec int, s *statJSON) {
 		if s == nil {
 			return
 		}
 		f := func(v float64) string { return strconv.FormatFloat(v*scale, 'f', prec, 64) }
-		ci := ""
-		if s.CI95 != nil {
-			ci = " ±" + f(*s.CI95)
-		}
-		_, _ = fmt.Fprintf(w, "  %-5s mean %s%s %s   min %s  p5 %s  p50 %s  p95 %s  max %s  sd %s\n", name,
-			f(s.Mean), ci, unit, f(s.Min), f(s.P5), f(s.P50), f(s.P95), f(s.Max), f(s.Stdev))
+		_, _ = fmt.Fprintf(w, "  %-5s mean %s %s   min %s  p5 %s  p50 %s  p95 %s  max %s  sd %s\n", name,
+			f(s.Mean), unit, f(s.Min), f(s.P5), f(s.P50), f(s.P95), f(s.Max), f(s.Stdev))
 	}
 	row("VBUS", "V", 1, 4, r.Stats.VBusV)
 	row("IBUS", "mA", 1000, 3, r.Stats.IBusA)
@@ -361,20 +385,6 @@ func printMeasureText(w io.Writer, st style, r measureResult) {
 			}
 		}
 		_, _ = fmt.Fprintf(w, "  IBUS per %gs  %s\n", r.BinS*float64(group), sparkline(cols, sparkWidth))
-	}
-	for _, s := range r.Shifts {
-		unit, scale, prec := "V", 1.0, 3
-		if s.Field == "ibus_a" {
-			unit, scale, prec = "mA", 1000, 1
-		}
-		what := "step at"
-		if s.Kind == kindRamp {
-			what = fmt.Sprintf("ramp over %.3fs from", s.DurationS)
-		}
-		_, _ = fmt.Fprintf(w, "  %s %.3fs  %s  %.*f -> %.*f %s\n", what, s.TS, s.Field, prec, s.From*scale, prec, s.To*scale, unit)
-	}
-	if r.ShiftsTruncated {
-		_, _ = fmt.Fprintf(w, "  (more shifts than listed: at most %d per field)\n", maxShiftsPerField)
 	}
 	if r.PD != nil {
 		_, _ = fmt.Fprintf(w, "  PD: %d messages, %d events\n", r.PD.Messages, r.PD.Events)

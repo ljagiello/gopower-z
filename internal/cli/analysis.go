@@ -1,20 +1,18 @@
 package cli
 
 import (
-	"cmp"
 	"math"
 	"slices"
 	"time"
 
 	"gonum.org/v1/gonum/floats"
 	gstat "gonum.org/v1/gonum/stat"
-	"gonum.org/v1/gonum/stat/distuv"
 )
 
 // This file turns the readings of a measure window into the summary that
-// measure prints: per-field statistics, time bins and level shifts. It never
-// talks to the meter, so it can be tested on synthetic series and reused for
-// recorded logs.
+// measure prints: per-field statistics and time bins. It never talks to the
+// meter, so it can be tested on synthetic series and reused for recorded
+// logs.
 
 // sample is one successful reading as the analysis sees it.
 type sample struct {
@@ -27,15 +25,14 @@ type sample struct {
 }
 
 type statJSON struct {
-	Min   float64  `json:"min"`
-	Mean  float64  `json:"mean"`
-	Max   float64  `json:"max"`
-	Last  float64  `json:"last"`
-	Stdev float64  `json:"stdev"`
-	P5    float64  `json:"p5"`
-	P50   float64  `json:"p50"`
-	P95   float64  `json:"p95"`
-	CI95  *float64 `json:"ci95"`
+	Min   float64 `json:"min"`
+	Mean  float64 `json:"mean"`
+	Max   float64 `json:"max"`
+	Last  float64 `json:"last"`
+	Stdev float64 `json:"stdev"`
+	P5    float64 `json:"p5"`
+	P50   float64 `json:"p50"`
+	P95   float64 `json:"p95"`
 }
 
 type measureStats struct {
@@ -62,70 +59,22 @@ type binJSON struct {
 	PowerW  *rangeJSON `json:"power_w"`
 }
 
-type shiftJSON struct {
-	TS        float64 `json:"t_s"`
-	Field     string  `json:"field"`
-	Kind      string  `json:"kind"`
-	DurationS float64 `json:"duration_s"`
-	From      float64 `json:"from"`
-	To        float64 `json:"to"`
-}
-
+// analysis is the part of measure's output computed from the samples; it is
+// embedded in measureResult, so its fields appear in place in the JSON.
 type analysis struct {
-	Stats           measureStats
-	BinS            float64
-	Bins            []binJSON
-	Shifts          []shiftJSON
-	ShiftsTruncated bool
+	Stats measureStats `json:"stats"`
+	BinS  float64      `json:"bin_s"`
+	Bins  []binJSON    `json:"bins"`
 }
 
 const (
-	// ciBatches is how many equal-time batches the window is cut into for the
-	// confidence interval of the mean; minCIBatches is how many must hold
-	// samples, and minBatchS how long each must be, for an interval to be
-	// reported. Batch means are close to independent only when a batch is
-	// several times longer than the load's own fluctuations: in simulation,
-	// 3 s batches keep coverage at 90-95% for loads correlated over up to 2 s.
-	ciBatches    = 10
-	minCIBatches = 8
-	minBatchS    = 3.0
 	// maxAutoBins bounds the automatic bin width; maxBins bounds --bin.
 	maxAutoBins = 120
 	maxBins     = 1000
-	// maxShiftsPerField bounds each field's shift list (earliest kept).
-	maxShiftsPerField = 32
-	// shiftNoiseK scales the bin-to-bin noise into a shift threshold.
-	shiftNoiseK = 6
-	// minLevelBins is how long a level must last, in bins, to count.
-	minLevelBins = 2
+	// maxSamples bounds one measure window: measure keeps every reading
+	// until the end for the percentiles (about 64 bytes each).
+	maxSamples = 1_000_000
 )
-
-const (
-	kindStep = "step"
-	kindRamp = "ramp"
-)
-
-// shiftFields are the fields searched for level shifts, with the smallest
-// change of the bin mean that counts as a shift and the decimals printed.
-var shiftFields = []struct {
-	name     string
-	floor    float64
-	decimals int
-	get      func(sample) float64
-}{
-	{"vbus_v", 0.25, 6, func(s sample) float64 { return s.V }},
-	{"ibus_a", 0.005, 6, func(s sample) float64 { return s.I }},
-	{"dp_v", 0.2, 4, func(s sample) float64 { return s.DP }},
-	{"dm_v", 0.2, 4, func(s sample) float64 { return s.DM }},
-}
-
-var shiftFieldNames = func() []string {
-	n := make([]string, len(shiftFields))
-	for i, f := range shiftFields {
-		n[i] = f.name
-	}
-	return n
-}()
 
 // autoBin picks the bin width for a window: the smallest of a fixed ladder
 // that spans at least five polling intervals and gives at most maxAutoBins
@@ -142,34 +91,22 @@ func autoBin(window, interval time.Duration) time.Duration {
 }
 
 // analyze summarises the samples (in time order) of a window of the given
-// length in seconds, with bins of binS seconds. Every slice in the result is
-// non-nil.
+// length in seconds, with bins of binS seconds. Bins is never nil.
 func analyze(ss []sample, window, binS float64) analysis {
-	ts := make([]float64, len(ss))
-	for k, s := range ss {
-		ts[k] = s.T
-	}
-	field := func(f func(sample) float64) []float64 {
-		xs := make([]float64, len(ss))
-		for k, s := range ss {
-			xs[k] = f(s)
-		}
-		return xs
-	}
-	var temps, tempTs []float64
+	var temps []float64
 	for _, s := range ss {
 		if s.TempOK {
-			temps, tempTs = append(temps, s.Temp), append(tempTs, s.T)
+			temps = append(temps, s.Temp)
 		}
 	}
-	a := analysis{BinS: round(binS, 3), Bins: []binJSON{}, Shifts: []shiftJSON{}}
+	a := analysis{BinS: round(binS, 3), Bins: []binJSON{}}
 	a.Stats = measureStats{
-		VBusV:  describe(field(func(s sample) float64 { return s.V }), ts, window, 6),
-		IBusA:  describe(field(func(s sample) float64 { return s.I }), ts, window, 6),
-		PowerW: describe(field(func(s sample) float64 { return s.P }), ts, window, 6),
-		TempC:  describe(temps, tempTs, window, 3),
-		DPV:    describe(field(func(s sample) float64 { return s.DP }), ts, window, 4),
-		DMV:    describe(field(func(s sample) float64 { return s.DM }), ts, window, 4),
+		VBusV:  describe(values(ss, func(s sample) float64 { return s.V }), 6),
+		IBusA:  describe(values(ss, func(s sample) float64 { return s.I }), 6),
+		PowerW: describe(values(ss, func(s sample) float64 { return s.P }), 6),
+		TempC:  describe(temps, 3),
+		DPV:    describe(values(ss, func(s sample) float64 { return s.DP }), 4),
+		DMV:    describe(values(ss, func(s sample) float64 { return s.DM }), 4),
 	}
 	if len(ss) == 0 || binS <= 0 {
 		return a
@@ -177,16 +114,13 @@ func analyze(ss []sample, window, binS float64) analysis {
 	// Samples are in time order, so each bin is a contiguous run. The last
 	// bin also takes samples read just after the end of the window.
 	nb := max(1, int(math.Ceil(window/binS-1e-9)))
-	bounds := make([]int, nb+1) // samples of bin k: ss[bounds[k]:bounds[k+1]]
-	k := 0
-	for b := 1; b <= nb; b++ {
-		for k < len(ss) && (b == nb || ss[k].T < float64(b)*binS) {
-			k++
-		}
-		bounds[b] = k
-	}
+	lo := 0
 	for b := range nb {
-		run := ss[bounds[b]:bounds[b+1]]
+		hi := lo
+		for hi < len(ss) && (b == nb-1 || ss[hi].T < float64(b+1)*binS) {
+			hi++
+		}
+		run := ss[lo:hi]
 		bin := binJSON{TS: round(float64(b)*binS, 3), Samples: len(run)}
 		if len(run) > 0 {
 			bin.VBusV = binRange(run, func(s sample) float64 { return s.V })
@@ -194,16 +128,18 @@ func analyze(ss []sample, window, binS float64) analysis {
 			bin.PowerW = binRange(run, func(s sample) float64 { return s.P })
 		}
 		a.Bins = append(a.Bins, bin)
+		lo = hi
 	}
-	for _, f := range shiftFields {
-		found := findShifts(ss, bounds, window, binS, f.name, f.floor, f.decimals, f.get)
-		if len(found) > maxShiftsPerField {
-			found, a.ShiftsTruncated = found[:maxShiftsPerField], true
-		}
-		a.Shifts = append(a.Shifts, found...)
-	}
-	slices.SortStableFunc(a.Shifts, func(x, y shiftJSON) int { return cmp.Compare(x.TS, y.TS) })
 	return a
+}
+
+// values extracts one field from a run of samples.
+func values(run []sample, f func(sample) float64) []float64 {
+	vs := make([]float64, len(run))
+	for k, s := range run {
+		vs[k] = f(s)
+	}
+	return vs
 }
 
 func binRange(run []sample, f func(sample) float64) *rangeJSON {
@@ -211,9 +147,9 @@ func binRange(run []sample, f func(sample) float64) *rangeJSON {
 	return &rangeJSON{Min: round(floats.Min(vs), 6), Mean: round(gstat.Mean(vs, nil), 6), Max: round(floats.Max(vs), 6)}
 }
 
-// describe computes the statistics of values xs taken at times ts (seconds
-// into a window of the given length); nil when xs is empty.
-func describe(xs, ts []float64, window float64, decimals int) *statJSON {
+// describe computes the statistics of the values xs (in time order); nil
+// when xs is empty.
+func describe(xs []float64, decimals int) *statJSON {
 	n := len(xs)
 	if n == 0 {
 		return nil
@@ -225,12 +161,8 @@ func describe(xs, ts []float64, window float64, decimals int) *statJSON {
 	sorted := slices.Clone(xs)
 	slices.Sort(sorted)
 	r := func(v float64) float64 { return round(v, decimals) }
-	st := &statJSON{Min: r(sorted[0]), Mean: r(mean), Max: r(sorted[n-1]), Last: r(xs[n-1]), Stdev: r(sd),
+	return &statJSON{Min: r(sorted[0]), Mean: r(mean), Max: r(sorted[n-1]), Last: r(xs[n-1]), Stdev: r(sd),
 		P5: r(quantile(sorted, 0.05)), P50: r(quantile(sorted, 0.5)), P95: r(quantile(sorted, 0.95))}
-	if ci, ok := batchCI(xs, ts, window); ok {
-		st.CI95 = new(r(ci))
-	}
-	return st
 }
 
 // quantile interpolates linearly between order statistics of sorted input:
@@ -246,303 +178,3 @@ func quantile(sorted []float64, q float64) float64 {
 	}
 	return sorted[lo] + (h-float64(lo))*(sorted[lo+1]-sorted[lo])
 }
-
-// batchCI is the half-width of an approximate 95% confidence interval for
-// the mean, from the means of ciBatches equal-time batches (the batch-means
-// method). Readings close in time are correlated, so s/sqrt(n) over raw
-// samples would shrink just by polling faster; batches of fixed length do
-// not. Batch means are only close to independent when batches are long
-// compared with how slowly the load itself wanders, so no interval is
-// claimed for batches under minBatchS, or when consecutive batch means are
-// correlated (lag-1 correlation above 2/sqrt(m): a level that changed or
-// drifted during the window fails it). The interval is the Student-t one for
-// the mean of the m batch means. It covers sampling variation over the
-// window, not the meter's accuracy.
-func batchCI(xs, ts []float64, window float64) (float64, bool) {
-	if window/ciBatches < minBatchS {
-		return 0, false
-	}
-	var sum [ciBatches]float64
-	var cnt [ciBatches]int
-	for k, x := range xs {
-		b := min(ciBatches-1, max(0, int(ts[k]/window*ciBatches)))
-		sum[b] += x
-		cnt[b]++
-	}
-	var means []float64
-	for b := range ciBatches {
-		if cnt[b] > 0 {
-			means = append(means, sum[b]/float64(cnt[b]))
-		}
-	}
-	m := len(means)
-	if m < minCIBatches {
-		return 0, false
-	}
-	// NaN (a constant run, nothing to correlate) counts as uncorrelated.
-	if lag1 := gstat.Correlation(means[:m-1], means[1:], nil); lag1 > 2/math.Sqrt(float64(m)) {
-		return 0, false
-	}
-	_, v := gstat.MeanVariance(means, nil)
-	t := distuv.StudentsT{Mu: 0, Sigma: 1, Nu: float64(m - 1)}.Quantile(0.975)
-	return t * math.Sqrt(v/float64(m)), true
-}
-
-// level is a run of samples ss[lo:hi] at one level of a field.
-type level struct{ lo, hi int }
-
-// findShifts reports lasting changes of a field's level in four passes:
-//
-//  1. Candidates on bin means. A 3-bin running median removes one-bin
-//     bursts; a bin starts a new level when it and the next bin both differ
-//     from the current level by more than the threshold and agree with each
-//     other. The threshold is the larger of the field's floor and
-//     shiftNoiseK times the bin-to-bin noise (a robust estimate from the
-//     median absolute bin-to-bin difference).
-//  2. Each boundary moves to the sample where the change happened, searched
-//     from the last non-empty bin before the new level.
-//  3. Levels shorter than minLevelBins bins are merged away: a burst that
-//     straddles a bin edge raises two bins and survives step 1, but it is
-//     not a lasting level.
-//  4. A run of levels that each drift in one direction, joined by shifts in
-//     that direction, is one ramp, not a staircase of steps.
-func findShifts(ss []sample, bounds []int, window, binS float64, field string, floor float64, decimals int, f func(sample) float64) []shiftJSON {
-	type bin struct {
-		idx  int
-		mean float64
-	}
-	var bins []bin
-	for b := 0; b+1 < len(bounds); b++ {
-		if bounds[b+1] > bounds[b] {
-			bins = append(bins, bin{b, meanOf(ss, bounds[b], bounds[b+1], f)})
-		}
-	}
-	if len(bins) < 3 {
-		return nil
-	}
-	diffs := make([]float64, len(bins)-1)
-	for k := range diffs {
-		diffs[k] = math.Abs(bins[k+1].mean - bins[k].mean)
-	}
-	slices.Sort(diffs)
-	noise := 1.4826 * quantile(diffs, 0.5) / math.Sqrt2
-	thr := math.Max(floor, shiftNoiseK*noise)
-
-	// 1. Candidate levels on the smoothed bin means; starts holds positions
-	// in bins where each level begins.
-	smooth := make([]float64, len(bins))
-	for k := range bins {
-		c := min(max(k, 1), len(bins)-2)
-		w := []float64{bins[c-1].mean, bins[c].mean, bins[c+1].mean}
-		slices.Sort(w)
-		smooth[k] = w[1]
-	}
-	starts := []int{0}
-	levelSum, levelN := smooth[0], 1
-	for k := 1; k < len(bins); k++ {
-		level := levelSum / float64(levelN)
-		cur := smooth[k]
-		if k+1 < len(bins) && math.Abs(cur-level) > thr {
-			next := smooth[k+1]
-			if math.Abs(next-level) > thr && math.Abs(next-cur) <= thr && (next-level)*(cur-level) > 0 {
-				starts = append(starts, k)
-				levelSum, levelN = cur, 1
-				continue
-			}
-		}
-		levelSum += cur
-		levelN++
-	}
-	if len(starts) == 1 {
-		return nil
-	}
-
-	// 2. Locate each boundary on the samples. The provisional levels are
-	// whole bins; the split minimises the squared error of "from before, to
-	// after", and moving it one sample right changes the cost by one term.
-	end := func(k int) int { // sample index where provisional level k ends
-		if k+1 < len(starts) {
-			return bounds[bins[starts[k+1]].idx]
-		}
-		return len(ss)
-	}
-	splits := make([]int, len(starts)+1)
-	splits[0], splits[len(starts)] = bounds[bins[0].idx], len(ss)
-	for k := 1; k < len(starts); k++ {
-		from := meanOf(ss, bounds[bins[starts[k-1]].idx], end(k-1), f)
-		to := meanOf(ss, bounds[bins[starts[k]].idx], end(k), f)
-		first := bins[starts[k]].idx
-		lo, hi := bounds[bins[starts[k]-1].idx], bounds[first+1]
-		cost := 0.0
-		for j := lo; j < hi; j++ {
-			cost += (f(ss[j]) - to) * (f(ss[j]) - to)
-		}
-		split, best := lo, cost
-		for s := lo; s < hi; s++ {
-			x := f(ss[s])
-			cost += (x-from)*(x-from) - (x-to)*(x-to)
-			if cost < best {
-				split, best = s+1, cost
-			}
-		}
-		// Every level keeps at least one sample on each side of its split.
-		splits[k] = min(max(split, splits[k-1]+1), hi-1)
-	}
-	levels := make([]level, len(starts))
-	for k := range levels {
-		levels[k] = level{splits[k], splits[k+1]}
-	}
-
-	// 3. A level that does not last minLevelBins bins joins its neighbour
-	// (the next one, or the previous one at the end of the window). Then
-	// neighbours whose medians agree within the threshold are one level: a
-	// burst that joined the next level leaves that level's median where it
-	// was, so the burst disappears, while a short level that was part of a
-	// real transition leaves the change in place. Means would not do: a
-	// level that has absorbed a burst has a raised mean.
-	med := func(l level) float64 { return medianOf(ss, l.lo, l.hi, f) }
-	duration := func(l level) float64 {
-		stop := window
-		if l.hi < len(ss) {
-			stop = ss[l.hi].T
-		}
-		return stop - ss[l.lo].T
-	}
-	for i := 0; i < len(levels) && len(levels) > 1; {
-		if duration(levels[i]) >= minLevelBins*binS {
-			i++
-			continue
-		}
-		if i == len(levels)-1 {
-			levels[i-1].hi = levels[i].hi
-			levels = slices.Delete(levels, i, i+1)
-			i--
-			continue
-		}
-		levels[i+1].lo = levels[i].lo
-		levels = slices.Delete(levels, i, i+1)
-	}
-	for i := 1; i < len(levels); {
-		if math.Abs(med(levels[i])-med(levels[i-1])) <= thr {
-			levels[i-1].hi = levels[i].hi
-			levels = slices.Delete(levels, i, i+1)
-			continue
-		}
-		i++
-	}
-	if len(levels) < 2 {
-		return nil
-	}
-
-	// 4. Steps and ramps, again on medians so bursts inside a level neither
-	// move its value nor look like drift. drift is the sign of a level's
-	// change between its first and second half (0 when it is flat). A ramp
-	// cut into a staircase drifts within each level by about half the step
-	// between levels; a flat level drifts by noise only. So a level drifts
-	// when the change is at least 30% of its smaller neighbouring step and
-	// three standard errors of the bin noise.
-	means := make([]float64, len(levels)) // the level of each, as a median
-	for k, l := range levels {
-		means[k] = med(l)
-	}
-	drift := make([]float64, len(levels))
-	for k, l := range levels {
-		mid := (ss[l.lo].T + ss[l.hi-1].T) / 2
-		h := l.lo
-		for h < l.hi && ss[h].T < mid {
-			h++
-		}
-		if h-l.lo < 2 || l.hi-h < 2 {
-			continue
-		}
-		d := medianOf(ss, h, l.hi, f) - medianOf(ss, l.lo, h, f)
-		step := math.Inf(1)
-		if k > 0 {
-			step = math.Abs(means[k] - means[k-1])
-		}
-		if k+1 < len(levels) {
-			step = math.Min(step, math.Abs(means[k+1]-means[k]))
-		}
-		halfBins := math.Max(1, (ss[l.hi-1].T-ss[l.lo].T)/2/binS)
-		if math.Abs(d) >= 0.3*step && math.Abs(d) > 3*noise*math.Sqrt(2/halfBins) {
-			drift[k] = math.Copysign(1, d)
-		}
-	}
-	at := func(i int) float64 { return ss[min(i, len(ss)-1)].T }
-	// edgeLevel is the median of the first or last bin's worth of a level.
-	edgeLevel := func(l level, last bool) float64 {
-		if last {
-			lo := l.hi - 1
-			for lo > l.lo && ss[l.hi-1].T-ss[lo-1].T < binS {
-				lo--
-			}
-			return medianOf(ss, lo, l.hi, f)
-		}
-		hi := l.lo + 1
-		for hi < l.hi && ss[hi].T-ss[l.lo].T < binS {
-			hi++
-		}
-		return medianOf(ss, l.lo, hi, f)
-	}
-	r := func(v float64) float64 { return round(v, decimals) }
-	var out []shiftJSON
-	for k := 1; k < len(levels); {
-		dir := math.Copysign(1, means[k]-means[k-1])
-		// Extend over boundaries in the same direction while a level on
-		// either side drifts that way.
-		j := k
-		for j < len(levels) && math.Copysign(1, means[j]-means[j-1]) == dir && (drift[j-1] == dir || drift[j] == dir) {
-			j++
-		}
-		if j == k { // a step
-			out = append(out, shiftJSON{TS: r3(at(levels[k].lo)), Field: field, Kind: kindStep, From: r(means[k-1]), To: r(means[k])})
-			k++
-			continue
-		}
-		// A ramp over boundaries k..j-1: it runs through the drifting levels
-		// between them, starting at the first drifting level (or the first
-		// boundary) and ending with the last.
-		first, last := k, j-2
-		if drift[k-1] == dir {
-			first = k - 1
-		}
-		if drift[j-1] == dir {
-			last = j - 1
-		}
-		start, stop := at(levels[first].lo), at(levels[last].hi)
-		if levels[last].hi >= len(ss) {
-			stop = window
-		}
-		from, to := means[k-1], means[j-1]
-		if first == k-1 {
-			from = edgeLevel(levels[first], false)
-		}
-		if last == j-1 {
-			to = edgeLevel(levels[last], true)
-		}
-		out = append(out, shiftJSON{TS: r3(start), Field: field, Kind: kindRamp, DurationS: r3(stop - start), From: r(from), To: r(to)})
-		k = j
-	}
-	return out
-}
-
-// values extracts one field from a run of samples.
-func values(run []sample, f func(sample) float64) []float64 {
-	vs := make([]float64, len(run))
-	for k, s := range run {
-		vs[k] = f(s)
-	}
-	return vs
-}
-
-func medianOf(ss []sample, lo, hi int, f func(sample) float64) float64 {
-	vs := values(ss[lo:hi], f)
-	slices.Sort(vs)
-	return quantile(vs, 0.5)
-}
-
-func meanOf(ss []sample, lo, hi int, f func(sample) float64) float64 {
-	return gstat.Mean(values(ss[lo:hi], f), nil)
-}
-
-func r3(v float64) float64 { return round(v, 3) }

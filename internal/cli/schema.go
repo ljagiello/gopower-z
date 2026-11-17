@@ -115,7 +115,6 @@ var definitions = map[string][]fieldDoc{
 		fd("p5", tNum, false, "5th percentile (linear interpolation between samples)"),
 		fd("p50", tNum, false, "median"),
 		fd("p95", tNum, false, "95th percentile"),
-		fd("ci95", tNum, true, "half-width of an approximate 95% confidence interval of mean (mean ± ci95), from the means of 10 equal-time batches of the window (batch means), so polling faster does not narrow it. Null unless each batch lasts at least 3 s (a window of 30 s or more), at least 8 batches hold samples, and consecutive batch means are not correlated (lag-1 autocorrelation at most 2/sqrt(batches); a level that changed or drifted during the window fails this: see shifts). It assumes the load fluctuates on time scales well under one batch: in simulation, coverage is 90-95% for loads correlated over up to 2 s, lower for slower wander, so use a longer window for slowly varying loads. Covers sampling variation, not the meter's accuracy. Two windows' means likely differ when the difference exceeds sqrt(ci95_a^2 + ci95_b^2)"),
 	},
 	"bin": {
 		fd("t_s", tNum, false, "start of the bin, seconds from the start of the window"),
@@ -128,14 +127,6 @@ var definitions = map[string][]fieldDoc{
 		fd("min", tNum, false, "smallest value"),
 		fd("mean", tNum, false, "mean"),
 		fd("max", tNum, false, "largest value"),
-	},
-	"shift": {
-		fd("t_s", tNum, false, "when the change starts, seconds from the start of the window: for a step, the sample where the new level begins (located on the samples, not just the bin); for a ramp, where the drift became distinguishable from the level before it"),
-		fenum("field", false, "which value changed level", shiftFieldNames...),
-		fenum("kind", false, "step: a change between two levels; ramp: a steady drift from from to to over duration_s (a charge taper, a decay), reported once instead of as a staircase of steps", kindStep, kindRamp),
-		fd("duration_s", tNum, false, "how long a ramp lasts, seconds; 0 for a step"),
-		fd("from", tNum, false, "level before the change, as a median so brief bursts do not move it: for a step, of the samples since the previous shift (or the start); for a ramp, the level just before it (or its first bin when it starts the window)"),
-		fd("to", tNum, false, "level after the change, as a median: for a step, of the samples until the next detected shift (or the end); for a ramp, the level just after it (or its last bin when it ends the window)"),
 	},
 	"measure": {
 		fd("schema_version", tInt, false, "output schema version"),
@@ -161,8 +152,6 @@ var definitions = map[string][]fieldDoc{
 		fref("stats.dm_v", tObj, "stat", true, "D- voltage, volts"),
 		fd("bin_s", tNum, false, "width of the time bins, seconds (--bin, or automatic: at least 5 polling intervals per bin, at most 120 bins; a bin holds fewer samples when reads are slow or fail)"),
 		fref("bins", tArr, "bin", false, "the window cut into bins of bin_s seconds, in time order (the last one may be shorter): the shape over time that min/mean/max hide. Empty bins have samples 0"),
-		fref("shifts", tArr, "shift", false, "lasting level changes of vbus_v, ibus_a, dp_v and dm_v, in time order. A bin mean must move from the current level by more than max(floor, 6 × the bin-to-bin noise) and the next bin must agree; each level must then last at least 2 bins, and neighbouring levels must differ by more than the threshold in their medians, so bursts shorter than that (however they fall against bin edges, however many) are not listed. Steady drifts are one ramp (kind ramp). Floors: 0.25 V for vbus_v, 5 mA for ibus_a, 0.2 V for dp_v/dm_v. At most 32 per field, earliest first (see shifts_truncated). [] when the levels held"),
-		fd("shifts_truncated", tBool, false, "true when some field had more than 32 shifts and the rest were left out"),
 		fd("energy_wh", tNum, false, "energy over integrated_s, watt-hours; positive = delivered receptacle -> plug"),
 		fd("charge_mah", tNum, false, "charge over integrated_s, milliamp-hours; positive = delivered receptacle -> plug"),
 		fref("last", tObj, "snapshot", true, "the final reading (same shape as `read`)"),
@@ -424,7 +413,6 @@ func buildSchema(root *cobra.Command) map[string]any {
 			"Linux support is built and unit-tested in CI but has not been exercised with a meter attached.",
 			"pd opens no CONNECT session; firmware analysis shows 1.9.5 records PD traffic regardless, but attach/detach capture by pd itself has not yet been observed live (measure, which opens a session, has).",
 			"Firmware outside 1.7.9-2.0.7 is not guessed: firmware-dependent fields and dashboard labels are null until that firmware is analysed.",
-			"measure's bins, shifts and ci95 are computed by powerz from the polled samples; the shift thresholds were tuned on synthetic series and have not yet been checked against device captures.",
 		},
 		"safety": "Every frame sent to the meter is checked against a read-only whitelist (GET_DATA for ADC/settings/PD, CONNECT/DISCONNECT, and MemoryRead of three fixed info blocks). powerz never writes settings, never triggers fast-charge protocols (cannot change VBUS), never authenticates and never touches firmware.",
 	}
