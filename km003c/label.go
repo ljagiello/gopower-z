@@ -3,10 +3,14 @@ package km003c
 // DashboardLabels reproduces the two D+/D− protocol labels the meter shows on
 // its dashboard, using the algorithm of the meter's own firmware generation:
 //
-//   - firmware <= 2.0.0 (TailLineAverages): 1.9.5 FUN_0001fb44, inputs VBUS,
-//     IBUS (mA) and the D+/D− 50-sample averages;
-//   - newer or unknown firmware: 2.0.7 FUN_00022098 / FUN_00021bd4, inputs
-//     VBUS and the instantaneous D+/D−.
+//   - firmware <= 2.0.0 (TailLineAverages): 1.9.5 FUN_0001fb44 (identical in
+//     1.8.8-1.9.9), inputs VBUS, IBUS (mA) and the D+/D− 50-sample averages
+//     reported in the ADC tail, so the result is exact;
+//   - firmware >= 2.0.1 or unknown: 2.0.7 FUN_00022098 / FUN_00021bd4
+//     (identical in 2.0.1-2.0.7), inputs VBUS and D+/D−. That firmware uses
+//     D+/D− averages it no longer reports over USB, so the instantaneous
+//     D+/D− values are used instead: labels match except while the data-line
+//     voltages are changing.
 //
 // See docs/firmware.html §10. When the meter has identified a proprietary
 // session (VOOC/SVOOC/VFCP/UFCS) it shows that instead; that state is not
