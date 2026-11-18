@@ -504,6 +504,42 @@ func TestMeasureText(t *testing.T) {
 	if got := b.String(); got != want {
 		t.Errorf("text output:\n%s\nwant:\n%s", got, want)
 	}
+	// Levels are listed only when the current changed, at most 10 of them.
+	lv := func(start, end, p50 float64) levelJSON {
+		return levelJSON{StartS: start, EndS: end, IBusA: &statJSON{P50: p50}}
+	}
+	text := func(r measureResult) string {
+		var b strings.Builder
+		printMeasureText(&b, style{}, r)
+		return b.String()
+	}
+	one := r
+	one.Levels = []levelJSON{lv(0, 60, 0.25)}
+	if s := text(one); strings.Contains(s, "levels") {
+		t.Errorf("one level is not listed:\n%s", s)
+	}
+	two := r
+	two.Levels = []levelJSON{lv(0, 42.3, 0.134), lv(42.3, 60, 0.441)}
+	if s := text(two); !strings.HasSuffix(s, "  2 levels (typical current)\n         0.0 .. 42.3     s  134.000 mA\n        42.3 .. 60.0     s  441.000 mA\n") {
+		t.Errorf("two levels:\n%s", s)
+	}
+	three := r
+	three.Levels = []levelJSON{lv(0, 16, 0.065484), lv(16, 23, 0.0614625), lv(23, 60, -0.0000001)}
+	wantLevels := "  IBUS per 20s  ▁ █\n" +
+		"  3 levels (typical current)\n" +
+		"         0.0 .. 16.0     s  65.484 mA\n" +
+		"        16.0 .. 23.0     s  61.463 mA\n" +
+		"        23.0 .. 60.0     s  0.000 mA\n"
+	if s := text(three); !strings.HasSuffix(s, wantLevels) {
+		t.Errorf("levels:\n%s\nwant the end:\n%s", s, wantLevels)
+	}
+	dozen := r
+	for k := range 12 {
+		dozen.Levels = append(dozen.Levels, lv(float64(k*5), float64(k*5+5), 0.1*float64(k%2+1)))
+	}
+	if s := text(dozen); strings.Count(s, " mA\n") != 10 || !strings.HasSuffix(s, "    ... 2 more (all in the JSON output)\n") {
+		t.Errorf("12 levels:\n%s", s)
+	}
 	spark := func(r measureResult) string {
 		var b strings.Builder
 		printMeasureText(&b, style{}, r)
