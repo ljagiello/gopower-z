@@ -137,6 +137,20 @@ func TestCLIRead(t *testing.T) {
 	}
 }
 
+// `powerz` with no command runs read when stdout is not a terminal (watch
+// when it is, through the same path), with the context it was started with:
+// it used to pass the subcommand's, which cobra leaves nil, and panicked on
+// the first exchange with a meter.
+func TestCLIDefaultCommand(t *testing.T) {
+	for _, args := range [][]string{nil, {"--json"}} {
+		c := newCLI(t)
+		if code := c.run(context.Background(), args...); code != exitOK {
+			t.Fatalf("powerz %v: exit %d, stderr %s", args, code, c.stderr.String())
+		}
+		checkShape(t, "snapshot", c.one())
+	}
+}
+
 // When the firmware version cannot be read the reading is still printed, the
 // firmware-dependent fields are null and firmware_error says why.
 func TestCLIReadFirmwareUnknown(t *testing.T) {
