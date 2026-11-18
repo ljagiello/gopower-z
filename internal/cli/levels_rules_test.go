@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // The persistence rule counts a level's own readings: at least 5 of them
 // (at 10 s polling a clearly separate 4-reading stretch is not a level, a
@@ -75,5 +78,23 @@ func TestLevelsMergeRejudgesNeighbours(t *testing.T) {
 	}
 	if lv := levels(ss, 60); len(lv) != 1 {
 		t.Errorf("levels start at %v, want one level", starts(lv))
+	}
+}
+
+// rankZ: the Mann-Whitney z score, with ties.
+func TestRankZ(t *testing.T) {
+	for _, c := range []struct {
+		a, b []float64
+		want float64
+	}{
+		{[]float64{1, 2, 3}, []float64{4, 5, 6}, 1.964},  // U = 9: all of b above a
+		{[]float64{4, 5, 6}, []float64{1, 2, 3}, -1.964}, // and the other way
+		{[]float64{1, 2, 3}, []float64{1, 2, 3}, 0},
+		{[]float64{1, 1, 2}, []float64{2, 3, 3}, 1.826}, // ties: U = 8.5, variance 4.8
+		{[]float64{5, 5}, []float64{5, 5}, 0},           // all tied
+	} {
+		if got := rankZ(c.a, c.b); math.Abs(got-c.want) > 0.001 {
+			t.Errorf("rankZ(%v, %v) = %.4f, want %v", c.a, c.b, got, c.want)
+		}
 	}
 }

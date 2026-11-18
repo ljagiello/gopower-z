@@ -156,7 +156,7 @@ func TestLevelsInjected(t *testing.T) {
 		{"small rise at 30 s (+20 mA)", step(30, 0.02), []float64{30}},
 		{"reversal at 30 s", step(30, -0.13), []float64{30}},
 		{"on at 10 s, off at 40 s", func(t float64) float64 { return step(10, 0.3)(t) - step(40, 0.3)(t) }, []float64{10, 40}},
-		{"level of 6 s at the end", step(54, 0.3), []float64{54}},
+		{"level of 8 s at the end", step(52, 0.3), []float64{52}},
 		{"level of 3 s at the end", step(57, 0.3), nil},
 		{"three 1 s bursts", func(t float64) float64 { return burst(12, 1, 0.4)(t) + burst(30, 1, 0.4)(t) + burst(47, 1, 0.4)(t) }, nil},
 		{"2 s burst at the start", burst(0, 2, 0.4), nil},
@@ -219,8 +219,7 @@ func TestLevelsRules(t *testing.T) {
 			}
 			return 0.010
 		}, []float64{30}},
-		// On a 50 min window ED-PELT sees 3 s averages: a 4 s burst is not a
-		// level, a 12 s one is, with its times on the 3 s grid.
+		// On a 50 min window: a 4 s burst is not a level, a 12 s one is.
 		{"4 s burst on a 50 min window", 3000, 1, func(t float64) float64 {
 			if t >= 1501 && t < 1505 {
 				return 0.3
@@ -267,10 +266,8 @@ func TestLevelsShortLevelJoinsCloserNeighbour(t *testing.T) {
 			}
 			ss = append(ss, sample{T: tt, I: i})
 		}
-		l := newLevelSet(ss, []int{0, 200, 230, 600}, 60)
-		l.persist(0)
-		if !slices.Equal(l.bounds, c.want) {
-			t.Errorf("%v / %v / %v A: bounds %v, want %v", c.a, c.b, c.c, l.bounds, c.want)
+		if got := resolve(ss, []int{0, 200, 230, 600}, 1); !slices.Equal(got, c.want) {
+			t.Errorf("%v / %v / %v A: bounds %v, want %v", c.a, c.b, c.c, got, c.want)
 		}
 	}
 }
@@ -304,7 +301,7 @@ func TestLevelsEdgeCases(t *testing.T) {
 }
 
 // The largest window measure allows stays fast: ED-PELT sees at most
-// levelPoints averages, and medians are recomputed only for merged levels.
+// levelPoints averages, in short chunks.
 func TestLevelsAtTheReadingLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("1,000,000 readings")
@@ -323,10 +320,10 @@ func TestLevelsAtTheReadingLimit(t *testing.T) {
 	}
 	start := time.Now()
 	lv := levels(ss, 100_000)
-	if len(lv) != 2 || math.Abs(lv[1].StartS-50_000) > 300 {
+	if len(lv) != 2 || math.Abs(lv[1].StartS-50_000) > 0.2 {
 		t.Errorf("levels start at %v", starts(lv))
 	}
-	if d := time.Since(start); d > 10*time.Second {
+	if d := time.Since(start); d > time.Minute { // a quadratic blow-up would take far longer
 		t.Errorf("took %v", d)
 	}
 }

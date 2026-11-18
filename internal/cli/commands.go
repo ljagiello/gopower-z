@@ -176,7 +176,7 @@ func fatalMidRun(err error) bool {
 // measureReadings is how many readings a window can hold at most. measure
 // keeps every reading until the end of the window for the percentiles, so
 // past maxSamples it refuses and points to log. The readings alone are
-// about 64 MB at the limit; the process peaks near 200 MB.
+// about 64 MB at the limit; the process peaks near 250 MB.
 func measureReadings(duration, interval time.Duration) (int, error) {
 	n := int64(duration / interval)
 	if duration%interval != 0 {

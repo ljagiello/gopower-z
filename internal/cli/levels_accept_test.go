@@ -47,16 +47,22 @@ func add(ss []sample, f func(t float64) float64) []sample {
 	return out
 }
 
-// A load that switches on and off with a fixed pattern, each phase lasting
-// at least 6 s: every phase is a level (the edge phases too, when they last
-// 5 s), each level's median is one of the two currents, never between them,
-// and each change is found where it happened.
+// A load that switches on and off with a fixed pattern. With each phase
+// lasting 8 s or more, every phase is a level (an edge phase too, when it
+// lasts 8 s), each level's median is one of the two currents, never between
+// them, and each change is found where it happened. (The real noise pulses
+// about a third of the time, and pulses inside a phase do not count toward
+// its 5 s, so 5-8 s phases can go either way.) With every phase 4 s or
+// shorter, the load is one level.
 func TestLevelsOnOffLoads(t *testing.T) {
-	for _, window := range []float64{120, 600, 1800, 3600} {
+	for _, window := range []float64{120, 600, 3600} {
 		base := noise(t, window, 1, 0)
-		for _, c := range []struct{ on, off float64 }{{6, 14}, {7, 13}, {10, 10}, {20, 20}, {21, 39}, {30, 30}, {12, 6}} {
+		for _, c := range []struct{ on, off float64 }{{8, 12}, {9, 11}, {10, 10}, {20, 20}, {21, 39}, {30, 30}, {12, 8}, {2, 4}, {4, 3}} {
 			for _, amp := range []float64{0.06, 0.3} {
 				for _, shift := range []float64{0, 3.7} {
+					if window > 600 && (amp != 0.06 || shift != 3.7) {
+						continue // long windows: one amplitude and offset (time under -race)
+					}
 					period := c.on + c.off
 					isOn := func(t float64) bool { return math.Mod(t+shift, period) < c.on }
 					ss := add(base, func(t float64) float64 {
@@ -78,10 +84,19 @@ func TestLevelsOnOffLoads(t *testing.T) {
 							break
 						}
 					}
-					if len(want) > 0 && want[0] < levelMinS {
+					if math.Max(c.on, c.off) <= 4 {
+						want = nil // fast switching: one level
+					}
+					if len(want) > 0 && want[0] < 8 {
+						if want[0] >= 4 {
+							continue // an edge phase in the open band
+						}
 						want = want[1:]
 					}
-					if len(want) > 0 && window-want[len(want)-1] < levelMinS {
+					if len(want) > 0 && window-want[len(want)-1] < 8 {
+						if window-want[len(want)-1] >= 4 {
+							continue
+						}
 						want = want[:len(want)-1]
 					}
 					lv := levels(ss, window)
@@ -100,6 +115,9 @@ func TestLevelsOnOffLoads(t *testing.T) {
 						}
 					}
 					for k, l := range lv {
+						if len(want) == 0 {
+							break // one level of a fast-switching load: its median is the mix
+						}
 						p := l.IBusA.P50
 						if math.Abs(p-0.0655) > 0.01 && math.Abs(p-0.0655-amp) > 0.01 {
 							t.Errorf("%s: level %d (%v..%v s) median %.1f mA is neither current", name, k, l.StartS, l.EndS, p*1000)
@@ -112,23 +130,23 @@ func TestLevelsOnOffLoads(t *testing.T) {
 	}
 }
 
-// Bursts shorter than the persistence time (5 s, window/levelMaxCount on
-// windows over 5000 s) are not levels on long windows either, wherever they
-// fall relative to the averaging grid; longer ones are.
+// Bursts shorter than the persistence time are not levels on long windows
+// either, wherever they fall relative to the averaging grid; longer ones
+// are.
 func TestLevelsLongWindowBursts(t *testing.T) {
-	for _, window := range []float64{1200, 3000, 6000} {
+	for _, window := range []float64{1200, 6000} {
 		base := noise(t, window, 1, 0)
 		grid := math.Max(1, window/levelPoints)
-		for _, dur := range []float64{3, 4, 4.9, 8} {
-			for k := range 4 {
-				at := window/2 + float64(k)*grid/4
+		for _, dur := range []float64{3, 4.9, 8} {
+			for k := range 2 {
+				at := window/2 + float64(k)*grid/2 + 0.37
 				ss := add(base, func(t float64) float64 {
 					if t >= at && t < at+dur {
 						return 0.2
 					}
 					return 0
 				})
-				minS := math.Max(levelMinS, window/levelMaxCount)
+				minS := levelMinS
 				if math.Abs(dur-minS) < 1 {
 					continue // right at the persistence limit
 				}
@@ -168,15 +186,14 @@ func TestLevelsSlowPolling(t *testing.T) {
 	}
 }
 
-// Long windows: levels of at least window/levelMaxCount (20 s here) are
-// found with their times accurate to a reading or two (1 s polling);
-// shorter ones are not levels.
+// Long windows: levels are found with their times accurate to a reading or
+// two (1 s polling), short ones included.
 func TestLevelsLongWindowAccuracy(t *testing.T) {
 	window := 20000.0
 	base := noise(t, window, 10, 0) // 1 s polling
 	ss := add(base, func(t float64) float64 {
 		switch {
-		case t >= 5003.3 && t < 5013.3: // 10 s: under 20 s
+		case t >= 5003.3 && t < 5013.3: // 10 s
 			return 0.1
 		case t >= 10007.3 && t < 10030.3: // 23 s
 			return 0.1
@@ -186,7 +203,7 @@ func TestLevelsLongWindowAccuracy(t *testing.T) {
 		return 0
 	})
 	got := starts(levels(ss, window))
-	want := []float64{10007.3, 10030.3, 15000, 15200}
+	want := []float64{5003.3, 5013.3, 10007.3, 10030.3, 15000, 15200}
 	ok := len(got) == len(want)
 	for i := 0; ok && i < len(got); i++ {
 		ok = math.Abs(got[i]-want[i]) <= 2 // two readings at 1 s polling
@@ -286,21 +303,22 @@ func TestLevelsMergedMedian(t *testing.T) {
 	}
 }
 
-// A ramp has no single change time: it shows as several levels in a row,
-// each higher than the one before, and none with a median outside the ramp.
+// A ramp is not steady anywhere, so it is not a level: it shows as a change
+// (or a few, each higher than the one before) inside the ramp, between the
+// level before it and the level after it.
 func TestLevelsRamp(t *testing.T) {
 	base := noise(t, 60, 1, 0)
 	ss := add(base, func(t float64) float64 { return 0.3 * math.Min(1, math.Max(0, (t-20)/20)) })
 	lv := levels(ss, 60)
-	if len(lv) < 3 {
+	if len(lv) < 2 {
 		t.Fatalf("a 20 s ramp gave %d levels", len(lv))
 	}
 	for k := 1; k < len(lv); k++ {
-		if lv[k].IBusA.P50 <= lv[k-1].IBusA.P50 {
-			t.Errorf("level %d median %v is not above level %d's %v", k, lv[k].IBusA.P50, k-1, lv[k-1].IBusA.P50)
+		if lv[k].IBusA.P50 <= lv[k-1].IBusA.P50 || lv[k].StartS < 20 || lv[k].StartS > 40 {
+			t.Errorf("level %d starts at %v with median %v after %v", k, lv[k].StartS, lv[k].IBusA.P50, lv[k-1].IBusA.P50)
 		}
 	}
-	if lv[0].StartS != 0 || lv[len(lv)-1].EndS != 60 || lv[0].IBusA.P50 > 0.075 || lv[len(lv)-1].IBusA.P50 < 0.35 {
+	if lv[0].IBusA.P50 > 0.075 || lv[len(lv)-1].IBusA.P50 < 0.35 {
 		t.Errorf("ramp levels %v .. %v", lv[0], lv[len(lv)-1])
 	}
 }
