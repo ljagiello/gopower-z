@@ -312,6 +312,18 @@ ${searchDialog()}
   await writeFile(join(outDir, "404.html"), html);
 }
 
+// sitemap.xml lists every page by its canonical URL (no lastmod: Vercel builds
+// from a shallow clone, so git dates would be wrong, and search engines ignore
+// lastmod that is not accurate); robots.txt allows everything and points to it.
+async function buildSitemap() {
+  const urls = PAGES.map((p) => `  <url><loc>${SITE}${href(p.slug)}</loc></url>`).join("\n");
+  await writeFile(
+    join(outDir, "sitemap.xml"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`,
+  );
+  await writeFile(join(outDir, "robots.txt"), `User-agent: *\nAllow: /\n\nSitemap: ${SITE}/sitemap.xml\n`);
+}
+
 async function copyAssets() {
   await cp(join(srcDir, "site.css"), join(outDir, "site.css"));
   await cp(join(srcDir, "site.js"), join(outDir, "site.js"));
@@ -335,4 +347,5 @@ await copyAssets();
 await buildHome();
 for (const page of PAGES.filter((p) => p.file)) await buildDoc(page);
 await build404();
+await buildSitemap();
 console.log(`built ${PAGES.length} pages into ${outDir}`);
