@@ -7,12 +7,26 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
 
-// capture reads a `powerz log --format csv` recording from testdata.
+var captures sync.Map // name -> []sample
+
+// capture reads a `powerz log --format csv` recording from testdata (parsed
+// once per test binary; callers get their own copy).
 func capture(t *testing.T, name string) []sample {
+	t.Helper()
+	if ss, ok := captures.Load(name); ok {
+		return slices.Clone(ss.([]sample))
+	}
+	ss := readCapture(t, name)
+	captures.Store(name, ss)
+	return slices.Clone(ss)
+}
+
+func readCapture(t *testing.T, name string) []sample {
 	t.Helper()
 	f, err := os.Open("testdata/" + name)
 	if err != nil {
@@ -303,8 +317,8 @@ func TestLevelsEdgeCases(t *testing.T) {
 // The largest window measure allows stays fast: ED-PELT sees at most
 // levelPoints averages, in short chunks.
 func TestLevelsAtTheReadingLimit(t *testing.T) {
-	if testing.Short() {
-		t.Skip("1,000,000 readings")
+	if testing.Short() || raceEnabled {
+		t.Skip("1,000,000 readings: a timing check, run without -short and the race detector")
 	}
 	ss := make([]sample, maxSamples)
 	for k := range ss {

@@ -31,21 +31,15 @@ func TestResolveIgnoresExtraCandidates(t *testing.T) {
 	for _, c := range [][3]float64{{12, 9, 0.06}, {9, 13, 0.3}, {9, 9, 0.06}, {10, 9, 0.06}, {3, 3, 0.3}, {20, 20, 0.015}} {
 		scenarios = append(scenarios, scenario{fmt.Sprintf("on/off %v/%v +%v mA", c[0], c[1], c[2]*1000), onoff(c[0], c[1], c[2], 0)})
 	}
+	// (The 3.5% + 3.5% staircase is left out: one level and two both satisfy
+	// the rules, so which one comes out may depend on the candidates;
+	// TestLevelsReproStaircase accepts either.)
 	scenarios = append(scenarios,
 		scenario{"burst 3 s", func(t float64) float64 {
 			if t >= 300 && t < 303 {
 				return 0.2
 			}
 			return 0
-		}},
-		scenario{"staircase 3.5% + 3.5%", func(t float64) float64 {
-			switch {
-			case t >= 400:
-				return 0.326
-			case t >= 200:
-				return 0.312
-			}
-			return 0.3
 		}},
 	)
 	rng := rand.New(rand.NewPCG(5, 6))

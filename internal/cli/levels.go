@@ -138,11 +138,14 @@ func averages(ss []sample, group float64) (avg []float64, starts []int) {
 	return avg, starts
 }
 
-// runningMedian returns ss with each current replaced by the median of the
-// readings around it: up to levelSmoothS seconds and levelSmoothN readings
-// (an odd number, at least 3).
+// runningMedian returns the samples' times with each current replaced by the
+// median of the readings around it: up to levelSmoothS seconds and
+// levelSmoothN readings (an odd number, at least 3). Only T and I are set.
 func runningMedian(ss []sample) []sample {
-	out := slices.Clone(ss)
+	out := make([]sample, len(ss))
+	for i, s := range ss {
+		out[i] = sample{T: s.T, I: s.I}
+	}
 	if len(ss) < 3 {
 		return out
 	}
@@ -218,11 +221,25 @@ func (l level) med() float64 { return quantile(l.judge, 0.5) }
 //     between them, each judged by its own readings (never a gap's);
 //  4. a gap left between two levels is split at the reading that best
 //     separates their medians; at the window edges it joins its one
-//     neighbour; with no level at all, the window is one level.
+//     neighbour; with no level at all, the window is one level;
+//  5. each change moves to the reading where the current crosses between
+//     the two levels' medians, as far as two averaging points;
+//  6. every level must be accepted (it lasts, holds its value, and with few
+//     readings passes the rank test); a run of neighbouring levels that are
+//     not is merged and judged once more, and what still fails becomes a gap;
+//     3-6 repeat until all are accepted and the published medians (with
+//     what each level absorbed) still pass the size rule.
 func resolve(ss []sample, bounds []int, group float64) []int {
-	step := 0.0 // mean spacing of the readings
+	// The typical spacing of the readings: the median, so failed reads
+	// elsewhere in the window do not make every reading count for more.
+	step := 0.0
 	if len(ss) > 1 {
-		step = (ss[len(ss)-1].T - ss[0].T) / float64(len(ss)-1)
+		gaps := make([]float64, len(ss)-1)
+		for i := range gaps {
+			gaps[i] = ss[i+1].T - ss[i].T
+		}
+		slices.Sort(gaps)
+		step = quantile(gaps, 0.5)
 	}
 	lasts := func(a, b int, slack float64) bool {
 		return b-a >= levelMinReadings && ss[b-1].T-ss[a].T+step >= levelMinS-slack-1e-9
@@ -243,12 +260,32 @@ func resolve(ss []sample, bounds []int, group float64) []int {
 		}
 		return n >= levelMinReadings && float64(n)*step >= levelMinS-1e-9
 	}
-	reach := 2 * group // how far step 5 moves a change
+	// accepted reports whether level l (with neighbours prev and next, either
+	// may be nil) is a level: it lasts, holds its value, and with few readings
+	// also differs from each neighbour by the rank test.
 	own := func(a, b int) level {
 		xs := values(ss[a:b], func(s sample) float64 { return s.I })
 		slices.Sort(xs)
 		return level{a, b, xs}
 	}
+	accepted := func(l level, prev, next *level, alone bool) bool {
+		if !lasts(l.a, l.b, 0) || (!alone && !holds(l)) {
+			return false
+		}
+		if l.b-l.a >= levelFewReadings {
+			return true
+		}
+		// Core readings on both sides: a level that absorbed a few of its
+		// neighbour's readings (an edge fragment) must not fail on them, nor
+		// make its neighbour fail in turn.
+		for _, nb := range []*level{prev, next} {
+			if nb != nil && math.Abs(rankZ(l.judge, nb.judge)) < levelMinZ {
+				return false
+			}
+		}
+		return true
+	}
+	reach := 2 * group // how far step 5 moves a change
 
 	// 2. Like stretches join; then levels are the persistent stretches and
 	// the runs of short ones that last.
@@ -267,13 +304,13 @@ func resolve(ss []sample, bounds []int, group float64) []int {
 			}
 			continue
 		}
-		if run >= 0 && persistent(run, a) {
+		if run >= 0 && persistent(run, a) && holds(own(run, a)) {
 			ls = append(ls, own(run, a))
 		}
 		run = -1
 		ls = append(ls, p)
 	}
-	if run >= 0 && persistent(run, len(ss)) {
+	if run >= 0 && persistent(run, len(ss)) && holds(own(run, len(ss))) {
 		ls = append(ls, own(run, len(ss)))
 	}
 	for {
@@ -294,10 +331,8 @@ func resolve(ss []sample, bounds []int, group float64) []int {
 		ls[len(ls)-1].b = len(ss)
 
 		// 5. Each change to the reading where the current crosses between the
-		// two levels' medians, as far as levelMinS either side (a run of short
-		// stretches can carry fragments of its neighbours, and a change the
-		// candidates missed can sit a few seconds from the nearest one); a
-		// level that then no longer lasts becomes a gap, and 3-5 run again.
+		// two levels' medians, as far as two averaging points (a run of short
+		// stretches can carry fragments of its neighbours).
 		for k := 1; k < len(ls); k++ {
 			l, r := &ls[k-1], &ls[k]
 			lo, hi := r.a, r.a
@@ -310,14 +345,61 @@ func resolve(ss []sample, bounds []int, group float64) []int {
 			s := split(ss, lo, hi, l.med(), r.med())
 			l.b, r.a = s, s
 		}
-		var keep []level
-		for _, l := range ls {
-			if lasts(l.a, l.b, 0) && (len(ls) == 1 || holds(l)) {
-				keep = append(keep, l)
+		// 6. Every level must be accepted (judged by its own core readings,
+		// not by short stretches it absorbed at a gap or the window edge). A run of neighbouring levels that
+		// are not is merged and judged as one (a noisy level that sampling
+		// split in two holds as a whole); what still fails becomes a gap, and
+		// 3-6 run again. When all are accepted, the size rule must also hold
+		// on the published medians, which include the absorbed readings.
+		ok := make([]bool, len(ls))
+		all := true
+		for k := range ls {
+			var prev, next *level
+			if k > 0 {
+				prev = &ls[k-1]
 			}
+			if k+1 < len(ls) {
+				next = &ls[k+1]
+			}
+			ok[k] = accepted(ls[k], prev, next, len(ls) == 1)
+			all = all && ok[k]
 		}
-		if len(keep) == len(ls) {
+		if all {
+			published := make([]level, len(ls))
+			for k, l := range ls {
+				published[k] = own(l.a, l.b)
+			}
+			if merged := mergeClose(published); len(merged) < len(ls) {
+				ls = merged
+				continue
+			}
 			break
+		}
+		var keep []level
+		for k := 0; k < len(ls); {
+			if ok[k] {
+				keep = append(keep, ls[k])
+				k++
+				continue
+			}
+			j := k
+			for j < len(ls) && !ok[j] {
+				j++
+			}
+			if j-k > 1 {
+				m := own(ls[k].a, ls[j-1].b)
+				var prev, next *level
+				if len(keep) > 0 {
+					prev = &keep[len(keep)-1]
+				}
+				if j < len(ls) {
+					next = &ls[j]
+				}
+				if accepted(m, prev, next, len(keep) == 0 && j == len(ls)) {
+					keep = append(keep, m)
+				}
+			}
+			k = j
 		}
 		ls = keep
 	}
@@ -355,9 +437,44 @@ func split(ss []sample, a, b int, ml, mr float64) int {
 }
 
 // mergeClose merges neighbouring levels whose medians differ by less than
-// the size rule, the closest pair (relative to its threshold) first; a
-// merged level spans both and is judged by both sets of readings.
+// the size rule, or by less than three standard errors of the difference
+// (from each level's own spread: a noisy load's short stretches differ by
+// chance), the weakest pair first; a merged level spans both and is judged
+// by both sets of readings. On a quiet or pulsing load the standard error is
+// tiny and only the size rule matters.
 func mergeClose(ls []level) []level {
+	return merge(ls, func(l, r level) float64 {
+		st := strength(l, r)
+		if se := math.Hypot(medianSE(l.judge), medianSE(r.judge)); se > 0 {
+			st = math.Min(st, math.Abs(l.med()-r.med())/(3*se))
+		}
+		return st
+	})
+}
+
+// medianSE is the standard error of the median of sorted xs, from their
+// median absolute deviation (robust to pulses up to half the readings; a
+// quarter of a phase's readings can be pulses aliased by slow polling).
+// Past 256 readings the standard error is too small to matter, and the
+// interquartile range stands in for the deviation (no sort needed).
+func medianSE(xs []float64) float64 {
+	n := len(xs)
+	var sigma float64
+	if n <= 256 {
+		m := quantile(xs, 0.5)
+		dev := make([]float64, n)
+		for i, x := range xs {
+			dev[i] = math.Abs(x - m)
+		}
+		slices.Sort(dev)
+		sigma = 1.4826 * quantile(dev, 0.5)
+	} else {
+		sigma = (quantile(xs, 0.75) - quantile(xs, 0.25)) / 1.349
+	}
+	return 1.2533 * sigma / math.Sqrt(float64(n))
+}
+
+func merge(ls []level, strength func(l, r level) float64) []level {
 	if len(ls) < 2 {
 		return ls
 	}
@@ -388,14 +505,12 @@ func mergeClose(ls []level) []level {
 }
 
 // strength of the change between two neighbouring levels: below 1 it fails
-// the size rule, or (for a level of few readings) the rank test.
+// the size rule. (The rank test is not part of it: a merge ordered by rank
+// z joins a stub to the wrong side and cascades; it is an acceptance check
+// in resolve instead.)
 func strength(l, r level) float64 {
 	a, b := l.med(), r.med()
-	st := math.Abs(a-b) / math.Max(levelAbsA, levelRel*math.Min(math.Abs(a), math.Abs(b)))
-	if min(len(l.judge), len(r.judge)) < levelFewReadings {
-		st = math.Min(st, math.Abs(rankZ(l.judge, r.judge))/levelMinZ)
-	}
-	return st
+	return math.Abs(a-b) / math.Max(levelAbsA, levelRel*math.Min(math.Abs(a), math.Abs(b)))
 }
 
 // rankZ is the Mann-Whitney U statistic of two sorted samples as a z score

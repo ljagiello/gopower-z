@@ -130,6 +130,9 @@ func TestMergeCloseRejudges(t *testing.T) {
 // A very long window (30,000 s, 0.5 s polling): a 4 s burst is not a level,
 // a 7.5 s level is, at about the right time.
 func TestLevelsReproVeryLongWindow(t *testing.T) {
+	if raceEnabled {
+		t.Skip("long windows: CI runs this without the race detector")
+	}
 	window := 30000.0
 	base := noise(t, window, 5, 0)
 	burst := add(base, func(t float64) float64 {

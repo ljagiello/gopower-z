@@ -139,7 +139,7 @@ func TestLevelsLongWindowBursts(t *testing.T) {
 		grid := math.Max(1, window/levelPoints)
 		for _, dur := range []float64{3, 4.9, 8} {
 			for k := range 2 {
-				at := window/2 + float64(k)*grid/2 + 0.37
+				at := window/2 + 7.37 + float64(k)*grid/2 // clear of the tiled capture's seams
 				ss := add(base, func(t float64) float64 {
 					if t >= at && t < at+dur {
 						return 0.2
