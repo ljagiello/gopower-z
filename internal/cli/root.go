@@ -281,13 +281,13 @@ func newRootCmd(g *globals) *cobra.Command {
 		return nil
 	}
 
-	subs := map[string]*cobra.Command{}
+	runs := map[string]func(context.Context, globals) error{}
 	for _, name := range commandNames() {
 		c := commands[name]
 		sub := &cobra.Command{Use: name, Short: c.summary, Args: noArgs}
 		runFn := c.setup(sub.Flags())
 		sub.RunE = func(cc *cobra.Command, _ []string) error { return runFn(cc.Context(), *g) }
-		subs[name] = sub
+		runs[name] = runFn
 		root.AddCommand(sub)
 	}
 	// Without a command: the dashboard on a terminal, one reading otherwise.
@@ -306,7 +306,9 @@ func newRootCmd(g *globals) *cobra.Command {
 		if g.env.tty && !g.json {
 			name = "watch"
 		}
-		return subs[name].RunE(subs[name], nil)
+		// The root command's context: cobra sets it only on the command it
+		// executes, so the subcommand's own Context() is nil here.
+		return runs[name](c.Context(), *g)
 	}
 	g.root = root
 	return root
