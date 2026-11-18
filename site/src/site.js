@@ -5,6 +5,17 @@
   const root = document.documentElement;
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // ---- demo clips ----
+  // They autoplay muted and looped; with reduced motion they stop on the
+  // poster and get controls instead.
+  if (reduceMotion) {
+    for (const v of document.querySelectorAll("video[autoplay]")) {
+      v.removeAttribute("autoplay");
+      v.pause();
+      v.controls = true;
+    }
+  }
+
   // ---- analytics ----
   // window.gtag exists only on the production host (see analytics() in
   // build.mjs). Page views, scrolls, outbound clicks and file downloads come

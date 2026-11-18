@@ -53,9 +53,19 @@ go install github.com/ljagiello/gopower-z/cmd/powerz@latest</code></pre>
   </figure>
 </section>
 
+<section class="block" aria-labelledby="dashboard">
+  <h2 id="dashboard">Live dashboard</h2>
+  <p class="block-intro">On a terminal, plain <code>powerz</code> opens a live dashboard: VBUS, IBUS and power with their range so far, energy and charge, the CC and D+/D− lines, a power sparkline and the USB-PD log.</p>
+  <figure class="demo">
+    <video src="/images/watch.webm" poster="/images/watch.png" width="1180" height="520" autoplay loop muted playsinline
+      aria-label="The powerz dashboard updating live: voltage, current and power, energy, CC and D+/D− lines, and a power sparkline with a pulse every 4 seconds"></video>
+    <figcaption>Recorded live from a KM003C powering a test board that pulses every 4 s.</figcaption>
+  </figure>
+</section>
+
 <section class="block" aria-labelledby="cmds">
   <h2 id="cmds">Commands</h2>
-  <p class="block-intro">On a terminal, plain <code>powerz</code> opens a live dashboard. Piped, it prints one JSON reading. Every command below has a fixed output shape.</p>
+  <p class="block-intro">Piped, plain <code>powerz</code> prints one JSON reading. Every command below has a fixed output shape.</p>
   <dl class="cmds">
     <div><dt><code>powerz read</code></dt><dd>One snapshot: VBUS, IBUS, power, temperature, CC and D+/D− lines.</dd></div>
     <div><dt><code>powerz measure --duration 10s</code></dt><dd>Min, mean, max and percentiles of V, A and W, the shape over time in bins, when the current changed, plus Wh, mAh and the USB-PD contract.</dd></div>

@@ -408,6 +408,13 @@ main.home { padding: 0 48px 48px; min-width: 0; }
 }
 .block-intro { margin: 0 0 22px; color: var(--muted); max-width: 66ch; }
 
+.demo { margin: 0 0 18px; }
+.demo video {
+  display: block; width: 100%; max-width: 1180px; height: auto;
+  border-radius: 10px; background: #1e1e2e; /* the recording's own background */
+}
+.demo figcaption { margin-top: 10px; font-size: 0.86rem; color: var(--muted); }
+
 .cmds { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; margin: 0 0 18px; }
 .cmds > div {
   display: grid; grid-template-columns: minmax(0, 15.5rem) minmax(0, 1fr); gap: 16px;

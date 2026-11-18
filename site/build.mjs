@@ -328,6 +328,8 @@ async function copyAssets() {
   await cp(join(srcDir, "site.css"), join(outDir, "site.css"));
   await cp(join(srcDir, "site.js"), join(outDir, "site.js"));
   await cp(join(srcDir, "favicon.svg"), join(outDir, "favicon.svg"));
+  // Images and clips next to the docs (the README uses them from there too).
+  await cp(join(docsDir, "images"), join(outDir, "images"), { recursive: true });
   await mkdir(join(outDir, "fonts"), { recursive: true });
   const fonts = [
     ["@fontsource-variable/instrument-sans", "instrument-sans-latin-standard-normal.woff2"],

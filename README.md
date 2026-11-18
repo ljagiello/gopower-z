@@ -10,6 +10,11 @@ designed for people and AI agents alike. Piped output is JSON with units in
 the field names, errors are structured with stable exit codes, and
 `powerz schema` describes the whole interface.
 
+[![The powerz dashboard: VBUS, IBUS and power with their range, energy and charge, CC and D+/D− lines, and a power sparkline](docs/images/watch.png)](https://powerz.jagiello.dev/#dashboard)
+
+On a terminal, plain `powerz` opens this live dashboard
+([see it running](https://powerz.jagiello.dev/#dashboard)).
+
 ```sh
 # macOS
 brew install libusb pkgconf
