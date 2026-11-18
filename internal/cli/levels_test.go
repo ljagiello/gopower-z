@@ -248,7 +248,7 @@ func TestLevelsRules(t *testing.T) {
 		}, []float64{1500, 1512}},
 	} {
 		got := starts(levels(series(c.window, c.dt, c.cur), c.window))
-		tol := math.Max(1, 3*c.window/levelPoints) // one ED-PELT point
+		tol := math.Max(1, 3*c.window/levelPoints) // three averaging points, at least 1 s
 		ok := len(got) == len(c.want)
 		for k := 0; ok && k < len(got); k++ {
 			ok = math.Abs(got[k]-c.want[k]) <= tol
@@ -280,7 +280,7 @@ func TestLevelsShortLevelJoinsCloserNeighbour(t *testing.T) {
 			}
 			ss = append(ss, sample{T: tt, I: i})
 		}
-		if got := resolve(ss, []int{0, 200, 230, 600}, 1); !slices.Equal(got, c.want) {
+		if got := resolve(ss, []int{0, 200, 230, 600}, 1, 60); !slices.Equal(got, c.want) {
 			t.Errorf("%v / %v / %v A: bounds %v, want %v", c.a, c.b, c.c, got, c.want)
 		}
 	}

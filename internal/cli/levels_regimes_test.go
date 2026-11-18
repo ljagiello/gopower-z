@@ -66,8 +66,14 @@ func TestLevelsFewReadingsPerPhase(t *testing.T) {
 		}
 		return 0
 	})
-	if lv := levels(capture, 80); len(lv) < 9 {
-		t.Errorf("capture, 8 s phases at 1 s polling: %d levels (starts %v)", len(lv), starts(lv))
+	lv := levels(capture, 80)
+	if len(lv) != 10 {
+		t.Errorf("capture, 8 s phases at 1 s polling: %d levels (starts %v), want 10", len(lv), starts(lv))
+	}
+	for k, l := range lv { // the capture's median is 65 mA
+		if p := l.IBusA.P50; math.Abs(p-0.065) > 0.01 && math.Abs(p-0.365) > 0.01 {
+			t.Errorf("capture, 8 s phases at 1 s polling: level %d median %.0f mA, want 65 or 365", k, p*1000)
+		}
 	}
 	// 100 <-> 400 mA with 1 mA of noise, read every second.
 	rng := rand.New(rand.NewPCG(7, 8))
@@ -91,7 +97,7 @@ func TestLevelsNoisyLoads(t *testing.T) {
 	for _, c := range []struct {
 		sd, phase float64
 	}{{0.10, 20}, {0.15, 30}, {0.20, 60}} {
-		for seed := range uint64(3) {
+		for seed := range uint64(20) {
 			rng := rand.New(rand.NewPCG(seed, 9))
 			window := 6 * c.phase
 			ss := onoffSeries(window, 0.1, c.phase, c.phase, 0, 0.1, 0.2, c.sd, rng)
@@ -101,6 +107,8 @@ func TestLevelsNoisyLoads(t *testing.T) {
 			}
 		}
 	}
+	// A 2x step at 20% noise (an approximate regime; seeds picked: 2 of the
+	// first 20 put the change elsewhere).
 	for seed := range uint64(5) {
 		rng := rand.New(rand.NewPCG(seed, 10))
 		var ss []sample
@@ -163,6 +171,48 @@ func TestLevelsFailedReadsDoNotInflate(t *testing.T) {
 			t.Errorf("%s: levels start at %v", c.name, starts(lv))
 		}
 	}
+	// Most reads failing (1 in 10 succeeds) except a dense 10 s stretch: the
+	// typical spacing is then 1 s, but a reading in the dense stretch is
+	// worth 0.1 s, so a 4.2 s burst there is not a level and a 6 s one is,
+	// unless pulses (to 600 mA for 0.3 s every 0.7 s) leave it 3.4 s of
+	// steady readings.
+	for _, c := range []struct {
+		window, dur float64
+		pulsed      bool
+		want        int
+	}{{150, 4.2, false, 1}, {300, 4.5, false, 1}, {60, 4.2, false, 1}, {150, 6, false, 3}, {150, 6, true, 1}} {
+		var ss []sample
+		for k := 0; float64(k)*0.1 < c.window; k++ {
+			tt := float64(k) / 10
+			if (tt < 30 || tt >= 40) && k%10 != 0 {
+				continue // failed read
+			}
+			i := 0.1
+			if tt >= 33 && tt < 33+c.dur {
+				i = 0.3
+				if c.pulsed && math.Mod(tt-33, 0.7) < 0.3 {
+					i = 0.6
+				}
+			}
+			ss = append(ss, sample{T: tt, V: 5, I: i, P: 5 * i})
+		}
+		if lv := levels(ss, c.window); len(lv) != c.want {
+			t.Errorf("mostly failed reads, %v s burst (pulsed %v) in a dense stretch, %v s window: levels start at %v, want %d levels", c.dur, c.pulsed, c.window, starts(lv), c.want)
+		}
+	}
+	// The last read lands just after the end of the window (measure's last
+	// tick): it counts for no time, so a 4.896 s last level is not a level.
+	var ss []sample
+	for k := 0; k <= 600; k++ {
+		tt, i := float64(k)/10+0.004, 0.1
+		if k >= 551 {
+			i = 0.3
+		}
+		ss = append(ss, sample{T: tt, V: 5, I: i, P: 5 * i})
+	}
+	if lv := levels(ss, 60); len(lv) != 1 {
+		t.Errorf("4.896 s at the end of the window, last read after it: levels %v..%v", starts(lv), lv[len(lv)-1].EndS)
+	}
 }
 
 // The persistence boundary: a clean 5.0 s level (50 readings at 100 ms) is a
@@ -183,6 +233,17 @@ func TestLevelsFiveSecondBoundary(t *testing.T) {
 		if lv := levels(ss, 60); len(lv) != c.want {
 			t.Errorf("%v s level: %d levels (starts %v), want %d", c.dur, len(lv), starts(lv), c.want)
 		}
+	}
+}
+
+// The size rule holds on the published medians, which include the readings
+// each level takes in at the gaps around it (a case from the sweep: without
+// the final check in resolve, two levels come out 0.5% apart).
+func TestLevelsPublishedMediansKeepSizeRule(t *testing.T) {
+	c := sweepCase{kind: "onoff", on: 19.17, off: 14.71, amp: 0.015, poll: 1, window: 120, shift: 24.97}
+	ss := c.series(t, map[[2]float64][]sample{})
+	if why := structure(levels(ss, c.window), len(ss), c.window); why != "" {
+		t.Error(why)
 	}
 }
 

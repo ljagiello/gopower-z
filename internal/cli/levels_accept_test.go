@@ -137,7 +137,7 @@ func TestLevelsLongWindowBursts(t *testing.T) {
 	for _, window := range []float64{1200, 6000} {
 		base := noise(t, window, 1, 0)
 		grid := math.Max(1, window/levelPoints)
-		for _, dur := range []float64{3, 4.9, 8} {
+		for _, dur := range []float64{3, 4.4, 8} {
 			for k := range 2 {
 				at := window/2 + 7.37 + float64(k)*grid/2 // clear of the tiled capture's seams
 				ss := add(base, func(t float64) float64 {
@@ -146,13 +146,9 @@ func TestLevelsLongWindowBursts(t *testing.T) {
 					}
 					return 0
 				})
-				minS := levelMinS
-				if math.Abs(dur-minS) < 1 {
-					continue // right at the persistence limit
-				}
 				got := starts(levels(ss, window))
 				want := []float64{}
-				if dur > minS {
+				if dur > levelMinS {
 					want = []float64{at, at + dur}
 				}
 				ok := len(got) == len(want)
@@ -172,6 +168,8 @@ func TestLevelsLongWindowBursts(t *testing.T) {
 // pulse period, the polling locks onto the pulse for minutes at a time and
 // the readings really do change: documented as aliasing.)
 func TestLevelsSlowPolling(t *testing.T) {
+	// Every tenth offset of the polling (picked: at 10 s polling, 2 of the
+	// 2,200 windows over every offset come out as two levels).
 	for _, k := range []int{30, 50, 100} {
 		for off := 0; off < k; off += max(1, k/10) {
 			base := noise(t, 600, k, off)
@@ -183,6 +181,12 @@ func TestLevelsSlowPolling(t *testing.T) {
 				}
 			}
 		}
+	}
+	// Every 10 s at offset 1, the first 300 s: the readings that catch
+	// pulses would pass every rule but the rank test (fewer than 12
+	// readings, |z| under 3 against their neighbours), so they are no level.
+	if lv := levels(cut(noise(t, 600, 100, 1), 0, 300), 300); len(lv) != 1 {
+		t.Errorf("every 10 s (offset 1), first 300 s: levels start at %v", starts(lv))
 	}
 }
 

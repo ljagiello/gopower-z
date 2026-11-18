@@ -57,15 +57,15 @@ func TestLevelsReproLongWindowBursts(t *testing.T) {
 			t.Errorf("%v s burst at %v s: levels start at %v", c.dur, c.at, starts(lv))
 		}
 	}
-	raw := add(capture(t, "pulses-4s-10m.csv.gz"), func(t float64) float64 {
-		if t >= 90 && t < 100 {
+	burst := add(base, func(t float64) float64 {
+		if t >= 10090.37 && t < 10100.37 {
 			return 0.1
 		}
 		return 0
 	})
-	got := starts(levels(raw, window))
-	if len(got) != 2 || math.Abs(got[0]-90) > 1 || math.Abs(got[1]-100) > 1 {
-		t.Errorf("10 s burst at 90 s: levels start at %v, want [90 100]", got)
+	got := starts(levels(burst, window))
+	if len(got) != 2 || math.Abs(got[0]-10090.37) > 1 || math.Abs(got[1]-10100.37) > 1 {
+		t.Errorf("10 s burst at 10090.37 s: levels start at %v, want [10090.37 10100.37]", got)
 	}
 }
 
@@ -120,6 +120,10 @@ func TestMergeCloseRejudges(t *testing.T) {
 		{"left pair becomes weak", 0.100, 0.106, 0.103, 1},
 		// A-B (2%) merges first; A+B (median 101) against C is 5.15%: stays.
 		{"right pair becomes strong", 0.100, 0.102, 0.1062, 2},
+		// B-C (1.4%) is weaker than A-B (4.5%) and merges first; A against B+C
+		// (median 105.25) is 5.25%: stays. (Merging the leftmost weak pair
+		// first gives A+B at 102.25, then C at 3.7%: one level.)
+		{"weakest pair first", 0.100, 0.1045, 0.106, 2},
 	} {
 		if got := mergeClose([]level{lv(0, c.a), lv(20, c.b), lv(40, c.c)}); len(got) != c.want {
 			t.Errorf("%s: %d levels, want %d", c.name, len(got), c.want)

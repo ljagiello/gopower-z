@@ -8,11 +8,12 @@ import (
 	"testing"
 )
 
-// resolve must give the same levels whatever extra candidates it is
-// offered: that is what lets candidate search over-propose. Each scenario
-// runs once with the true change times as candidates and then with random
-// extra ones added; the levels must match (changes within 2 s: a pulse at a
-// change moves it by its length).
+// resolve must give the same levels when offered extra candidates about as
+// dense as ED-PELT's (one every 3 s here): that is what lets candidate search
+// over-propose. Each scenario runs once with the true change times as
+// candidates and then with random extra ones added; the levels must match
+// (changes within 2 s). (A candidate every second on a load with long
+// pulses can hide a small change: no 1 s piece is then steady.)
 func TestResolveIgnoresExtraCandidates(t *testing.T) {
 	base := noise(t, 600, 1, 0)
 	type scenario struct {
@@ -53,7 +54,8 @@ func TestResolveIgnoresExtraCandidates(t *testing.T) {
 			}
 		}
 		exact = append(exact, len(ss))
-		want := resolve(ss, exact, 1)
+		window := ss[len(ss)-1].T + 0.1
+		want := resolve(ss, exact, 1, window)
 		for trial := range 5 {
 			cands := slices.Clone(exact[1 : len(exact)-1])
 			for range len(ss) / 30 { // about one extra every 3 s
@@ -61,7 +63,7 @@ func TestResolveIgnoresExtraCandidates(t *testing.T) {
 			}
 			slices.Sort(cands)
 			cands = slices.Compact(cands)
-			got := resolve(ss, append(append([]int{0}, cands...), len(ss)), 1)
+			got := resolve(ss, append(append([]int{0}, cands...), len(ss)), 1, window)
 			if !sameLevels(ss, got, want) {
 				at := 0
 				for at < min(len(got), len(want)) && math.Abs(ss[min(got[at], len(ss)-1)].T-ss[min(want[at], len(ss)-1)].T) <= 2 {

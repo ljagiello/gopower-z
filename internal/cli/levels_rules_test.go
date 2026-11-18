@@ -82,6 +82,33 @@ func TestLevelsMergeRejudgesNeighbours(t *testing.T) {
 }
 
 // rankZ: the Mann-Whitney z score, with ties.
+// split leaves the fewest readings on the wrong side and, among equal
+// splits, takes the one nearest the middle (so a change inside a stretch the
+// readings cannot place lands halfway, not at its start).
+func TestSplitTieBreak(t *testing.T) {
+	mk := func(is ...float64) []sample {
+		ss := make([]sample, len(is))
+		for k, i := range is {
+			ss[k] = sample{T: float64(k) / 10, I: i}
+		}
+		return ss
+	}
+	for _, c := range []struct {
+		name string
+		ss   []sample
+		want int
+	}{
+		// (0.5 is exactly halfway between 0.25 and 0.75 in binary)
+		{"all readings halfway", mk(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5), 5},
+		{"a halfway plateau", mk(0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75), 4},
+		{"no tie", mk(0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.75, 0.75), 3},
+	} {
+		if got := split(c.ss, 0, len(c.ss), 0.25, 0.75); got != c.want {
+			t.Errorf("%s: split at %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
 func TestRankZ(t *testing.T) {
 	for _, c := range []struct {
 		a, b []float64
