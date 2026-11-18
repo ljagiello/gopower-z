@@ -18,7 +18,7 @@ import (
 //   - lasts at least levelMinS seconds and holds levelMinReadings readings,
 //     and is steady: at least levelMinS of its readings are within the size
 //     tolerance of its median (pulses inside it do not count, so on a load
-//     that pulses a third of the time a phase needs about 8 s);
+//     that pulses a quarter of the time a phase needs about 8-9 s);
 //   - has a median that differs from its neighbours' by at least levelRel of
 //     the smaller and at least levelAbsA;
 //   - with fewer than levelFewReadings readings (slow polling), also differs
@@ -34,10 +34,10 @@ import (
 // Candidate changes come from ED-PELT (Haynes, Fearnhead & Eckley, "A
 // computationally efficient nonparametric approach for changepoint
 // detection", 2017), a published method from pgregory.net/changepoint, run
-// on 1 s averages of the current and of a short running median of it
-// (window/levelPoints on very long windows), in chunks of levelChunk points
-// over two sets of chunks half a chunk apart, then again inside each level
-// found. ED-PELT treats readings as independent, so on a pulsing load it
+// on 1 s averages of the current and of two running medians of it, a short
+// and a wider one (window/levelPoints on very long windows), in chunks of
+// levelChunk points over two sets of chunks half a chunk apart, then again
+// inside each level found. ED-PELT treats readings as independent, so on a pulsing load it
 // proposes many tiny changes, and in a run with many real changes it can
 // miss some; resolve decides, and gives the same levels when offered extra
 // candidates about as dense as ED-PELT's (TestResolveIgnoresExtraCandidates;
@@ -53,6 +53,8 @@ const (
 	levelSearches    = 3       // candidate searches (the later ones inside the levels found)
 	levelSmoothS     = 1.5     // running median for candidates: seconds ...
 	levelSmoothN     = 15      // ... and readings at most
+	levelWideS       = 3.0     // a wider one, for pulses of up to a second: seconds ...
+	levelWideN       = 31      // ... and readings at most
 	levelFewReadings = 12      // a level with fewer readings must also pass the rank test ...
 	levelMinZ        = 3.0     // ... at |z| >= levelMinZ against its neighbour
 )
@@ -77,22 +79,34 @@ func levels(ss []sample, window float64) []levelJSON {
 	}
 	group := math.Max(1, window/levelPoints) // seconds per ED-PELT point
 	avg, starts := averages(ss, group)
-	// The same averages of a short running median of the readings, which
-	// strips pulses (and pulses the polling aliases into every few readings)
-	// that hide changes from ED-PELT on the plain averages.
-	smooth, _ := averages(runningMedian(ss), group)
+	// The same averages of short running medians of the readings, which
+	// strip pulses (and pulses the polling aliases into every few readings)
+	// that hide changes from ED-PELT on the plain averages: a narrow one, and
+	// a wider one for pulses of up to a second, which the narrow one leaves
+	// (the same at 1 s polling and slower, and then left out).
+	series := [][]float64{avg}
+	halves := []int{medianHalf(ss, levelSmoothS, levelSmoothN)}
+	if h := medianHalf(ss, levelWideS, levelWideN); h > halves[0] {
+		halves = append(halves, h)
+	}
+	for _, h := range halves {
+		m, _ := averages(runningMedian(ss, h), group)
+		series = append(series, m)
+	}
 
 	cands := map[int]bool{}
-	search(avg, starts, 0, len(avg), cands)
-	search(smooth, starts, 0, len(smooth), cands)
+	for _, xs := range series {
+		search(xs, starts, 0, len(xs), cands)
+	}
 	bounds := resolve(ss, candidateBounds(cands, len(ss)), group, window)
 	for range levelSearches - 1 {
 		n := len(cands)
 		for k := 0; k+1 < len(bounds); k++ {
 			g0, _ := slices.BinarySearch(starts, bounds[k])
 			g1, _ := slices.BinarySearch(starts, bounds[k+1])
-			search(avg, starts, g0, g1, cands)
-			search(smooth, starts, g0, g1, cands)
+			for _, xs := range series {
+				search(xs, starts, g0, g1, cands)
+			}
 		}
 		if len(cands) == n {
 			break
@@ -140,21 +154,28 @@ func averages(ss []sample, group float64) (avg []float64, starts []int) {
 	return avg, starts
 }
 
+// medianHalf is the number of readings either side of a running median of
+// up to secs seconds and n readings (an odd number, at least 3).
+func medianHalf(ss []sample, secs float64, n int) int {
+	if len(ss) < 2 {
+		return 1
+	}
+	step := (ss[len(ss)-1].T - ss[0].T) / float64(len(ss)-1)
+	if step <= 0 {
+		return 1
+	}
+	return max(1, min(n/2, int(secs/step)/2))
+}
+
 // runningMedian returns the samples' times with each current replaced by the
-// median of the readings around it: up to levelSmoothS seconds and
-// levelSmoothN readings (an odd number, at least 3). Only T and I are set.
-func runningMedian(ss []sample) []sample {
+// median of the readings around it, h either side. Only T and I are set.
+func runningMedian(ss []sample, h int) []sample {
 	out := make([]sample, len(ss))
 	for i, s := range ss {
 		out[i] = sample{T: s.T, I: s.I}
 	}
 	if len(ss) < 3 {
 		return out
-	}
-	step := (ss[len(ss)-1].T - ss[0].T) / float64(len(ss)-1)
-	h := 1 // readings either side
-	if step > 0 {
-		h = max(1, min(levelSmoothN/2, int(levelSmoothS/step)/2))
 	}
 	win := make([]float64, 0, 2*h+1)
 	for i := range ss {

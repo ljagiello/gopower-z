@@ -236,6 +236,21 @@ func TestLevelsFiveSecondBoundary(t *testing.T) {
 	}
 }
 
+// A 9 s phase on the capture, at a spot where its pulses hide the change
+// from the plain averages and the short running median (a sweep case): the
+// wider running median finds it.
+func TestLevelsWideMedianFindsPhase(t *testing.T) {
+	c := sweepCase{kind: "onoff", on: 27.557727488845142, off: 9.056030961078472, amp: 0.03, poll: 0.1, window: 3600, shift: 30.764448553298294}
+	ss := c.series(t, map[[2]float64][]sample{})
+	found := false
+	for _, s := range starts(levels(ss, c.window)) {
+		found = found || math.Abs(s-3365.26) <= 2
+	}
+	if !found {
+		t.Errorf("%v: no change near 3365.26 s", c)
+	}
+}
+
 // The size rule holds on the published medians, which include the readings
 // each level takes in at the gaps around it (a case from the sweep: without
 // the final check in resolve, two levels come out 0.5% apart).

@@ -81,7 +81,6 @@ func TestLevelsMergeRejudgesNeighbours(t *testing.T) {
 	}
 }
 
-// rankZ: the Mann-Whitney z score, with ties.
 // split leaves the fewest readings on the wrong side and, among equal
 // splits, takes the one nearest the middle (so a change inside a stretch the
 // readings cannot place lands halfway, not at its start).
@@ -109,6 +108,7 @@ func TestSplitTieBreak(t *testing.T) {
 	}
 }
 
+// rankZ: the Mann-Whitney z score, with ties.
 func TestRankZ(t *testing.T) {
 	for _, c := range []struct {
 		a, b []float64

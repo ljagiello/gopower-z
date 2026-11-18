@@ -148,7 +148,7 @@ func TestLevelsLongWindowBursts(t *testing.T) {
 				})
 				got := starts(levels(ss, window))
 				want := []float64{}
-				if dur > levelMinS {
+				if dur > 5 {
 					want = []float64{at, at + dur}
 				}
 				ok := len(got) == len(want)
@@ -187,6 +187,14 @@ func TestLevelsSlowPolling(t *testing.T) {
 	// readings, |z| under 3 against their neighbours), so they are no level.
 	if lv := levels(cut(noise(t, 600, 100, 1), 0, 300), 300); len(lv) != 1 {
 		t.Errorf("every 10 s (offset 1), first 300 s: levels start at %v", starts(lv))
+	}
+	// A +300 mA step read every second with 5% noise (a sweep case): six
+	// readings around 125 s happen to differ from the readings after them,
+	// but not from those before, so the rank test against both neighbours
+	// keeps them out.
+	c := sweepCase{kind: "step", gauss: 0.05, amp: 0.3, at: 475.5269624203212, poll: 1, window: 600, seed: 0x21c9df22ef0ec0ba}
+	if lv := levels(c.series(t, nil), c.window); len(lv) != 2 {
+		t.Errorf("%v: levels start at %v, want one change", c, starts(lv))
 	}
 }
 

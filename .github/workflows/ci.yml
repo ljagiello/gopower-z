@@ -112,14 +112,15 @@ jobs:
         run: go vet ./...
       - if: env.RUN == 'true'
         run: go test -race -count=1 ./...
-      # The level-detection sweep (2000 seeded cases in the regime the docs
-      # call reliable), the very long windows and the 1,000,000-reading timing
+      # The level-detection sweep (3000 seeded cases: every check on those in
+      # the range the docs call reliable, the structure on the rest up to an
+      # hour long), the very long windows and the 1,000,000-reading timing
       # check, without the race detector, which makes them several times
       # slower (those tests skip themselves under it).
       - name: Level-detection sweep
         if: env.RUN == 'true' && matrix.os == 'ubuntu-latest'
         env:
-          POWERZ_LEVELS_SWEEP: "2000"
+          POWERZ_LEVELS_SWEEP: "3000"
         run: go test -count=1 -run '^(TestLevelsSweep|TestLevelsAtTheReadingLimit|TestLevelsBeyondHundredThousandSeconds|TestLevelsReproVeryLongWindow)$' ./internal/cli/
       - if: env.RUN == 'true'
         run: go build -trimpath -o powerz ./cmd/powerz

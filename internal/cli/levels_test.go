@@ -77,7 +77,7 @@ func cut(ss []sample, from, w float64) []sample {
 
 func starts(lv []levelJSON) []float64 {
 	var ts []float64
-	for _, l := range lv[1:] {
+	for _, l := range lv[min(1, len(lv)):] {
 		ts = append(ts, l.StartS)
 	}
 	return ts
